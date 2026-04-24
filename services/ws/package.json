@@ -1,0 +1,12 @@
+﻿{
+  "name": "@stock/ws",
+  "private": true,
+  "scripts": {
+    "dev": "node src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.0.0",
+    "ws": "^8.0.0"
+  }
+}

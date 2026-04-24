@@ -1,0 +1,14 @@
+{
+  "name": "stock-predictor-monorepo",
+  "private": true,
+  "workspaces": ["apps/*", "services/*"],
+  "scripts": {
+    "dev:web": "npm --workspace apps/web run dev",
+    "dev:api": "python -m uvicorn app.main:app --reload --port 8000 --app-dir services/api",
+    "dev:ws": "node services/ws/src/index.js",
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:api\" \"npm run dev:ws\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
