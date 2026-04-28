@@ -59,15 +59,31 @@ class MarketHubService:
         *,
         with_backtest: bool,
     ) -> Dict:
+        def safe_float(value, fallback: float) -> float:
+            if value is None or pd.isna(value):
+                return fallback
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return fallback
+
+        def safe_int(value, fallback: int) -> int:
+            if value is None or pd.isna(value):
+                return fallback
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return fallback
+
         live_frame = self.data.overlay_quote(frame, quote)
         feature_frame = self.indicators.build_feature_frame(live_frame, benchmark_frame)
         snapshot = self.indicators.build_snapshot(symbol, live_frame, feature_frame, intraday_frame)
         backtest = self.backtest.evaluate(symbol, frame, benchmark_frame) if with_backtest else {}
         signal = self.scoring.evaluate(symbol, snapshot, backtest if with_backtest else None)
         if quote:
-            signal["current_price"] = round(float(quote.get("price", signal["current_price"])), 2)
-            signal["change_pct"] = round(float(quote.get("change_percent", signal["change_pct"])), 2)
-            signal["volume"] = int(quote.get("volume", signal["volume"]))
+            signal["current_price"] = round(safe_float(quote.get("price"), signal["current_price"]), 2)
+            signal["change_pct"] = round(safe_float(quote.get("change_percent"), signal["change_pct"]), 2)
+            signal["volume"] = safe_int(quote.get("volume"), signal["volume"])
         return signal | {"backtest": backtest}
 
     def _build_market_breadth(self, results: list[Dict], benchmark_frame: pd.DataFrame) -> Dict:
