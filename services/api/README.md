@@ -3,6 +3,24 @@
 Run locally:
 - `python -m uvicorn app.main:app --reload --port 8000 --app-dir services/api`
 
+Production restart with PM2:
+- `pm2 restart stock-market-api`
+- If your PM2 process has a different name, run `pm2 list` and restart that API process.
+
+Performance-related environment knobs:
+- `SCAN_CACHE_TTL_SEC=120` keeps fresh market overview responses in memory for fast repeat reads.
+- `STALE_SCAN_CACHE_TTL_SEC=1800` allows the API to return the last successful scan if a refresh fails or times out.
+- `SCAN_REFRESH_TIMEOUT_SEC=45` caps how long HTTP requests wait for a forced refresh.
+- `YAHOO_TIMEOUT_SEC=8` caps individual Yahoo/yfinance network calls where supported.
+- `YAHOO_BATCH_CHUNK_SIZE=30` limits batch size for yfinance downloads.
+- `SCANNER_MAX_WORKERS=8` limits concurrent symbol evaluation.
+- `INVALID_SYMBOLS=GMRINFRA,TATAMOTORS` skips known delisted/no-data symbols.
+
+Production smoke test:
+- `curl -w "time_total=%{time_total}\n" -o /dev/null -s -D - -H "Origin: https://stock-market-web-eight.vercel.app" "https://172-105-41-9.sslip.io/api/market/overview?force_refresh=false"`
+- Expected: `HTTP/1.1 200 OK`, `access-control-allow-origin: https://stock-market-web-eight.vercel.app`, and warm-cache `time_total` usually under 1 second.
+- Forced refresh check: `curl -w "time_total=%{time_total}\n" -o /dev/null -s "https://172-105-41-9.sslip.io/api/market/overview?force_refresh=true"` should return before `SCAN_REFRESH_TIMEOUT_SEC`; if refresh is already running or fails, the API returns last successful cached data with a `warning` field.
+
 ## Market Intelligence Endpoints
 
 Primary dashboard APIs:

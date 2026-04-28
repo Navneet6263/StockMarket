@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import copy
+import logging
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Dict, Iterable
 
@@ -18,6 +23,9 @@ from app.services.scoring import ScoringEngine
 from app.services.setup_tracker import SetupTrackerService
 
 
+logger = logging.getLogger(__name__)
+
+
 class MarketHubService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -32,14 +40,89 @@ class MarketHubService:
         self.tracker = SetupTrackerService(settings, self.data)
         self.scan_cache: TTLCache[Dict] = TTLCache(settings.scan_cache_ttl_sec)
         self.detail_cache: TTLCache[Dict] = TTLCache(settings.detail_cache_ttl_sec)
+        self.scan_refresh_lock = threading.Lock()
+        self.last_successful_scan: Dict | None = None
+        self.last_successful_scan_at = 0.0
 
     def _scan_symbols(self, discovery: Dict) -> list[str]:
         custom = list(self.settings.custom_universe)
         ranked = discovery.get("scan_symbols") or discovery.get("symbols") or []
+        invalid_symbols = set(self.settings.invalid_symbols)
+        ranked = [symbol for symbol in ranked if symbol not in invalid_symbols]
         if custom:
-            merged = list(dict.fromkeys(custom + ranked))
+            merged = list(dict.fromkeys(symbol for symbol in custom + ranked if symbol not in invalid_symbols))
             return merged[: self.settings.scan_symbol_limit]
         return ranked[: self.settings.scan_symbol_limit]
+
+    def _copy_with_warning(self, payload: Dict, warning: str, *, cache_status: str) -> Dict:
+        response = copy.deepcopy(payload)
+        response["warning"] = warning
+        response["cache_status"] = cache_status
+        return response
+
+    def _empty_scan_payload(self, warning: str) -> Dict:
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "universe_size": 0,
+            "market_breadth": {
+                "advancing": 0,
+                "declining": 0,
+                "advance_decline_ratio": 0.0,
+                "bullish_setups": 0,
+                "bearish_setups": 0,
+                "bullish_ratio": 0.0,
+                "benchmark_change_pct": 0.0,
+            },
+            "market_discovery": {"source_mode": "unavailable", "note": warning},
+            "macro_context": self.market_intelligence.get_macro_snapshot(),
+            "global_context": self.market_intelligence.get_global_scenario(),
+            "top_opportunities": [],
+            "unusual_volume": [],
+            "breakout_candidates": [],
+            "bearish_risks": [],
+            "top_movers": [],
+            "summary": {
+                "high_priority": 0,
+                "watchlist": 0,
+                "avoid": 0,
+                "opportunities_count": 0,
+                "breakout_count": 0,
+                "bearish_risk_count": 0,
+                "unusual_volume_count": 0,
+                "market_mood": "waiting_for_scan",
+                "scanner_leader": None,
+            },
+            "warning": warning,
+            "cache_status": "empty_fallback",
+        }
+
+    def _last_success_is_usable(self) -> bool:
+        return (
+            self.last_successful_scan is not None
+            and time.time() - self.last_successful_scan_at <= self.settings.stale_scan_cache_ttl_sec
+        )
+
+    def _save_successful_scan(self, payload: Dict) -> Dict:
+        self.last_successful_scan = copy.deepcopy(payload)
+        self.last_successful_scan_at = time.time()
+        self.scan_cache.set("market_overview", payload)
+        return payload
+
+    def _start_background_refresh(self, force_refresh: bool = True) -> bool:
+        if not self.scan_refresh_lock.acquire(blocking=False):
+            return False
+
+        def refresh():
+            try:
+                self._refresh_scan_market(force_refresh=force_refresh)
+            except Exception:
+                logger.exception("market overview background refresh failed")
+            finally:
+                self.scan_refresh_lock.release()
+
+        thread = threading.Thread(target=refresh, name="market-overview-refresh", daemon=True)
+        thread.start()
+        return True
 
     def _top_symbols(self, results: list[Dict], limit: int) -> list[str]:
         ranked = sorted(
@@ -274,90 +357,165 @@ class MarketHubService:
             },
         }
 
-    def scan_market(self, force_refresh: bool = False) -> Dict:
-        cache_key = "market_overview"
-        if not force_refresh:
-            cached = self.scan_cache.get(cache_key)
-            if cached is not None:
-                return cached
+    def _refresh_scan_market(self, force_refresh: bool = False) -> Dict:
+        refresh_started = time.perf_counter()
+        logger.info("market overview refresh started force_refresh=%s", force_refresh)
 
         discovery = self.universe.discover_market(force_refresh=force_refresh)
         symbols = self._scan_symbols(discovery)
         benchmark_symbol = self.settings.benchmark_symbol
-        benchmark_frame = self.data.fetch_history(benchmark_symbol, period=self.settings.scan_history_period)
-        daily_frames = self.data.fetch_batch_history(symbols, period=self.settings.scan_history_period)
+        try:
+            benchmark_frame = self.data.fetch_history(benchmark_symbol, period=self.settings.scan_history_period)
+        except Exception:
+            logger.exception("benchmark fetch failed symbol=%s", benchmark_symbol)
+            benchmark_frame = pd.DataFrame()
+        try:
+            daily_frames = self.data.fetch_batch_history(
+                symbols,
+                period=self.settings.scan_history_period,
+                chunk_size=self.settings.yahoo_batch_chunk_size,
+            )
+        except Exception:
+            logger.exception("daily batch fetch failed")
+            daily_frames = {}
 
         preliminary: list[Dict] = []
-        for symbol in symbols:
+
+        def evaluate_preliminary(symbol: str) -> Dict | None:
             frame = daily_frames.get(symbol)
             if frame is None or frame.empty or len(frame) < self.settings.min_history_bars:
-                continue
-            signal = self._evaluate_symbol(
-                symbol,
-                frame,
-                benchmark_frame,
-                discovery.get("symbol_meta", {}).get(symbol),
-                None,
-                with_backtest=False,
-            )
-            signal["discovered_by"] = discovery.get("symbol_meta", {}).get(symbol, {}).get("tags", [])
-            preliminary.append(signal)
+                logger.info("skipped symbol=%s reason=insufficient_history", symbol)
+                return None
+            try:
+                signal = self._evaluate_symbol(
+                    symbol,
+                    frame,
+                    benchmark_frame,
+                    discovery.get("symbol_meta", {}).get(symbol),
+                    None,
+                    with_backtest=False,
+                )
+                signal["discovered_by"] = discovery.get("symbol_meta", {}).get(symbol, {}).get("tags", [])
+                return signal
+            except Exception:
+                logger.exception("skipped symbol=%s reason=evaluation_failed", symbol)
+                return None
+
+        with ThreadPoolExecutor(max_workers=max(1, self.settings.scanner_max_workers)) as executor:
+            futures = [executor.submit(evaluate_preliminary, symbol) for symbol in symbols]
+            for future in as_completed(futures):
+                signal = future.result()
+                if signal is not None:
+                    preliminary.append(signal)
 
         if not preliminary:
-            return {
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "universe_size": 0,
-                "market_breadth": {
-                    "advancing": 0,
-                    "declining": 0,
-                    "advance_decline_ratio": 0.0,
-                    "bullish_setups": 0,
-                    "bearish_setups": 0,
-                    "bullish_ratio": 0.0,
-                    "benchmark_change_pct": 0.0,
-                },
-                "market_discovery": {"source_mode": discovery.get("source_mode"), "note": "No valid symbols were scanned."},
-                "macro_context": self.market_intelligence.get_macro_snapshot(),
-                "global_context": self.market_intelligence.get_global_scenario(),
-                "top_opportunities": [],
-                "unusual_volume": [],
-                "breakout_candidates": [],
-                "bearish_risks": [],
-                "top_movers": [],
-                "summary": {
-                    "high_priority": 0,
-                    "watchlist": 0,
-                    "avoid": 0,
-                    "opportunities_count": 0,
-                    "breakout_count": 0,
-                    "bearish_risk_count": 0,
-                    "unusual_volume_count": 0,
-                    "market_mood": "waiting_for_scan",
-                    "scanner_leader": None,
-                },
-            }
+            logger.warning(
+                "market overview refresh completed with no valid symbols duration_ms=%s",
+                round((time.perf_counter() - refresh_started) * 1000),
+            )
+            raise RuntimeError("No valid symbols were scanned.")
 
         top_symbols = self._top_symbols(preliminary, self.settings.intraday_symbol_limit)
-        intraday_frames = self.data.fetch_batch_history(top_symbols, period="5d", interval="15m", chunk_size=10)
+        try:
+            intraday_frames = self.data.fetch_batch_history(top_symbols, period="5d", interval="15m", chunk_size=10)
+        except Exception:
+            logger.exception("intraday batch fetch failed")
+            intraday_frames = {}
         enhanced = {item["symbol"]: item for item in preliminary}
 
-        for symbol in top_symbols:
+        def evaluate_enhanced(symbol: str) -> tuple[str, Dict] | None:
             frame = daily_frames.get(symbol)
             if frame is None or frame.empty:
-                continue
-            enhanced[symbol] = self._evaluate_symbol(
-                symbol,
-                frame,
-                benchmark_frame,
-                discovery.get("symbol_meta", {}).get(symbol),
-                intraday_frames.get(symbol),
-                with_backtest=True,
-            ) | {"discovered_by": discovery.get("symbol_meta", {}).get(symbol, {}).get("tags", [])}
+                return None
+            try:
+                signal = self._evaluate_symbol(
+                    symbol,
+                    frame,
+                    benchmark_frame,
+                    discovery.get("symbol_meta", {}).get(symbol),
+                    intraday_frames.get(symbol),
+                    with_backtest=True,
+                ) | {"discovered_by": discovery.get("symbol_meta", {}).get(symbol, {}).get("tags", [])}
+                return symbol, signal
+            except Exception:
+                logger.exception("skipped symbol=%s reason=enhanced_evaluation_failed", symbol)
+                return None
+
+        with ThreadPoolExecutor(max_workers=max(1, min(self.settings.scanner_max_workers, len(top_symbols) or 1))) as executor:
+            futures = [executor.submit(evaluate_enhanced, symbol) for symbol in top_symbols]
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    symbol, signal = result
+                    enhanced[symbol] = signal
 
         payload = self._shape_scan_payload(discovery, list(enhanced.values()), benchmark_frame)
-        self.tracker.sync_scan_payload(payload, discovery.get("symbol_meta", {}))
-        self.scan_cache.set(cache_key, payload)
-        return payload
+        try:
+            self.tracker.sync_scan_payload(payload, discovery.get("symbol_meta", {}))
+        except Exception:
+            logger.exception("tracker sync failed during market overview refresh")
+        saved = self._save_successful_scan(payload)
+        logger.info(
+            "market overview refresh completed symbols=%s valid=%s duration_ms=%s",
+            len(symbols),
+            len(enhanced),
+            round((time.perf_counter() - refresh_started) * 1000),
+        )
+        return saved
+
+    def scan_market(self, force_refresh: bool = False) -> Dict:
+        started = time.perf_counter()
+        cache_key = "market_overview"
+        if not force_refresh:
+            cached = self.scan_cache.get(cache_key)
+            if cached is not None:
+                logger.info("market overview cache hit duration_ms=%s", round((time.perf_counter() - started) * 1000))
+                return cached
+
+            if self._last_success_is_usable():
+                launched = self._start_background_refresh(force_refresh=True)
+                logger.info(
+                    "market overview cache stale returning_last_success background_refresh_started=%s duration_ms=%s",
+                    launched,
+                    round((time.perf_counter() - started) * 1000),
+                )
+                return self._copy_with_warning(
+                    self.last_successful_scan or {},
+                    "Returning last successful market scan while a fresh scan is running.",
+                    cache_status="stale",
+                )
+
+            logger.info("market overview cache miss")
+
+        if not self.scan_refresh_lock.acquire(blocking=False):
+            if self._last_success_is_usable():
+                logger.info(
+                    "market overview refresh already running returning_last_success duration_ms=%s",
+                    round((time.perf_counter() - started) * 1000),
+                )
+                return self._copy_with_warning(
+                    self.last_successful_scan or {},
+                    "Refresh already running; returning last successful market scan.",
+                    cache_status="refresh_in_progress",
+                )
+            logger.warning("market overview refresh already running and no cache available")
+            return self._empty_scan_payload("Market scan is warming up. Try again shortly.")
+
+        try:
+            payload = self._refresh_scan_market(force_refresh=force_refresh)
+            logger.info("market overview response completed duration_ms=%s", round((time.perf_counter() - started) * 1000))
+            return payload
+        except Exception:
+            logger.exception("market overview refresh failed")
+            if self._last_success_is_usable():
+                return self._copy_with_warning(
+                    self.last_successful_scan or {},
+                    "Refresh failed; returning last successful market scan.",
+                    cache_status="refresh_failed_stale",
+                )
+            return self._empty_scan_payload("Market scan failed and no previous cache is available.")
+        finally:
+            self.scan_refresh_lock.release()
 
     def get_market_context(self, symbol: str, limit: int = 6) -> Dict:
         return {

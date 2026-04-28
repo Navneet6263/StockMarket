@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Dict, Iterable
 
 import pandas as pd
@@ -8,6 +9,9 @@ import yfinance as yf
 
 from app.core.cache import TTLCache
 from app.core.settings import Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class MarketDataService:
@@ -52,16 +56,33 @@ class MarketDataService:
         return normalized
 
     def fetch_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
+        clean = self.clean_symbol(symbol)
+        if clean in set(self.settings.invalid_symbols):
+            logger.info("skipped invalid symbol=%s period=%s interval=%s", clean, period, interval)
+            return pd.DataFrame()
         resolved = self.resolve_symbol(symbol)
         cache_key = f"{resolved}:{period}:{interval}"
         cached = self.history_cache.get(cache_key)
         if cached is not None:
             return cached.copy()
 
-        history = yf.Ticker(resolved).history(period=period, interval=interval, auto_adjust=False)
+        try:
+            history = yf.Ticker(resolved).history(
+                period=period,
+                interval=interval,
+                auto_adjust=False,
+                timeout=self.settings.yahoo_timeout_sec,
+            )
+        except TypeError:
+            history = yf.Ticker(resolved).history(period=period, interval=interval, auto_adjust=False)
+        except Exception as exc:
+            logger.warning("history fetch failed symbol=%s period=%s interval=%s error=%s", clean, period, interval, exc)
+            return pd.DataFrame()
         frame = self._normalize_frame(history)
         if not frame.empty:
             self.history_cache.set(cache_key, frame)
+        else:
+            logger.info("skipped no-data symbol=%s period=%s interval=%s", clean, period, interval)
         return frame.copy()
 
     def fetch_batch_history(
@@ -71,10 +92,11 @@ class MarketDataService:
         interval: str = "1d",
         chunk_size: int = 20,
     ) -> dict[str, pd.DataFrame]:
+        invalid_symbols = set(self.settings.invalid_symbols)
         resolved_map = {
             self.clean_symbol(symbol): self.resolve_symbol(symbol)
             for symbol in dict.fromkeys(symbols)
-            if symbol
+            if symbol and self.clean_symbol(symbol) not in invalid_symbols
         }
         results: dict[str, pd.DataFrame] = {}
         pending: list[tuple[str, str]] = []
@@ -87,22 +109,42 @@ class MarketDataService:
             else:
                 pending.append((clean, resolved))
 
-        for offset in range(0, len(pending), chunk_size):
-            batch = pending[offset : offset + chunk_size]
+        effective_chunk_size = max(1, min(chunk_size, self.settings.yahoo_batch_chunk_size))
+        for offset in range(0, len(pending), effective_chunk_size):
+            batch = pending[offset : offset + effective_chunk_size]
             if not batch:
                 continue
             joined = " ".join(resolved for _, resolved in batch)
             try:
-                downloaded = yf.download(
-                    tickers=joined,
-                    period=period,
-                    interval=interval,
-                    group_by="ticker",
-                    auto_adjust=False,
-                    progress=False,
-                    threads=True,
-                )
+                try:
+                    downloaded = yf.download(
+                        tickers=joined,
+                        period=period,
+                        interval=interval,
+                        group_by="ticker",
+                        auto_adjust=False,
+                        progress=False,
+                        threads=True,
+                        timeout=self.settings.yahoo_timeout_sec,
+                    )
+                except TypeError:
+                    downloaded = yf.download(
+                        tickers=joined,
+                        period=period,
+                        interval=interval,
+                        group_by="ticker",
+                        auto_adjust=False,
+                        progress=False,
+                        threads=True,
+                    )
             except Exception:
+                logger.warning(
+                    "batch history fetch failed symbols=%s period=%s interval=%s",
+                    ",".join(clean for clean, _ in batch),
+                    period,
+                    interval,
+                    exc_info=True,
+                )
                 downloaded = pd.DataFrame()
 
             for clean, resolved in batch:
@@ -116,6 +158,7 @@ class MarketDataService:
 
                 normalized = self._normalize_frame(frame)
                 if normalized.empty:
+                    logger.info("skipped no-data symbol=%s period=%s interval=%s", clean, period, interval)
                     continue
                 self.history_cache.set(f"{resolved}:{period}:{interval}", normalized)
                 results[clean] = normalized.copy()

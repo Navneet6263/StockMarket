@@ -39,6 +39,11 @@ class Settings:
     include_indices: bool = _bool_env("INCLUDE_INDICES", True)
     scan_interval_sec: int = int(os.getenv("SCAN_INTERVAL_SEC", "60"))
     scan_cache_ttl_sec: int = int(os.getenv("SCAN_CACHE_TTL_SEC", "120"))
+    stale_scan_cache_ttl_sec: int = int(os.getenv("STALE_SCAN_CACHE_TTL_SEC", "1800"))
+    scan_refresh_timeout_sec: int = int(os.getenv("SCAN_REFRESH_TIMEOUT_SEC", "45"))
+    yahoo_timeout_sec: int = int(os.getenv("YAHOO_TIMEOUT_SEC", "8"))
+    yahoo_batch_chunk_size: int = int(os.getenv("YAHOO_BATCH_CHUNK_SIZE", "30"))
+    scanner_max_workers: int = int(os.getenv("SCANNER_MAX_WORKERS", "8"))
     detail_cache_ttl_sec: int = int(os.getenv("DETAIL_CACHE_TTL_SEC", "90"))
     backtest_cache_ttl_sec: int = int(os.getenv("BACKTEST_CACHE_TTL_SEC", "900"))
     history_cache_ttl_sec: int = int(os.getenv("HISTORY_CACHE_TTL_SEC", "180"))
@@ -50,6 +55,7 @@ class Settings:
     tracked_review_limit: int = int(os.getenv("TRACK_REVIEW_LIMIT", "10"))
     custom_universe: tuple[str, ...] = _csv_env("UNIVERSE_SYMBOLS")
     universe_groups: tuple[str, ...] = _csv_env("UNIVERSE_GROUPS") or ("NIFTY_200", "FNO")
+    invalid_symbols: tuple[str, ...] = _csv_env("INVALID_SYMBOLS") or ("GMRINFRA", "TATAMOTORS")
 
 
 @lru_cache

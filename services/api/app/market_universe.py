@@ -59,10 +59,17 @@ class MarketUniverseService:
             "F&O": UNIVERSE_CONFIG.fno_stocks,
         }
         configured: list[str] = []
+        invalid_symbols = set(self.settings.invalid_symbols)
         for group in self.settings.universe_groups:
             configured.extend(group_map.get(group.upper(), ()))
         configured.extend(self.settings.custom_universe)
-        return list(dict.fromkeys(self._normalize_symbol(symbol) for symbol in configured if symbol))
+        return list(
+            dict.fromkeys(
+                self._normalize_symbol(symbol)
+                for symbol in configured
+                if symbol and self._normalize_symbol(symbol) not in invalid_symbols
+            )
+        )
 
     @staticmethod
     def _as_float(value) -> float:
@@ -321,6 +328,8 @@ class MarketUniverseService:
             ),
         )[: self.max_symbols]
 
+        invalid_symbols = set(self.settings.invalid_symbols)
+        ranked_symbols = [symbol for symbol in ranked_symbols if symbol not in invalid_symbols]
         configured_symbols = self._configured_symbols()
         ranked_symbols = list(dict.fromkeys(configured_symbols + ranked_symbols))[: self.max_symbols]
 
