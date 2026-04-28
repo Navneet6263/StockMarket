@@ -173,8 +173,23 @@ class MarketDataService:
             return frame.copy()
         live_frame = frame.copy()
         last_index = live_frame.index[-1]
-        price = float(quote.get("price", live_frame.at[last_index, "Close"]))
-        volume = int(quote.get("volume", live_frame.at[last_index, "Volume"]))
+
+        raw_price = quote.get("price")
+        if raw_price is None:
+            raw_price = live_frame.at[last_index, "Close"]
+        if raw_price is None:
+            return live_frame
+
+        raw_volume = quote.get("volume")
+        if raw_volume is None:
+            raw_volume = live_frame.at[last_index, "Volume"]
+
+        try:
+            price = float(raw_price)
+            volume = int(raw_volume or 0)
+        except Exception:
+            return live_frame
+
         live_frame.at[last_index, "Close"] = price
         live_frame.at[last_index, "High"] = max(float(live_frame.at[last_index, "High"]), price)
         live_frame.at[last_index, "Low"] = min(float(live_frame.at[last_index, "Low"]), price)

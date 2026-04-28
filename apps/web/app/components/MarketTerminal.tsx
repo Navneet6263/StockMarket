@@ -344,7 +344,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
 
   const filteredSignals = useMemo(() => {
     return allSignals.filter((item) => {
-      if (deferredSearch && !`${item.symbol} ${item.company_name || ""}`.includes(deferredSearch)) return false;
+      if (deferredSearch && !`${item.symbol} ${item.company_name || ""}`.toUpperCase().includes(deferredSearch)) return false;
       if (!timeframeMatches(item, timeframeFilter)) return false;
       if (segmentFilter === "bullish" && item.direction !== "bullish") return false;
       if (segmentFilter === "bearish" && item.direction !== "bearish") return false;
@@ -368,6 +368,16 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
       ]
     : [];
 
+  const searchSuggestions = useMemo(() => {
+    const suggestions = new Map<string, string>();
+    allSignals.forEach((item) => suggestions.set(item.symbol, item.company_name || item.setup_label || item.symbol));
+    (overview?.top_movers || []).forEach((item) => suggestions.set(item.symbol, item.company_name || "Live screener"));
+    watchItems.forEach((item) => suggestions.set(item.symbol, item.company_name || item.setup_label || "Watchlist"));
+    return Array.from(suggestions.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(0, 120);
+  }, [allSignals, overview?.top_movers, watchItems]);
+
   return (
     <main className="app-shell dashboard-shell">
       <section className="dashboard-header terminal-card">
@@ -380,7 +390,18 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
           </div>
         </div>
         <form className="dashboard-controls" onSubmit={handleSubmit}>
-          <input className="search-input" value={searchSymbol} onChange={(event) => setSearchSymbol(event.target.value)} placeholder="Search symbol or company" />
+          <input
+            className="search-input"
+            value={searchSymbol}
+            onChange={(event) => setSearchSymbol(event.target.value)}
+            placeholder="Search symbol or company"
+            list="stock-search-suggestions"
+          />
+          <datalist id="stock-search-suggestions">
+            {searchSuggestions.map(([symbol, label]) => (
+              <option key={symbol} value={symbol} label={`${symbol} - ${label}`} />
+            ))}
+          </datalist>
           <button type="submit" className="terminal-button">Open</button>
           <button type="button" className="ghost-button" onClick={() => loadOverview(true)} disabled={refreshing}>{refreshing ? "Refreshing..." : "Refresh Scan"}</button>
           <select className="filter-select" value={timeframeFilter} onChange={(event) => setTimeframeFilter(event.target.value as TimeframeFilter)}>
