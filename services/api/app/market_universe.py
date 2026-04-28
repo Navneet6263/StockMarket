@@ -7,6 +7,7 @@ import yfinance as yf
 from yfinance import EquityQuery
 
 from app.core.settings import Settings, get_settings
+from app.market_universe_config import UNIVERSE_CONFIG
 
 
 class MarketUniverseService:
@@ -43,6 +44,25 @@ class MarketUniverseService:
         if "." in clean:
             clean = clean.split(".")[0]
         return clean
+
+    def _configured_symbols(self) -> list[str]:
+        group_map = {
+            "NIFTY50": UNIVERSE_CONFIG.nifty_50,
+            "NIFTY_50": UNIVERSE_CONFIG.nifty_50,
+            "NIFTY100": UNIVERSE_CONFIG.nifty_100,
+            "NIFTY_100": UNIVERSE_CONFIG.nifty_100,
+            "NIFTY200": UNIVERSE_CONFIG.nifty_200,
+            "NIFTY_200": UNIVERSE_CONFIG.nifty_200,
+            "NIFTY500": UNIVERSE_CONFIG.nifty_500_seed,
+            "NIFTY_500": UNIVERSE_CONFIG.nifty_500_seed,
+            "FNO": UNIVERSE_CONFIG.fno_stocks,
+            "F&O": UNIVERSE_CONFIG.fno_stocks,
+        }
+        configured: list[str] = []
+        for group in self.settings.universe_groups:
+            configured.extend(group_map.get(group.upper(), ()))
+        configured.extend(self.settings.custom_universe)
+        return list(dict.fromkeys(self._normalize_symbol(symbol) for symbol in configured if symbol))
 
     @staticmethod
     def _as_float(value) -> float:
@@ -301,7 +321,26 @@ class MarketUniverseService:
             ),
         )[: self.max_symbols]
 
-        ranked_meta = {symbol: symbol_meta[symbol] for symbol in ranked_symbols}
+        configured_symbols = self._configured_symbols()
+        ranked_symbols = list(dict.fromkeys(configured_symbols + ranked_symbols))[: self.max_symbols]
+
+        ranked_meta = {symbol: symbol_meta[symbol] for symbol in ranked_symbols if symbol in symbol_meta}
+        for symbol in configured_symbols:
+            ranked_meta.setdefault(
+                symbol,
+                {
+                    "symbol": symbol,
+                    "raw_symbol": f"{symbol}.NS",
+                    "exchange": "NSI",
+                    "tags": ["configured_universe"],
+                    "price": None,
+                    "change_pct": None,
+                    "volume": None,
+                    "market_cap": None,
+                    "short_name": symbol,
+                    "discovery_score": 1,
+                },
+            )
         payload = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "source_mode": "yahoo_dynamic" if ranked_symbols else "yahoo_unavailable",
@@ -315,6 +354,7 @@ class MarketUniverseService:
             "symbol_meta": ranked_meta,
             "filters": {
                 "universe_size": self.max_symbols,
+                "universe_groups": list(self.settings.universe_groups),
                 "min_price": self.settings.min_price,
                 "min_volume": self.settings.min_volume,
                 "min_market_cap": self.settings.min_market_cap,

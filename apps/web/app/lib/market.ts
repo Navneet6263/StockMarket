@@ -32,6 +32,7 @@ export type BacktestResult = {
 
 export type MarketSignal = {
   symbol: string;
+  company_name?: string;
   direction: "bullish" | "bearish" | "neutral";
   setup_label: string;
   alert_level: "high_priority" | "watchlist" | "low_priority" | "avoid" | string;
@@ -76,6 +77,7 @@ export type MarketSignal = {
 
 export type MarketMover = {
   symbol: string;
+  company_name?: string;
   price?: number;
   change_pct?: number;
   volume?: number;

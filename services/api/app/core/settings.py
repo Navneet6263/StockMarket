@@ -49,6 +49,7 @@ class Settings:
     tracked_promotion_move_quality_min: int = int(os.getenv("TRACK_PROMOTION_MOVE_QUALITY_MIN", "58"))
     tracked_review_limit: int = int(os.getenv("TRACK_REVIEW_LIMIT", "10"))
     custom_universe: tuple[str, ...] = _csv_env("UNIVERSE_SYMBOLS")
+    universe_groups: tuple[str, ...] = _csv_env("UNIVERSE_GROUPS") or ("NIFTY_200", "FNO")
 
 
 @lru_cache

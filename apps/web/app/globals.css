@@ -149,6 +149,12 @@ h4 {
   font-family: inherit;
 }
 
+.terminal-button.compact {
+  padding: 9px 11px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
 .terminal-button {
   background: linear-gradient(135deg, var(--teal), var(--blue));
   color: #04111d;
@@ -476,10 +482,203 @@ select {
   font-family: inherit;
 }
 
+.dashboard-shell {
+  gap: 18px;
+}
+
+.dashboard-header {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(420px, 1.2fr);
+  gap: 18px;
+  align-items: end;
+  border-radius: 18px;
+}
+
+.dashboard-title h1 {
+  margin: 8px 0 8px;
+  font-size: clamp(28px, 3vw, 44px);
+  line-height: 1.05;
+}
+
+.dashboard-controls {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto auto minmax(120px, auto) minmax(140px, auto);
+  gap: 10px;
+  align-items: center;
+}
+
+.filter-select {
+  width: 100%;
+  background: rgba(5, 10, 19, 0.94);
+  border: 1px solid rgba(120, 146, 184, 0.22);
+  border-radius: 14px;
+  padding: 12px 12px;
+  color: var(--text);
+  outline: none;
+  font-size: 14px;
+}
+
+.dashboard-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 2px;
+}
+
+.dashboard-tabs button {
+  border: 1px solid rgba(120, 146, 184, 0.18);
+  background: rgba(10, 18, 31, 0.72);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 10px 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+}
+
+.dashboard-tabs button.is-active {
+  color: var(--text);
+  border-color: rgba(45, 212, 191, 0.52);
+  background: rgba(45, 212, 191, 0.12);
+}
+
+.tab-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.summary-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.dashboard-stat {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.dashboard-stat span {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.dashboard-stat strong {
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.overview-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.compact-section {
+  border-radius: 18px;
+  padding: 18px;
+}
+
+.scanner-list-table {
+  display: grid;
+  gap: 8px;
+}
+
+.scanner-list-head,
+.scanner-list-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) minmax(100px, 0.8fr) minmax(110px, 0.8fr) minmax(150px, 1fr) minmax(100px, 0.8fr) minmax(190px, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.scanner-list-head {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0 10px 4px;
+}
+
+.scanner-list-row {
+  min-height: 74px;
+  border: 1px solid rgba(120, 146, 184, 0.12);
+  background: rgba(6, 11, 20, 0.56);
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.scanner-list-row.is-active {
+  border-color: rgba(45, 212, 191, 0.52);
+}
+
+.scanner-list-row > div,
+.scanner-name {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.scanner-list-row strong {
+  font-size: 14px;
+}
+
+.scanner-list-row span,
+.scanner-name span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.compact-movers {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.detail-priority .chart-shell {
+  min-height: 0;
+}
+
 @media (max-width: 1100px) {
   .hero-grid,
-  .detail-grid {
+  .detail-grid,
+  .dashboard-header,
+  .overview-columns {
     grid-template-columns: 1fr;
+  }
+
+  .dashboard-controls {
+    grid-template-columns: minmax(200px, 1fr) auto auto;
+  }
+
+  .summary-strip {
+    grid-template-columns: repeat(3, minmax(140px, 1fr));
+  }
+
+  .scanner-list-head {
+    display: none;
+  }
+
+  .scanner-list-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .row-actions {
+    justify-content: flex-start;
   }
 }
 
@@ -495,5 +694,15 @@ select {
 
   .search-form {
     grid-template-columns: 1fr;
+  }
+
+  .dashboard-controls,
+  .summary-strip,
+  .scanner-list-row {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-tabs {
+    margin: 0 -4px;
   }
 }

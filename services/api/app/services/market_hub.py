@@ -140,6 +140,12 @@ class MarketHubService:
         return "mixed"
 
     def _shape_scan_payload(self, discovery: Dict, results: list[Dict], benchmark_frame: pd.DataFrame) -> Dict:
+        symbol_meta = discovery.get("symbol_meta", {})
+        for item in results:
+            meta = symbol_meta.get(item.get("symbol"), {})
+            if meta:
+                item.setdefault("company_name", meta.get("short_name") or item.get("symbol"))
+
         top_ranked = self._unique_signals(sorted(
             [
                 item for item in results
@@ -203,6 +209,7 @@ class MarketHubService:
         mover_ranked = [
             {
                 "symbol": meta["symbol"],
+                "company_name": meta.get("short_name") or meta["symbol"],
                 "price": meta.get("price"),
                 "change_pct": meta.get("change_pct"),
                 "volume": meta.get("volume"),

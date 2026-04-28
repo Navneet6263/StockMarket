@@ -100,6 +100,18 @@ export default function StockDetailPanel({
         <Stat label="Invalidation" value={signal.invalidation ? `INR ${signal.invalidation.toFixed(2)}` : "Monitor support"} tone={toneForRisk(signal.risk_level)} />
       </div>
 
+      <div className="detail-grid detail-priority">
+        <div className="detail-main">
+          <LiveChart symbol={detail.symbol} candles={detail.chart} prediction={signal} quote={detail.quote} />
+        </div>
+        <div className="detail-aside">
+          <BulletPanel title="Why It Is Flagged" items={detail.explanation.why_it_is_flagged || detail.signals.reasons} />
+          <BulletPanel title="What Is Strong" items={detail.explanation.what_is_strong || []} />
+          <BulletPanel title="What Is Weak" items={detail.explanation.what_is_weak || detail.signals.weaknesses} />
+          <BulletPanel title="Watch Next" items={detail.explanation.watch_next || []} />
+        </div>
+      </div>
+
       <div className="terminal-card soft">
         <div className="mono-label">Confidence Read</div>
         <p className="detail-summary">{signal.confidence_note}</p>
@@ -146,7 +158,6 @@ export default function StockDetailPanel({
 
       <div className="detail-grid">
         <div className="detail-main">
-          <LiveChart symbol={detail.symbol} candles={detail.chart} prediction={signal} quote={detail.quote} />
           <div className="terminal-card soft">
             <div className="mono-label">Trade Explanation</div>
             <p className="detail-summary">{detail.explanation.summary}</p>
@@ -156,11 +167,7 @@ export default function StockDetailPanel({
         </div>
 
         <div className="detail-aside">
-          <BulletPanel title="Why It Is Flagged" items={detail.explanation.why_it_is_flagged || detail.signals.reasons} />
-          <BulletPanel title="What Is Strong" items={detail.explanation.what_is_strong || []} />
-          <BulletPanel title="What Is Weak" items={detail.explanation.what_is_weak || detail.signals.weaknesses} />
           <BulletPanel title="Risk Factors" items={detail.explanation.risk_factors || detail.signals.risk_factors} />
-          <BulletPanel title="Watch Next" items={detail.explanation.watch_next || []} />
         </div>
       </div>
 
