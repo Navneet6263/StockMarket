@@ -24,6 +24,7 @@ from app.services.smart_layers import build_smart_scan_payload
 from app.services.setup_tracker import SetupTrackerService
 from app.services.nifty_context_analyzer import analyze_nifty_context, stock_nifty_alignment_score
 from app.services.breakout_radar import build_breakout_radar
+from app.services.telegram_market_alerts import get_telegram_market_alerts
 
 
 logger = logging.getLogger(__name__)
@@ -1004,6 +1005,11 @@ class MarketHubService:
             self.tracker.sync_scan_payload(payload, discovery.get("symbol_meta", {}))
         except Exception:
             logger.exception("tracker sync failed during market overview refresh")
+        try:
+            payload["telegram_alerts"] = get_telegram_market_alerts().send_payload_alerts(payload)
+        except Exception:
+            logger.exception("telegram market alerts failed during market overview refresh")
+            payload["telegram_alerts"] = {"sent": 0, "error": "telegram_alerts_failed"}
         saved = self._save_successful_scan(payload)
         logger.info(
             "market overview refresh completed symbols=%s valid=%s duration_ms=%s",
