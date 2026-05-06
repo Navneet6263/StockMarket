@@ -21,10 +21,13 @@ class BacktestService:
         if not records:
             return {
                 "signal_count": 0,
+                "sample_count": 0,
                 "win_rate": 0.0,
                 "false_positive_rate": 0.0,
+                "avg_return": 0.0,
                 "avg_win_pct": 0.0,
                 "avg_loss_pct": 0.0,
+                "max_drawdown": 0.0,
                 "profit_factor": 0.0,
                 "expectancy_pct": 0.0,
             }
@@ -39,11 +42,14 @@ class BacktestService:
         expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
 
         return {
+            "sample_count": len(records),
             "signal_count": len(records),
             "win_rate": round(win_rate, 4),
             "false_positive_rate": round(1 - win_rate, 4),
+            "avg_return": round(expectancy, 2),
             "avg_win_pct": round(avg_win, 2),
             "avg_loss_pct": round(avg_loss, 2),
+            "max_drawdown": round(max((item["adverse_pct"] for item in records), default=0.0), 2),
             "profit_factor": round(gross_win / gross_loss, 2) if gross_loss else round(gross_win, 2),
             "expectancy_pct": round(expectancy, 2),
         }
@@ -57,12 +63,18 @@ class BacktestService:
         if frame.empty or len(frame) < max(self.settings.min_history_bars, 140):
             return {}
 
-        features = self.indicators.build_feature_frame(frame, benchmark_frame)
         hold_days = self.settings.hold_days
+        features = self.indicators.build_feature_frame(frame, benchmark_frame)
+        pre_breakout_labels = self.indicators.build_pre_breakout_training_labels(
+            frame,
+            horizon=hold_days,
+            move_pct=max(2.0, self.settings.hold_days * 0.45),
+        )
         start = max(80, features.dropna(subset=["price"]).index.get_loc(features.dropna(subset=["price"]).index[0]))
 
         bullish_records: list[Dict] = []
         bearish_records: list[Dict] = []
+        pre_breakout_records: list[Dict] = []
         calibration: dict[str, list[bool]] = {}
 
         for position in range(start, len(frame) - hold_days):
@@ -71,6 +83,16 @@ class BacktestService:
                 continue
 
             signal = self.scoring.evaluate(symbol, row, calibrate=False)
+            if signal.get("is_pre_breakout") and position < len(pre_breakout_labels):
+                label_row = pre_breakout_labels.iloc[position]
+                if not pd.isna(label_row.get("future_max_return_pct")):
+                    pre_breakout_records.append(
+                        {
+                            "win": bool(label_row.get("pre_breakout_success_label")),
+                            "favorable_pct": float(label_row.get("future_max_return_pct") or 0),
+                            "adverse_pct": abs(float(label_row.get("future_max_drawdown_pct") or 0)),
+                        }
+                    )
             direction = signal["direction"]
             if direction == "neutral" or signal["alert_level"] == "avoid":
                 continue
@@ -100,6 +122,7 @@ class BacktestService:
             "window_days": hold_days,
             "bullish": self._aggregate(bullish_records),
             "bearish": self._aggregate(bearish_records),
+            "pre_breakout": self._aggregate(pre_breakout_records),
             "calibration": [
                 {
                     "bucket": bucket,

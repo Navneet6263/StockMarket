@@ -4,6 +4,9 @@ from typing import Dict, List
 
 import numpy as np
 
+from app.services.chase_risk import classify_chase_risk
+from app.services.lifecycle import build_lifecycle_advice
+
 
 class ScoringEngine:
     def _safe(self, snapshot: Dict, key: str, default: float = 0.0) -> float:
@@ -54,6 +57,266 @@ class ScoringEngine:
             return "swing 1-2 weeks", 10
         return "3-5 days", 5
 
+    def _pre_breakout_setup(self, snapshot: Dict, *, price: float, change_pct: float, gap_pct: float, atr_pct: float) -> Dict:
+        resistance = self._safe(snapshot, "resistance_20")
+        support = self._safe(snapshot, "support_20")
+        ema_20 = self._safe(snapshot, "ema_20")
+        ema_50 = self._safe(snapshot, "ema_50")
+        relative_volume = self._safe(snapshot, "relative_volume", 1.0)
+        intraday_volume_ratio = self._safe(snapshot, "intraday_volume_ratio", 1.0)
+        rsi = self._safe(snapshot, "rsi", 50.0)
+        cmf = self._safe(snapshot, "cmf")
+        obv_slope = self._safe(snapshot, "obv_slope")
+        distance_to_resistance = self._safe(snapshot, "distance_to_resistance_pct", 99.0)
+        tight_consolidation = self._safe(snapshot, "tight_consolidation_pct", 99.0)
+        bb_width_ratio = self._safe(snapshot, "bb_width_ratio", 1.0)
+        atr_expansion = self._safe(snapshot, "atr_expansion", 1.0)
+        macd_delta = self._safe(snapshot, "macd_hist_delta_3d")
+        rsi_delta = self._safe(snapshot, "rsi_delta_5d")
+        rs_delta = self._safe(snapshot, "relative_strength_delta_5d")
+
+        already_moved = abs(change_pct) >= 5.0 or abs(gap_pct) >= 3.0 or bool(snapshot.get("breakout_20"))
+        if already_moved or not price or not resistance or resistance <= price:
+            return {
+                "is_pre_breakout": False,
+                "pre_breakout_labels": [],
+                "pre_breakout_score": 0,
+            }
+
+        labels: list[str] = ["PRE_BREAKOUT", "WATCH_FOR_BREAKOUT"]
+        reasons: list[str] = []
+        score = 0
+
+        if distance_to_resistance <= 3.5:
+            score += 2
+            reasons.append("Price is coiling near 20-day resistance before breakout.")
+        if bb_width_ratio <= 0.85 or bool(snapshot.get("bb_squeeze")):
+            score += 2
+            labels.append("SQUEEZE_SETUP")
+            reasons.append("Bollinger Band width is compressed.")
+        if atr_expansion <= 0.9 or bool(snapshot.get("atr_contraction")):
+            score += 1
+            reasons.append("ATR is contracting, showing volatility compression.")
+        if tight_consolidation <= max(4.5, atr_pct * 2.2):
+            score += 1
+            labels.append("BASE_BUILDING")
+            reasons.append("Recent range is tight, suggesting base building.")
+        if bool(snapshot.get("higher_lows")):
+            score += 1
+            reasons.append("Higher lows are forming inside consolidation.")
+        if bool(snapshot.get("volume_dryup")) or relative_volume <= 0.9:
+            score += 1
+            reasons.append("Volume has dried up before confirmation.")
+        if cmf >= 0.04 or obv_slope > 0:
+            score += 2
+            labels.append("ACCUMULATION")
+            reasons.append("OBV/CMF shows quiet accumulation.")
+        if macd_delta > 0:
+            score += 1
+            reasons.append("MACD histogram is improving before price breakout.")
+        if rsi_delta > 0 and 45 <= rsi <= 65:
+            score += 1
+            reasons.append("RSI is improving without being overextended.")
+        if bool(snapshot.get("price_above_ema20")) or (ema_20 and abs((price - ema_20) / ema_20) <= 0.012):
+            score += 1
+            reasons.append("Price is above or reclaiming the 20 EMA.")
+        if bool(snapshot.get("price_above_ema50")) or (ema_50 and abs((price - ema_50) / ema_50) <= 0.015):
+            score += 1
+            reasons.append("Price is above or reclaiming the 50 EMA.")
+        if rs_delta > 0:
+            score += 1
+            reasons.append("Relative strength vs benchmark is improving.")
+
+        if score < 4:
+            return {
+                "is_pre_breakout": False,
+                "pre_breakout_labels": list(dict.fromkeys(labels)),
+                "pre_breakout_score": score,
+            }
+
+        alert_price = resistance * 1.002
+        invalidation_candidates = [value for value in (support, ema_20, ema_50) if value and value < price]
+        invalidation_level = max(invalidation_candidates) if invalidation_candidates else price * 0.965
+        expected_move = max(1.5, min(7.5, atr_pct * 1.4 if atr_pct else tight_consolidation * 0.75))
+        action = "ALERT_ABOVE_LEVEL" if distance_to_resistance <= 1.5 else "WATCH"
+        confidence = min(88, 48 + score * 4)
+
+        return {
+            "is_pre_breakout": True,
+            "pre_breakout_labels": list(dict.fromkeys(labels)),
+            "pre_breakout_score": score,
+            "pre_breakout_confidence": round(confidence, 1),
+            "pre_breakout_action": action,
+            "setup_type": "Pattern Forming / Pre-Move Setup",
+            "breakout_level": round(resistance, 2),
+            "alert_price": round(alert_price, 2),
+            "alert_above_price": round(alert_price, 2),
+            "invalidation_level": round(invalidation_level, 2),
+            "expected_breakout_move": round(expected_move, 2),
+            "expected_move": round(expected_move, 2),
+            "pre_breakout_reason": "; ".join(reasons[:4]),
+            "reason": "; ".join(reasons[:4]),
+            "pre_breakout_timeframe": "1-5 sessions",
+            "action": action,
+        }
+
+    def _pattern_context(self, snapshot: Dict, *, direction: str, price: float) -> Dict:
+        labels: list[str] = []
+        reasons: list[str] = []
+        return_20d = self._safe(snapshot, "return_20d")
+        return_60d = self._safe(snapshot, "return_60d")
+        tight = self._safe(snapshot, "tight_consolidation_pct", 99.0)
+        atr_expansion = self._safe(snapshot, "atr_expansion", 1.0)
+        bb_width_ratio = self._safe(snapshot, "bb_width_ratio", 1.0)
+        relative_strength = self._safe(snapshot, "relative_strength_20d")
+        cmf = self._safe(snapshot, "cmf")
+        obv_slope = self._safe(snapshot, "obv_slope")
+        ema_20 = self._safe(snapshot, "ema_20")
+        ema_50 = self._safe(snapshot, "ema_50")
+        support = self._safe(snapshot, "support_20")
+        resistance = self._safe(snapshot, "resistance_20")
+        distance_to_support = self._safe(snapshot, "distance_to_support_pct", 99.0)
+
+        if tight <= 5.5 and atr_expansion <= 1.05:
+            labels.append("tight_consolidation")
+            reasons.append("Tight consolidation with controlled volatility.")
+        if bool(snapshot.get("higher_lows")):
+            labels.append("higher_lows")
+            reasons.append("Higher lows show improving structure.")
+        if bb_width_ratio <= 0.9 or bool(snapshot.get("bb_squeeze")):
+            labels.append("bollinger_squeeze")
+            reasons.append("Bollinger squeeze suggests volatility contraction.")
+        if cmf >= 0.04 or obv_slope > 0:
+            labels.append("accumulation")
+            reasons.append("OBV/CMF accumulation supports the pattern.")
+        if relative_strength >= 1.5:
+            labels.append("relative_strength")
+            reasons.append("Relative strength vs Nifty is positive.")
+        if price and ((ema_20 and abs((price - ema_20) / ema_20) <= 0.025) or (ema_50 and abs((price - ema_50) / ema_50) <= 0.03)):
+            labels.append("ema_hold")
+            reasons.append("Price is holding near 20/50 EMA support.")
+        if distance_to_support <= 2.0 and direction == "bullish":
+            labels.append("support_bounce")
+            reasons.append("Price is near support bounce area.")
+        if return_60d > 8 and -8 <= return_20d <= 8 and tight <= 7:
+            labels.append("cup_handle_candidate")
+            reasons.append("Prior uptrend is pausing in a handle-like base.")
+        if return_20d >= 12 and tight <= 7:
+            labels.append("flag_pennant_candidate")
+            reasons.append("Strong prior move is consolidating in a flag/pennant style range.")
+
+        if "cup_handle_candidate" in labels:
+            setup_type = "Cup and handle candidate"
+        elif "flag_pennant_candidate" in labels:
+            setup_type = "Flag / pennant continuation"
+        elif "support_bounce" in labels:
+            setup_type = "Support bounce"
+        elif "bollinger_squeeze" in labels:
+            setup_type = "Squeeze base"
+        elif "tight_consolidation" in labels:
+            setup_type = "Base formation"
+        else:
+            setup_type = "Trend setup" if direction != "neutral" else "No clear pattern"
+
+        return {
+            "pattern_labels": list(dict.fromkeys(labels)),
+            "pattern_score": len(set(labels)),
+            "setup_type": setup_type,
+            "pattern_reason": "; ".join(reasons[:4]) or "Pattern evidence is limited.",
+            "entry_trigger": round((resistance or price) * 1.002, 2) if direction == "bullish" else round((support or price) * 0.998, 2),
+        }
+
+    def _momentum_continuation_setup(
+        self,
+        snapshot: Dict,
+        *,
+        price: float,
+        direction: str,
+        chase: Dict,
+        risk_reward: float,
+        target_1: float,
+    ) -> Dict:
+        if direction != "bullish" or not chase.get("overextended_fresh_entry"):
+            return {"is_momentum_continuation": False}
+
+        ema_20 = self._safe(snapshot, "ema_20")
+        ema_50 = self._safe(snapshot, "ema_50")
+        rolling_vwap = self._safe(snapshot, "rolling_vwap")
+        resistance = self._safe(snapshot, "resistance_20")
+        support = self._safe(snapshot, "support_20")
+        low = self._safe(snapshot, "low", price)
+        change_pct = self._safe(snapshot, "change_pct")
+        return_5d = self._safe(snapshot, "return_5d")
+        return_20d = self._safe(snapshot, "return_20d")
+        relative_volume = self._safe(snapshot, "relative_volume", 1.0)
+        atr_pct = self._safe(snapshot, "atr_pct")
+        atr_expansion = self._safe(snapshot, "atr_expansion", 1.0)
+        tight_consolidation = self._safe(snapshot, "tight_consolidation_pct", 99.0)
+        relative_strength = self._safe(snapshot, "relative_strength_20d")
+
+        above_support = bool(price and ((ema_20 and price >= ema_20) or (rolling_vwap and price >= rolling_vwap)))
+        volume_ok = relative_volume >= 0.6
+        volume_compressed = relative_volume <= 1.25
+        higher_lows = bool(snapshot.get("higher_lows"))
+        no_deep_retrace = return_5d >= -8 and (not ema_50 or price >= ema_50)
+        pulled_back = -6.5 <= return_5d <= -1.0 or (ema_20 and 0 <= ((price - ema_20) / ema_20) * 100 <= 5.0)
+        tight_after_move = return_20d >= 15 and tight_consolidation <= max(6.0, atr_pct * 3.0) and atr_expansion <= 1.15
+        trend_intact = return_20d >= 16 and higher_lows and relative_strength >= 1.5 and above_support
+
+        continuation_type = None
+        reasons: list[str] = []
+        if pulled_back and above_support and volume_ok and no_deep_retrace:
+            continuation_type = "pullback"
+            reasons.append("Pulled back 2-5% from the move and is holding VWAP/20 EMA support.")
+        elif tight_after_move and no_deep_retrace and volume_compressed:
+            continuation_type = "consolidation"
+            reasons.append("Strong move is digesting in a tight low-volatility range.")
+        elif trend_intact and volume_ok:
+            continuation_type = "trend"
+            reasons.append("Higher lows and relative strength remain intact after the move.")
+
+        if continuation_type is None:
+            return {"is_momentum_continuation": False}
+
+        support_candidates = [value for value in (rolling_vwap, ema_20, support) if value and value < price]
+        invalidation_level = max(support_candidates) if support_candidates else price * 0.94
+        consolidation_high = resistance if resistance and resistance > price else price * (1 + max(0.8, atr_pct * 0.35) / 100)
+        alert_price = consolidation_high * 1.002
+        safe_entry_price = alert_price if continuation_type == "consolidation" else max(price, (ema_20 or rolling_vwap or price) * 1.006)
+        stop_distance = max(safe_entry_price - invalidation_level, 0)
+        target_pct = max(2.0, min(8.0, atr_pct * 1.6 if atr_pct else 3.0))
+        new_target = safe_entry_price * (1 + target_pct / 100)
+        recalculated_rr = round((new_target - safe_entry_price) / stop_distance, 2) if stop_distance > 0 else 0.0
+
+        bounce_from_support = pulled_back and low <= max(ema_20 or 0, rolling_vwap or 0) * 1.015 and price > safe_entry_price * 0.995
+        breaks_consolidation = bool(resistance and price > resistance and abs(change_pct) <= 4.5)
+        if recalculated_rr >= 1.5 and (breaks_consolidation or bounce_from_support):
+            action = "REENTRY_BUY"
+        elif recalculated_rr >= 1.3:
+            action = "ALERT"
+        else:
+            action = "WAIT_FOR_REENTRY"
+
+        reasons.append("Stock already moved; wait for safe re-entry instead of chasing the high.")
+        return {
+            "is_momentum_continuation": True,
+            "continuation_type": continuation_type,
+            "continuation_labels": ["MOMENTUM_CONTINUATION", "RE_ENTRY_SETUP"],
+            "re_entry_zone": {
+                "low": round(max(invalidation_level, safe_entry_price * 0.985), 2),
+                "high": round(safe_entry_price * 1.01, 2),
+            },
+            "safe_entry_price": round(safe_entry_price, 2),
+            "invalidation_level": round(invalidation_level, 2),
+            "new_target": round(new_target, 2),
+            "continuation_risk_reward": recalculated_rr,
+            "continuation_action": action,
+            "action": action,
+            "continuation_reason": "; ".join(reasons[:3]),
+            "setup_type": "Momentum Continuation / Re-Entry",
+            "trailing_stop": round(max(invalidation_level, ema_20 or 0, rolling_vwap or 0), 2),
+        }
+
     def evaluate(
         self,
         symbol: str,
@@ -96,17 +359,24 @@ class ScoringEngine:
         price = self._safe(snapshot, "price", self._safe(snapshot, "close"))
         change_pct = self._safe(snapshot, "change_pct")
         relative_volume = self._safe(snapshot, "relative_volume", 1.0)
+        intraday_volume_ratio = self._safe(snapshot, "intraday_volume_ratio", 1.0)
         rsi = self._safe(snapshot, "rsi", 50.0)
         macd_hist = self._safe(snapshot, "macd_hist")
         atr_pct = self._safe(snapshot, "atr_pct", 0.0)
         atr_expansion = self._safe(snapshot, "atr_expansion", 1.0)
         relative_strength = self._safe(snapshot, "relative_strength_20d")
+        return_5d = self._safe(snapshot, "return_5d")
+        return_20d = self._safe(snapshot, "return_20d")
         close_location = self._safe(snapshot, "close_location", 0.5)
         upper_wick_pct = self._safe(snapshot, "upper_wick_pct")
         lower_wick_pct = self._safe(snapshot, "lower_wick_pct")
         cmf = self._safe(snapshot, "cmf")
         obv_slope = self._safe(snapshot, "obv_slope")
         delivery_spike = self._safe(snapshot, "delivery_spike")
+        tight_consolidation_pct = self._safe(snapshot, "tight_consolidation_pct", 99.0)
+        distance_to_resistance_pct = self._safe(snapshot, "distance_to_resistance_pct", 99.0)
+        distance_to_support_pct = self._safe(snapshot, "distance_to_support_pct", 99.0)
+        bb_width_ratio = self._safe(snapshot, "bb_width_ratio", 1.0)
 
         if snapshot.get("price_above_ema20") and snapshot.get("price_above_ema50"):
             add_bull(12, "trend", "Price is holding above the 20 and 50 EMA.", "trend_up")
@@ -295,6 +565,7 @@ class ScoringEngine:
 
         probability = 0.5 if direction == "neutral" else round(confidence / 100, 4)
         signal_summary = "; ".join(reasons[:3]) if reasons else "Confirmation is still weak."
+        pattern_context = self._pattern_context(snapshot, direction=direction, price=price)
         if direction == "bullish":
             target_price = price * (1 + abs(expected_move_pct) / 100)
             extended_target_price = price * (1 + abs(expected_move_pct) * 1.35 / 100)
@@ -309,6 +580,119 @@ class ScoringEngine:
         stop_distance = abs(price - stop_loss) if stop_loss else 0.0
         target_distance = abs(target_price - price)
         risk_reward = round(target_distance / stop_distance, 2) if stop_distance > 0 else 0.0
+        target_1 = target_price
+        target_2 = extended_target_price
+        if direction == "bullish":
+            extended_target = price * (1 + abs(expected_move_pct) * 1.75 / 100)
+            trailing_stop = max(stop_loss or 0, self._safe(snapshot, "ema_20") or 0, self._safe(snapshot, "rolling_vwap") or 0) or stop_loss
+        elif direction == "bearish":
+            extended_target = price * (1 - abs(expected_move_pct) * 1.75 / 100)
+            trailing_candidates = [value for value in [stop_loss, self._safe(snapshot, "ema_20"), self._safe(snapshot, "rolling_vwap")] if value]
+            trailing_stop = min(trailing_candidates) if trailing_candidates else stop_loss
+        else:
+            extended_target = price
+            trailing_stop = stop_loss
+
+        above_vwap = bool(snapshot.get("above_vwap"))
+        above_ema20 = bool(snapshot.get("price_above_ema20"))
+        volume_ok = relative_volume >= 1.2 or intraday_volume_ratio >= 1.2
+        volume_fading = relative_volume < 1.05 and intraday_volume_ratio < 1.0
+        overextended = (direction == "bullish" and rsi >= 72) or (direction == "bearish" and rsi <= 28)
+        lifecycle = build_lifecycle_advice(
+            direction=direction,
+            entry_price=price,
+            current_price=price,
+            target_1=target_1,
+            target_2=target_2,
+            stop_loss=stop_loss,
+            trailing_stop=trailing_stop,
+            above_vwap=above_vwap,
+            above_ema20=above_ema20,
+            volume_ok=volume_ok,
+            overextended=overextended,
+            volume_fading=volume_fading,
+        )
+        if overextended and volume_fading:
+            risk_factors.append("Move is overextended while volume is fading, raising reversal risk.")
+        chase = classify_chase_risk(
+            {
+                "direction": direction,
+                "change_pct": change_pct,
+                "gap_pct": self._safe(snapshot, "gap_pct"),
+                "risk_reward": risk_reward,
+                "relative_volume": relative_volume,
+                "intraday_volume_ratio": intraday_volume_ratio,
+                "rsi": rsi,
+                "current_price": price,
+                "trailing_stop": trailing_stop,
+                "stop_loss": stop_loss,
+                "invalidation": invalidation,
+                "rolling_vwap": self._safe(snapshot, "rolling_vwap"),
+                "ema_20": self._safe(snapshot, "ema_20"),
+                "return_5d": return_5d,
+                "return_20d": return_20d,
+                "close_location": close_location,
+            }
+        )
+        if chase["chase_risk"]:
+            risk_factors.append(chase["chase_risk_reason"])
+            tags.append("chase_risk")
+        if chase["next_day_profit_booking_risk"]:
+            risk_factors.append("High chance of profit booking tomorrow after an 8%+ move.")
+            tags.append("profit_booking_risk")
+        if chase.get("overextended_fresh_entry"):
+            risk_factors.append(chase["chase_risk_reason"])
+            tags.extend(["avoid_late_entry", "overextended"])
+        pre_breakout = self._pre_breakout_setup(
+            snapshot,
+            price=price,
+            change_pct=change_pct,
+            gap_pct=self._safe(snapshot, "gap_pct"),
+            atr_pct=atr_pct,
+        )
+        if pre_breakout.get("is_pre_breakout"):
+            tags.extend(["pre_breakout", "watch_for_breakout"])
+            tags.extend(label.lower() for label in pre_breakout.get("pre_breakout_labels", []))
+        continuation = self._momentum_continuation_setup(
+            snapshot,
+            price=price,
+            direction=direction,
+            chase=chase,
+            risk_reward=risk_reward,
+            target_1=target_1,
+        )
+        if continuation.get("is_momentum_continuation"):
+            tags.extend(["momentum_continuation", "re_entry_setup"])
+
+        if pre_breakout.get("is_pre_breakout"):
+            signal_stage = "PATTERN_FORMING" if pre_breakout.get("pre_breakout_action") == "WATCH" else "ALERT_ABOVE_LEVEL"
+            action = pre_breakout.get("pre_breakout_action", "WATCH")
+        elif continuation.get("is_momentum_continuation"):
+            signal_stage = "RETEST_ENTRY" if continuation.get("continuation_type") == "pullback" else "RE_ENTRY_SETUP"
+            action = continuation.get("continuation_action", "WAIT_FOR_REENTRY")
+        elif chase.get("overextended_fresh_entry") or chase.get("chase_risk"):
+            signal_stage = "AVOID_CHASE"
+            action = "WAIT_FOR_PULLBACK"
+        elif "breakout" in tags or "breakdown" in tags:
+            signal_stage = "CONFIRMED_BREAKOUT"
+            action = "BUY" if direction == "bullish" else "SELL"
+        elif pattern_context["pattern_score"] >= 3:
+            signal_stage = "PATTERN_FORMING"
+            action = "WATCH"
+        else:
+            signal_stage = "WATCH"
+            action = "WATCH"
+        historical_sample_count = int(historical.get("sample_count", historical.get("signal_count", 0)) or 0)
+        historical_win_rate = float(historical.get("win_rate", 0) or 0)
+        historically_validated = historical_sample_count >= 30 and historical_win_rate >= 0.60
+        if action in {"BUY", "SELL", "REENTRY_BUY"} and not historically_validated:
+            action = "WATCH"
+            if signal_stage == "CONFIRMED_BREAKOUT":
+                signal_stage = "ALERT_ABOVE_LEVEL"
+            if continuation.get("continuation_action") == "REENTRY_BUY":
+                continuation["continuation_action"] = "ALERT"
+                continuation["action"] = "ALERT"
+            risk_factors.append("Historical validation is below the BUY/SELL threshold; keep as watch only.")
 
         return {
             "symbol": symbol.upper(),
@@ -323,15 +707,78 @@ class ScoringEngine:
             "probability": probability,
             "move_quality": move_quality,
             "expected_move_pct": round(expected_move_pct, 2),
+            **pattern_context,
+            "signal_stage": signal_stage,
+            "action": action,
+            "entry_trigger": pattern_context["entry_trigger"],
+            "target": round(target_price, 2),
+            "historical_evidence": {
+                "sample_count": int(historical.get("sample_count", historical.get("signal_count", 0)) or 0),
+                "win_rate": round(float(historical.get("win_rate", 0) or 0), 4),
+                "avg_return": round(float(historical.get("avg_return", historical.get("expectancy_pct", 0)) or 0), 2),
+                "max_drawdown": round(float(historical.get("max_drawdown", historical.get("avg_loss_pct", 0)) or 0), 2),
+                "false_positive_rate": round(float(historical.get("false_positive_rate", 0) or 0), 4),
+            },
+            "validation_status": (
+                "validated"
+                if historically_validated
+                else "watch_only_insufficient_history"
+            ),
+            "catalyst_summary": {
+                "sentiment": "neutral",
+                "summary": "Catalyst scan not loaded for this request.",
+                "catalysts": [],
+            },
             "risk_level": risk_level,
             "current_price": round(price, 2),
             "target_price": round(target_price, 2),
             "extended_target_price": round(extended_target_price, 2),
             "stop_loss": round(stop_loss, 2) if stop_loss else None,
+            "entry_zone": {
+                "low": round(min(price * 0.995, price * 1.005), 2),
+                "high": round(max(price * 0.995, price * 1.005), 2),
+            },
+            "target_1": round(target_1, 2),
+            "target_2": round(target_2, 2),
+            "extended_target": round(extended_target, 2),
+            "trailing_stop": round(trailing_stop, 2) if trailing_stop else None,
+            "exit_signal": lifecycle["exit_signal"],
+            "hold_or_exit": lifecycle["hold_or_exit"],
+            "reason_for_exit_decision": lifecycle["reason_for_exit_decision"],
+            "current_pnl_pct": lifecycle["current_pnl_pct"],
+            "target_progress_pct": lifecycle["target_progress_pct"],
+            **chase,
+            **pre_breakout,
+            **continuation,
+            "setup_stage": (
+                "PRE_BREAKOUT"
+                if pre_breakout.get("is_pre_breakout")
+                else "MOMENTUM_CONTINUATION"
+                if continuation.get("is_momentum_continuation")
+                else chase["setup_stage"]
+            ),
+            "trade_labels": list(
+                dict.fromkeys(
+                    (pre_breakout.get("pre_breakout_labels", []) if pre_breakout.get("is_pre_breakout") else [])
+                    + (continuation.get("continuation_labels", []) if continuation.get("is_momentum_continuation") else [])
+                    + chase.get("trade_labels", [])
+                )
+            ),
+            "recommended_action": (
+                pre_breakout.get("pre_breakout_action")
+                if pre_breakout.get("is_pre_breakout")
+                else continuation.get("continuation_action")
+                if continuation.get("is_momentum_continuation")
+                else chase["recommended_action"]
+            ),
+            "attention_only": bool(pre_breakout.get("is_pre_breakout")) or bool(continuation.get("is_momentum_continuation")) or chase["attention_only"],
+            "allow_buy_call": False if pre_breakout.get("is_pre_breakout") else chase["allow_buy_call"],
             "risk_reward": risk_reward,
             "timeframe_label": timeframe_label,
             "timeframe_days": timeframe_days,
             "change_pct": round(change_pct, 2),
+            "return_5d": round(return_5d, 2),
+            "return_20d": round(return_20d, 2),
             "volume": int(self._safe(snapshot, "volume", 0)),
             "relative_volume": round(relative_volume, 2),
             "gap_pct": round(self._safe(snapshot, "gap_pct"), 2),
@@ -343,6 +790,28 @@ class ScoringEngine:
             "resistance": round(self._safe(snapshot, "resistance_20"), 2) if self._safe(snapshot, "resistance_20") else None,
             "rolling_vwap": round(self._safe(snapshot, "rolling_vwap"), 2) if self._safe(snapshot, "rolling_vwap") else None,
             "invalidation": round(invalidation, 2) if invalidation else None,
+            "chart_features": {
+                "near_breakout": bool(snapshot.get("near_resistance")) or distance_to_resistance_pct <= 2.5,
+                "breakout_confirmed": bool(snapshot.get("breakout_20") or snapshot.get("intraday_breakout")),
+                "breakdown_confirmed": bool(snapshot.get("breakdown_20")),
+                "pullback_to_support": bool(snapshot.get("near_support")) or distance_to_support_pct <= 2.0,
+                "volume_spike": relative_volume >= 1.5 or intraday_volume_ratio >= 1.4,
+                "rsi_momentum": rsi,
+                "moving_average_trend": trend_regime,
+                "risk_reward": risk_reward,
+                "distance_from_stop_pct": round((abs(price - stop_loss) / price) * 100, 2) if price and stop_loss else None,
+                "overextended": overextended,
+                "tight_consolidation_pct": round(tight_consolidation_pct, 2) if tight_consolidation_pct != 99.0 else None,
+                "distance_to_resistance_pct": round(distance_to_resistance_pct, 2) if distance_to_resistance_pct != 99.0 else None,
+                "distance_to_support_pct": round(distance_to_support_pct, 2) if distance_to_support_pct != 99.0 else None,
+                "higher_lows": bool(snapshot.get("higher_lows")),
+                "volume_dryup": bool(snapshot.get("volume_dryup")),
+                "bb_squeeze": bool(snapshot.get("bb_squeeze")),
+                "bb_width_ratio": round(bb_width_ratio, 2),
+                "atr_expansion": round(atr_expansion, 2),
+                "cmf": round(cmf, 3),
+                "obv_slope": round(obv_slope, 2),
+            },
             "reasons": reasons[:6],
             "weaknesses": weaknesses[:4],
             "risk_factors": list(dict.fromkeys(risk_factors))[:5],

@@ -8,6 +8,25 @@ from typing import Any, Iterable
 
 JSON_FIELDS = {"reasons", "risk_factors", "tags"}
 BOOL_FIELDS = {"pinned", "ignored", "archived"}
+SCHEMA_COLUMNS = {
+    "suggested_at": "TEXT",
+    "target_1": "REAL",
+    "target_2": "REAL",
+    "trailing_stop": "REAL",
+    "scanner_call_status": "TEXT",
+    "hold_or_exit": "TEXT",
+    "reason_for_exit_decision": "TEXT",
+    "current_pnl_pct": "REAL",
+    "target_progress_pct": "REAL",
+    "target_hit_at": "TEXT",
+    "partial_book_at": "TEXT",
+    "exit_suggested_at": "TEXT",
+    "stop_loss_hit_at": "TEXT",
+    "expired_at": "TEXT",
+    "last_checked_at": "TEXT",
+    "closed_at": "TEXT",
+    "exit_reason": "TEXT",
+}
 
 
 class SetupStore:
@@ -88,6 +107,13 @@ class SetupStore:
                     ON setup_updates(setup_id, created_at DESC);
                 """
             )
+            existing = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(tracked_setups)").fetchall()
+            }
+            for column, definition in SCHEMA_COLUMNS.items():
+                if column not in existing:
+                    connection.execute(f"ALTER TABLE tracked_setups ADD COLUMN {column} {definition}")
 
     def _encode(self, values: dict[str, Any]) -> dict[str, Any]:
         payload = dict(values)

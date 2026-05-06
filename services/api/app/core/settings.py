@@ -47,6 +47,8 @@ class Settings:
     detail_cache_ttl_sec: int = int(os.getenv("DETAIL_CACHE_TTL_SEC", "90"))
     backtest_cache_ttl_sec: int = int(os.getenv("BACKTEST_CACHE_TTL_SEC", "900"))
     history_cache_ttl_sec: int = int(os.getenv("HISTORY_CACHE_TTL_SEC", "180"))
+    news_api_key: str = os.getenv("NEWS_API_KEY", "")
+    news_scan_limit: int = int(os.getenv("NEWS_SCAN_LIMIT", "12"))
     hold_days: int = int(os.getenv("BACKTEST_HOLD_DAYS", "5"))
     chart_limit: int = int(os.getenv("CHART_LIMIT", "220"))
     tracked_setup_db_path: str = os.getenv("TRACK_DB_PATH", _default_track_db_path())
@@ -54,7 +56,7 @@ class Settings:
     tracked_promotion_move_quality_min: int = int(os.getenv("TRACK_PROMOTION_MOVE_QUALITY_MIN", "58"))
     tracked_review_limit: int = int(os.getenv("TRACK_REVIEW_LIMIT", "10"))
     custom_universe: tuple[str, ...] = _csv_env("UNIVERSE_SYMBOLS")
-    universe_groups: tuple[str, ...] = _csv_env("UNIVERSE_GROUPS") or ("NIFTY_200", "FNO")
+    universe_groups: tuple[str, ...] = _csv_env("UNIVERSE_GROUPS") or ("NIFTY_500", "FNO")
     invalid_symbols: tuple[str, ...] = _csv_env("INVALID_SYMBOLS") or ("GMRINFRA", "TATAMOTORS")
 
 

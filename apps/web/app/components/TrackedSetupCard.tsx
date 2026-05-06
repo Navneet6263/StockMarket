@@ -3,10 +3,10 @@
 import {
   TrackedSetup,
   humanize,
+  toneForAdvice,
   toneForDirection,
   toneForRisk,
   toneForStatus,
-  toneForTrackingLabel,
 } from "../lib/market";
 
 type TrackedSetupCardProps = {
@@ -26,6 +26,10 @@ export default function TrackedSetupCard({
   onArchive,
   onIgnore,
 }: TrackedSetupCardProps) {
+  const advice = item.hold_or_exit || "WAIT";
+  const pnl = item.current_pnl_pct ?? item.result_pct ?? 0;
+  const why = item.exit_reason ? humanize(item.exit_reason) : item.reason_for_exit_decision || item.last_update_note || "Lifecycle check pending.";
+
   function handleNote() {
     if (!onUpdate) return;
     const next = window.prompt("Add or update note", item.notes || "");
@@ -46,43 +50,41 @@ export default function TrackedSetupCard({
         <div>
           <div className="mono-label">{item.symbol}</div>
           <h3>{item.company_name || item.symbol}</h3>
-          <div className="micro-copy">{item.sector || "Sector pending"} | {humanize(item.source_mode)}</div>
+          <div className="micro-copy">
+            {humanize(item.source_mode)}
+            {item.suggested_at ? ` | ${new Date(item.suggested_at).toLocaleString()}` : ""}
+          </div>
         </div>
         <div className="badge-row">
           <span className="chip" style={{ color: toneForDirection(item.direction) }}>{humanize(item.direction)}</span>
-          <span className="chip" style={{ color: toneForStatus(item.status) }}>{humanize(item.status)}</span>
-          <span className="chip ghost" style={{ color: toneForTrackingLabel(item.tracking_label) }}>
-            {item.tracking_label}
-          </span>
+          <span className="chip" style={{ color: toneForAdvice(advice) }}>{humanize(advice)}</span>
+          <span className="chip ghost" style={{ color: toneForStatus(item.status) }}>{humanize(item.scanner_call_status || item.status)}</span>
         </div>
       </div>
 
       <div className="mini-grid">
         <div className="mini-stat"><span>Entry</span><strong>INR {item.entry_price.toFixed(2)}</strong></div>
-        <div className="mini-stat"><span>Target</span><strong>INR {item.target_price.toFixed(2)}</strong></div>
+        <div className="mini-stat"><span>Current</span><strong>INR {(item.current_price || item.entry_price).toFixed(2)}</strong></div>
+        <div className="mini-stat"><span>Target</span><strong>INR {(item.target_1 || item.target_price).toFixed(2)}</strong></div>
         <div className="mini-stat"><span>Stop</span><strong>{item.stop_loss ? `INR ${item.stop_loss.toFixed(2)}` : "-"}</strong></div>
-        <div className="mini-stat"><span>Timeframe</span><strong>{item.timeframe_label}</strong></div>
-        <div className="mini-stat"><span>Confidence</span><strong>{item.confidence.toFixed(0)}%</strong></div>
-        <div className="mini-stat"><span>Result</span><strong style={{ color: toneForDirection(item.direction) }}>{`${(item.result_pct || 0) > 0 ? "+" : ""}${(item.result_pct || 0).toFixed(2)}%`}</strong></div>
+        <div className="mini-stat"><span>Trail</span><strong>{item.trailing_stop ? `INR ${item.trailing_stop.toFixed(2)}` : "-"}</strong></div>
+        <div className="mini-stat"><span>P&L</span><strong style={{ color: pnl >= 0 ? "#34d399" : "#fb7185" }}>{`${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}%`}</strong></div>
+        <div className="mini-stat"><span>Advice</span><strong style={{ color: toneForAdvice(advice) }}>{humanize(advice)}</strong></div>
       </div>
 
-      <p className="card-summary">{item.reason_summary}</p>
+      <p className="card-summary">Why: {why}</p>
 
       <div className="badge-row">
-        <span className="chip">{humanize(item.scanner_bucket)}</span>
+        <span className="chip">{item.timeframe_label}</span>
+        <span className="chip">{`${(item.target_progress_pct || 0).toFixed(0)}% progress`}</span>
         <span className="chip" style={{ color: toneForRisk(item.risk_level) }}>{humanize(item.risk_level)} risk</span>
-        <span className="chip">RR {item.risk_reward.toFixed(2)}</span>
         {item.pinned ? <span className="chip ghost">Pinned</span> : null}
-      </div>
-
-      <div className="micro-copy">
-        {item.last_update_label || "Fresh setup"}: {item.last_update_note || "Tracked idea is active."}
       </div>
       {item.notes ? <div className="micro-copy">Note: {item.notes}</div> : null}
 
       <div className="action-row compact">
         <button type="button" className="ghost-button compact" onClick={() => onSelect(item.symbol)}>
-          Open
+          View Detail
         </button>
         {onUpdate ? (
           <button

@@ -46,9 +46,73 @@ export type MarketSignal = {
   expected_move_pct: number;
   risk_level: "low" | "medium" | "high" | string;
   current_price: number;
+  entry_zone?: { low: number; high: number };
+  target_1?: number;
+  target_2?: number;
+  extended_target?: number;
   target_price: number;
   extended_target_price?: number | null;
   stop_loss?: number | null;
+  trailing_stop?: number | null;
+  exit_signal?: boolean;
+  hold_or_exit?: "HOLD" | "PARTIAL_BOOK" | "EXIT" | "WAIT" | string;
+  reason_for_exit_decision?: string;
+  setup_stage?: string;
+  trade_labels?: string[];
+  recommended_action?: string;
+  attention_only?: boolean;
+  allow_buy_call?: boolean;
+  chase_risk?: boolean;
+  overextended_fresh_entry?: boolean;
+  next_day_profit_booking_risk?: boolean;
+  chase_risk_reason?: string;
+  return_5d?: number;
+  return_20d?: number;
+  ema20_distance_pct?: number;
+  vwap_distance_pct?: number;
+  is_pre_breakout?: boolean;
+  setup_type?: string;
+  signal_stage?: string;
+  entry_trigger?: number;
+  pattern_labels?: string[];
+  pattern_score?: number;
+  pattern_reason?: string;
+  pre_breakout_labels?: string[];
+  pre_breakout_score?: number;
+  pre_breakout_confidence?: number;
+  pre_breakout_action?: "WATCH" | "ALERT_ABOVE_LEVEL" | "WAIT_FOR_CONFIRMATION" | string;
+  breakout_level?: number | null;
+  alert_price?: number | null;
+  alert_above_price?: number | null;
+  invalidation_level?: number | null;
+  expected_breakout_move?: number | null;
+  expected_move?: number | null;
+  pre_breakout_reason?: string;
+  pre_breakout_timeframe?: string;
+  action?: string;
+  is_momentum_continuation?: boolean;
+  continuation_type?: "pullback" | "consolidation" | "trend" | string;
+  continuation_labels?: string[];
+  re_entry_zone?: { low: number; high: number };
+  safe_entry_price?: number;
+  new_target?: number;
+  continuation_risk_reward?: number;
+  continuation_action?: "WAIT_FOR_REENTRY" | "ALERT" | "REENTRY_BUY" | string;
+  continuation_reason?: string;
+  historical_evidence?: {
+    sample_count: number;
+    win_rate: number;
+    avg_return: number;
+    max_drawdown: number;
+    false_positive_rate: number;
+  };
+  validation_status?: string;
+  catalyst_summary?: {
+    sentiment?: string;
+    summary?: string;
+    catalysts?: string[];
+    headlines?: string[];
+  };
   risk_reward: number;
   timeframe_label: string;
   timeframe_days: number;
@@ -82,11 +146,29 @@ export type MarketMover = {
   change_pct?: number;
   volume?: number;
   tags?: string[];
+  move_bucket?: string;
+  missed_reason?: string;
+  attention_only?: boolean;
+  recommended_action?: string;
+  trade_labels?: string[];
+  chase_risk_reason?: string;
+  entry_label?: string;
+  display_action?: string;
+  is_chase_risk?: boolean;
+  is_profit_booking_risk?: boolean;
+  chase_warnings?: string[];
+  next_day_risk?: string[];
+  ui_guidance?: string[];
+  was_in_prior_pre_breakout_scan?: boolean;
+  was_pre_breakout_setup_yesterday?: boolean;
+  pre_breakout_score_before_move?: number;
+  missed_move_analysis?: string;
 };
 
 export type MarketOverview = {
   generated_at: string;
   universe_size: number;
+  valid_signal_count?: number;
   market_breadth: {
     advancing: number;
     declining: number;
@@ -100,6 +182,9 @@ export type MarketOverview = {
     source_mode?: string;
     note?: string;
     bucket_counts?: Record<string, number>;
+    total_discovered?: number;
+    total_scanned?: number;
+    valid_signal_count?: number;
   };
   macro_context: {
     risk_mode?: string;
@@ -110,21 +195,170 @@ export type MarketOverview = {
     summary?: string;
   };
   top_opportunities: MarketSignal[];
+  top_validated_calls?: MarketSignal[];
   unusual_volume: MarketSignal[];
   breakout_candidates: MarketSignal[];
   bearish_risks: MarketSignal[];
   top_movers: MarketMover[];
+  fast_movers_missed_moves?: MarketMover[];
+  pre_breakout_setups?: MarketSignal[];
+  pattern_forming_setups?: MarketSignal[];
+  alert_above_setups?: MarketSignal[];
+  retest_entry?: MarketSignal[];
+  momentum_continuation?: MarketSignal[];
+  re_entry_setups?: MarketSignal[];
+  missed_moves_analysis?: MarketMover[];
+  avoid_late_entry?: MarketSignal[];
   summary: {
     high_priority: number;
     watchlist: number;
     avoid: number;
     opportunities_count: number;
+    top_validated_count?: number;
     breakout_count: number;
     bearish_risk_count: number;
     unusual_volume_count: number;
     market_mood: string;
     scanner_leader?: string | null;
+    total_scanned_universe?: number;
+    valid_signal_count?: number;
+    fast_movers_count?: number;
+    pre_breakout_count?: number;
+    pattern_forming_count?: number;
+    alert_above_count?: number;
+    retest_entry_count?: number;
+    momentum_continuation_count?: number;
+    re_entry_count?: number;
+    missed_moves_count?: number;
+    avoid_late_entry_count?: number;
   };
+};
+
+export type HotPick = {
+  symbol: string;
+  currentPrice?: string;
+  setupType: "breakout" | "pullback" | "reversal" | "momentum continuation" | "breakdown" | string;
+  direction: "bullish" | "bearish" | "neutral";
+  confidence: number;
+  score?: number;
+  scoreBreakdown?: {
+    breakoutSupportResistance?: number;
+    chartSetup?: number;
+    volumeLiquidity: number;
+    trendStrength: number;
+    momentumIndicators: number;
+    sectorMarketNews?: number;
+    newsSectorCatalyst?: number;
+  };
+  chart?: {
+    nearBreakout?: boolean;
+    breakoutConfirmed?: boolean;
+    pullbackToSupport?: boolean;
+    volumeSpike?: boolean;
+    rsiMomentum?: number;
+    movingAverageTrend?: string;
+    riskReward?: number;
+    distanceFromStopPct?: number | null;
+    overextended?: boolean;
+  };
+  entryZone: string;
+  entryTrigger?: string;
+  target: string;
+  targetZone?: string;
+  stoploss: string;
+  invalidation: string;
+  reason: string;
+  whyItCanMove?: string;
+  risk: string;
+  riskLevel?: "low" | "medium" | "high" | string;
+  timeHorizon: string;
+  lastUpdated: string;
+  catalystStatus?: "positive" | "negative" | "neutral" | "unknown";
+  catalystReason?: string;
+  catalystSource?: string | null;
+  catalystTime?: string | null;
+  cleanRiskSetup?: boolean;
+  rejectionReasons?: string[];
+  softReasons?: string[];
+  raw?: MarketSignal;
+};
+
+export type BaseFormationPick = {
+  symbol: string;
+  stage: "strong base" | "building base" | "loose consolidation" | string;
+  accumulationScore: number;
+  range: string;
+  keyResistance: string;
+  supportZone: string;
+  breakoutTrigger: string;
+  invalidation: string;
+  volumeBehavior: string;
+  pattern: string;
+  whyInteresting: string;
+  risk: string;
+  timeHorizon: string;
+  lastUpdated: string;
+  debug?: {
+    avgRangePct?: number;
+    resistanceTouches?: number;
+    supportTouches?: number;
+    volatilityCompressionPct?: number;
+    tightConsolidationPct?: number | null;
+  };
+};
+
+export type HotPicksDebug = {
+  totalScanned: number;
+  sourceCandidates: number;
+  candidatesByTier: Record<string, number>;
+  rejectedCountsByReason: Record<string, number>;
+  top10NearMissCandidates: Array<{
+    symbol: string;
+    score: number;
+    setupType: string;
+    softReasons?: string[];
+    rejectionReasons?: string[];
+    why?: string;
+  }>;
+};
+
+export type HotPicksResponse = {
+  marketMood: "bullish" | "bearish" | "sideways" | string;
+  lastUpdated: string;
+  cacheStatus?: string;
+  isStale?: boolean;
+  summary: {
+    totalScanned: number;
+    highConfidence: number;
+    bullish: number;
+    bearish: number;
+    breakouts: number;
+    watchlist?: number;
+    momentumRadar?: number;
+    baseFormation?: number;
+  };
+  hotPicks: HotPick[];
+  watchlist: HotPick[];
+  momentumRadar?: HotPick[];
+  catalystRadar?: HotPick[];
+  baseFormationRadar?: BaseFormationPick[];
+  rejectionSummary?: {
+    totalRejected: number;
+    countsByReason: Record<string, number>;
+    nearMissCandidates: HotPicksDebug["top10NearMissCandidates"];
+  };
+  debug?: HotPicksDebug;
+  marketExplanation?: string;
+  sectorStrength?: Record<string, number>;
+  performance?: {
+    last30Calls?: TrackedSetup[];
+    activeCalls?: number;
+    winRate?: number | null;
+    averageReturn?: number | null;
+    maxLoss?: number | null;
+    message?: string | null;
+  };
+  warnings: string[];
 };
 
 export type StockDetail = {
@@ -224,8 +458,25 @@ export type TrackedSetup = {
   entry_price: number;
   current_price: number;
   target_price: number;
+  target_1?: number | null;
+  target_2?: number | null;
   extended_target_price?: number | null;
   stop_loss?: number | null;
+  trailing_stop?: number | null;
+  scanner_call_status?: string | null;
+  hold_or_exit?: string | null;
+  reason_for_exit_decision?: string | null;
+  current_pnl_pct?: number | null;
+  target_progress_pct?: number | null;
+  suggested_at?: string | null;
+  target_hit_at?: string | null;
+  partial_book_at?: string | null;
+  exit_suggested_at?: string | null;
+  stop_loss_hit_at?: string | null;
+  expired_at?: string | null;
+  last_checked_at?: string | null;
+  closed_at?: string | null;
+  exit_reason?: string | null;
   invalidation?: number | null;
   confidence: number;
   model_confidence?: number | null;
@@ -263,6 +514,8 @@ export type TrackerDashboard = {
     passed_calls: number;
     failed_calls: number;
     expired_calls: number;
+    target_hit_count?: number;
+    stop_loss_count?: number;
     win_rate: number;
     average_return: number;
     best_call?: TrackedSetup | null;
@@ -276,6 +529,11 @@ export type TrackerDashboard = {
     failed_calls: TrackedSetup[];
     expired_calls: TrackedSetup[];
     manual_watchlist: TrackedSetup[];
+    todays_top_10_scanner_calls?: TrackedSetup[];
+    active_scanner_calls?: TrackedSetup[];
+    past_target_hit?: TrackedSetup[];
+    past_stop_loss_failed?: TrackedSetup[];
+    expired_no_followthrough?: TrackedSetup[];
   };
   todays_review: {
     updates: TrackedSetupUpdate[];
@@ -319,6 +577,14 @@ export function toneForStatus(status?: string) {
   if (status === "failed") return "#fb7185";
   if (status === "expired") return "#f59e0b";
   if (status === "watch_only") return "#60a5fa";
+  return "#cbd5e1";
+}
+
+export function toneForAdvice(advice?: string | null) {
+  if (advice === "HOLD") return "#34d399";
+  if (advice === "PARTIAL_BOOK") return "#60a5fa";
+  if (advice === "EXIT") return "#fb7185";
+  if (advice === "EXPIRED") return "#f59e0b";
   return "#cbd5e1";
 }
 

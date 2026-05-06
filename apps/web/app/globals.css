@@ -638,6 +638,14 @@ select {
   overflow-wrap: anywhere;
 }
 
+.scanner-row-note {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  padding-top: 2px;
+}
+
 .row-actions {
   display: flex;
   justify-content: flex-end;
@@ -653,11 +661,311 @@ select {
   min-height: 0;
 }
 
+.intelligence-shell {
+  max-width: 1360px;
+  gap: 18px;
+}
+
+.terminal-hero,
+.dashboard-band {
+  background: rgba(9, 17, 31, 0.86);
+  border: 1px solid var(--panel-border);
+  border-radius: 18px;
+  padding: 20px;
+  backdrop-filter: blur(12px);
+}
+
+.terminal-hero {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(420px, 0.9fr);
+  gap: 18px;
+  align-items: end;
+}
+
+.terminal-hero h1 {
+  margin: 8px 0;
+  font-size: clamp(34px, 4vw, 58px);
+  line-height: 1;
+}
+
+.compact-controls {
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+}
+
+.hot-summary {
+  grid-template-columns: repeat(6, minmax(140px, 1fr));
+}
+
+.summary-strip.compact {
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+}
+
+.warning-strip {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  background: rgba(251, 191, 36, 0.08);
+  color: #fde68a;
+  border-radius: 12px;
+  padding: 12px 14px;
+  line-height: 1.5;
+}
+
+.hot-picks-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.watch-pick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.hot-pick-card {
+  border: 1px solid rgba(120, 146, 184, 0.16);
+  background: rgba(6, 11, 20, 0.66);
+  border-radius: 8px;
+  padding: 15px;
+  display: grid;
+  gap: 13px;
+  min-width: 0;
+}
+
+.hot-pick-card.is-compact {
+  gap: 10px;
+}
+
+.base-card {
+  border-color: rgba(96, 165, 250, 0.24);
+}
+
+.hot-card-top,
+.symbol-line,
+.risk-line,
+.journal-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.symbol-line {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.symbol-line strong {
+  font-size: 22px;
+  letter-spacing: 0.02em;
+}
+
+.setup-badge {
+  border-radius: 999px;
+  border: 1px solid rgba(120, 146, 184, 0.18);
+  padding: 5px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.setup-badge.bullish {
+  color: var(--teal);
+  border-color: rgba(45, 212, 191, 0.32);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.setup-badge.bearish {
+  color: var(--rose);
+  border-color: rgba(251, 113, 133, 0.32);
+  background: rgba(251, 113, 133, 0.08);
+}
+
+.confidence-ring {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  background: rgba(255, 255, 255, 0.03);
+  font-weight: 800;
+}
+
+.pick-reason {
+  margin: 0;
+  color: #d9e3ef;
+  line-height: 1.55;
+  font-size: 13px;
+}
+
+.trade-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trade-plan-grid div {
+  min-width: 0;
+  border: 1px solid rgba(120, 146, 184, 0.12);
+  background: rgba(10, 18, 31, 0.58);
+  border-radius: 8px;
+  padding: 9px;
+  display: grid;
+  gap: 5px;
+}
+
+.trade-plan-grid span,
+.risk-line,
+.risk-copy {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.trade-plan-grid strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.score-breakdown {
+  display: grid;
+  gap: 7px;
+}
+
+.score-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) 28px;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.score-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(120, 146, 184, 0.14);
+  overflow: hidden;
+}
+
+.score-track div {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--teal), var(--blue));
+}
+
+.risk-copy {
+  min-height: 32px;
+}
+
+.market-notes {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.8fr) minmax(260px, 0.9fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.debug-panel summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.debug-panel[open] summary {
+  margin-bottom: 14px;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr);
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.market-notes p {
+  margin: 8px 0 0;
+  color: #d9e3ef;
+  line-height: 1.65;
+}
+
+.sector-list,
+.disclaimer,
+.journal-list {
+  display: grid;
+  gap: 8px;
+}
+
+.sector-list span,
+.disclaimer span {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.disclaimer {
+  border-left: 3px solid rgba(251, 191, 36, 0.55);
+  padding-left: 12px;
+}
+
+.journal-list {
+  margin-top: 14px;
+}
+
+.journal-row {
+  border: 1px solid rgba(120, 146, 184, 0.12);
+  background: rgba(6, 11, 20, 0.5);
+  border-radius: 8px;
+  padding: 11px;
+  flex-wrap: wrap;
+}
+
+.journal-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.empty-panel {
+  border: 1px dashed rgba(120, 146, 184, 0.28);
+  background: rgba(6, 11, 20, 0.42);
+  border-radius: 12px;
+  padding: 22px;
+  display: grid;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.empty-panel strong {
+  color: var(--text);
+}
+
+.skeleton-card {
+  min-height: 260px;
+}
+
+.skeleton-line {
+  height: 13px;
+  width: 70%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(120, 146, 184, 0.12), rgba(120, 146, 184, 0.24), rgba(120, 146, 184, 0.12));
+}
+
+.skeleton-line.wide {
+  width: 100%;
+}
+
+.skeleton-line.short {
+  width: 44%;
+}
+
 @media (max-width: 1100px) {
   .hero-grid,
   .detail-grid,
   .dashboard-header,
-  .overview-columns {
+  .overview-columns,
+  .terminal-hero,
+  .market-notes,
+  .debug-grid {
     grid-template-columns: 1fr;
   }
 
@@ -667,6 +975,10 @@ select {
 
   .summary-strip {
     grid-template-columns: repeat(3, minmax(140px, 1fr));
+  }
+
+  .hot-picks-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .scanner-list-head {
@@ -698,7 +1010,9 @@ select {
 
   .dashboard-controls,
   .summary-strip,
-  .scanner-list-row {
+  .scanner-list-row,
+  .hot-picks-grid,
+  .summary-strip.compact {
     grid-template-columns: 1fr;
   }
 

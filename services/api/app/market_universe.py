@@ -21,6 +21,8 @@ class MarketUniverseService:
         self.max_opportunity_symbols = min(max(self.max_scan_symbols, self.settings.scan_symbol_limit + 80), self.max_symbols)
         self.tag_weights = {
             "most_active": 2,
+            "top_gainers": 3,
+            "volume_shockers": 3,
             "breakout_candidates": 3,
             "selling_pressure": 2,
             "low_price_active": 2,
@@ -43,6 +45,14 @@ class MarketUniverseService:
         clean = (symbol or "").upper().strip()
         if "." in clean:
             clean = clean.split(".")[0]
+        aliases = {
+            "GARDENREACH": "GRSE",
+            "GARDENREACHSHIPBUILDERS": "GRSE",
+            "GARDENREACHSHIP": "GRSE",
+            "GREENPLYINDUSTRIES": "GREENPLY",
+            "GREENPLYIND": "GREENPLY",
+        }
+        clean = aliases.get(clean, clean)
         return clean
 
     def _configured_symbols(self) -> list[str]:
@@ -185,6 +195,27 @@ class MarketUniverseService:
                 "query": self._nse_query(
                     EquityQuery("gte", ["intradayprice", max(1, self.settings.min_price)]),
                     EquityQuery("gt", ["dayvolume", max(50000, self.settings.min_volume // 2)]),
+                ),
+                "sort_field": "dayvolume",
+                "sort_asc": False,
+                "max_pages": 4,
+            },
+            {
+                "label": "top_gainers",
+                "query": self._nse_query(
+                    EquityQuery("gt", ["percentchange", 3.0]),
+                    EquityQuery("gt", ["dayvolume", max(50000, self.settings.min_volume // 2)]),
+                    EquityQuery("gte", ["intradayprice", max(1, self.settings.min_price)]),
+                ),
+                "sort_field": "percentchange",
+                "sort_asc": False,
+                "max_pages": 3,
+            },
+            {
+                "label": "volume_shockers",
+                "query": self._nse_query(
+                    EquityQuery("gt", ["dayvolume", max(150000, self.settings.min_volume)]),
+                    EquityQuery("gte", ["intradayprice", max(1, self.settings.min_price)]),
                 ),
                 "sort_field": "dayvolume",
                 "sort_asc": False,

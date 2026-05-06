@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -8,10 +10,13 @@ import pandas as pd
 
 from app.core.settings import Settings
 from app.services.data_provider import MarketDataService
+from app.services.lifecycle import build_lifecycle_advice, directional_return, target_progress
 from app.services.setup_store import SetupStore
 
 
 TRACKABLE_BUCKETS = ("top_opportunities", "breakout_candidates", "unusual_volume")
+AUTO_CALL_BUCKETS = ("top_opportunities", "breakout_candidates", "unusual_volume", "bearish_risks")
+logger = logging.getLogger(__name__)
 
 
 class SetupTrackerService:
@@ -19,6 +24,7 @@ class SetupTrackerService:
         self.settings = settings
         self.data = data
         self.store = SetupStore(settings.tracked_setup_db_path)
+        self._last_dashboard_eval_at = 0.0
 
     def _now(self) -> datetime:
         return datetime.now(timezone.utc)
@@ -37,16 +43,51 @@ class SetupTrackerService:
         return "6mo"
 
     def _directional_return(self, direction: str, entry: float, current: float) -> float:
-        if not entry or not current:
-            return 0.0
-        if direction == "bullish":
-            return ((current / entry) - 1) * 100
-        if direction == "bearish":
-            return ((entry / current) - 1) * 100
-        return 0.0
+        return directional_return(direction, entry, current)
+
+    def _target_progress(self, direction: str, entry: float, current: float, target: float) -> float:
+        return target_progress(direction, entry, current, target)
+
+    def _lifecycle_advice(self, setup: dict[str, Any], current_price: float) -> tuple[str, str, str]:
+        lifecycle = self._build_lifecycle(setup, current_price)
+        return lifecycle["hold_or_exit"], lifecycle["scanner_call_status"], lifecycle["reason_for_exit_decision"]
+
+    def _build_lifecycle(self, setup: dict[str, Any], current_price: float, *, expired: bool = False) -> dict[str, Any]:
+        return build_lifecycle_advice(
+            direction=setup["direction"],
+            entry_price=float(setup.get("entry_price") or current_price or 0),
+            current_price=float(current_price or 0),
+            target_1=float(setup.get("target_1") or setup.get("target_price") or 0),
+            target_2=float(setup.get("target_2") or setup.get("extended_target_price") or 0),
+            stop_loss=float(setup.get("stop_loss") or setup.get("invalidation") or 0),
+            trailing_stop=float(setup.get("trailing_stop") or setup.get("stop_loss") or setup.get("invalidation") or 0),
+            expired=expired,
+        )
+
+    def _timestamp_updates(self, setup: dict[str, Any], lifecycle: dict[str, Any], now_iso: str) -> dict[str, Any]:
+        updates: dict[str, Any] = {"last_checked_at": now_iso}
+        status = lifecycle.get("scanner_call_status")
+        reason = lifecycle.get("exit_reason")
+        if status in {"TARGET_1_HIT", "TARGET_2_HIT"} and not setup.get("target_hit_at"):
+            updates["target_hit_at"] = now_iso
+        if lifecycle.get("hold_or_exit") == "PARTIAL_BOOK" and not setup.get("partial_book_at"):
+            updates["partial_book_at"] = now_iso
+        if status == "EXIT_SUGGESTED" and not setup.get("exit_suggested_at"):
+            updates["exit_suggested_at"] = now_iso
+        if status == "STOP_LOSS_HIT" and not setup.get("stop_loss_hit_at"):
+            updates["stop_loss_hit_at"] = now_iso
+        if status == "EXPIRED" and not setup.get("expired_at"):
+            updates["expired_at"] = now_iso
+        if lifecycle.get("hold_or_exit") == "EXIT" and not setup.get("closed_at"):
+            updates["closed_at"] = now_iso
+        if reason:
+            updates["exit_reason"] = reason
+        return updates
 
     def _tracking_label(self, signal: dict[str, Any]) -> str:
         if signal["direction"] == "neutral":
+            return "Avoid / High Risk"
+        if not signal.get("allow_buy_call", True) or signal.get("attention_only", False):
             return "Avoid / High Risk"
         if signal.get("current_price", 0) < self.settings.min_price or signal.get("volume", 0) < self.settings.min_volume:
             return "Low Liquidity"
@@ -104,6 +145,7 @@ class SetupTrackerService:
             "scanner_bucket": scanner_bucket,
             "source_mode": source_mode,
             "detected_at": now.isoformat(),
+            "suggested_at": now.isoformat() if source_mode == "scanner_suggested" else None,
             "last_seen_at": now.isoformat(),
             "last_evaluated_at": None,
             "expires_at": (now + timedelta(days=max(1, int(timeframe_days * 1.5)))).isoformat(),
@@ -112,8 +154,11 @@ class SetupTrackerService:
             "entry_price": signal.get("current_price"),
             "current_price": signal.get("current_price"),
             "target_price": signal.get("target_price"),
+            "target_1": signal.get("target_1") or signal.get("target_price"),
+            "target_2": signal.get("target_2") or signal.get("extended_target_price"),
             "extended_target_price": signal.get("extended_target_price"),
             "stop_loss": signal.get("stop_loss"),
+            "trailing_stop": signal.get("trailing_stop") or signal.get("stop_loss") or signal.get("invalidation"),
             "invalidation": signal.get("invalidation"),
             "confidence": signal.get("confidence"),
             "model_confidence": signal.get("model_confidence"),
@@ -131,7 +176,20 @@ class SetupTrackerService:
             "risk_factors": signal.get("risk_factors", []),
             "tags": signal.get("tags", []),
             "status": self._status_for_label(tracking_label) or "watch_only",
+            "scanner_call_status": "ACTIVE" if source_mode == "scanner_suggested" else None,
+            "hold_or_exit": signal.get("hold_or_exit") or "WAIT",
+            "reason_for_exit_decision": signal.get("reason_for_exit_decision") or self._setup_note(signal),
+            "target_hit_at": None,
+            "partial_book_at": None,
+            "exit_suggested_at": None,
+            "stop_loss_hit_at": None,
+            "expired_at": None,
+            "last_checked_at": None,
+            "closed_at": None,
+            "exit_reason": None,
             "result_pct": 0.0,
+            "current_pnl_pct": 0.0,
+            "target_progress_pct": 0.0,
             "max_favorable_move": 0.0,
             "max_adverse_move": 0.0,
             "last_update_label": "Fresh setup",
@@ -164,6 +222,61 @@ class SetupTrackerService:
                 seen.add(key)
                 candidates.append((bucket, item))
         return candidates
+
+    def _collect_auto_calls(self, payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        candidates: list[tuple[str, dict[str, Any]]] = []
+        seen: set[tuple[str, str]] = set()
+        for bucket in AUTO_CALL_BUCKETS:
+            for item in payload.get(bucket, []):
+                if item.get("direction") == "neutral":
+                    continue
+                if not item.get("allow_buy_call", True) or item.get("attention_only", False):
+                    continue
+                key = (item["symbol"], item["direction"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append((bucket, item))
+        candidates.sort(
+            key=lambda pair: (
+                pair[1].get("move_quality", 0),
+                pair[1].get("confidence", 0),
+                pair[1].get("relative_volume", 0),
+            ),
+            reverse=True,
+        )
+        selected: list[tuple[str, dict[str, Any]]] = []
+        selected_keys: set[tuple[str, str]] = set()
+        for direction in ("bullish", "bearish"):
+            first = next((item for item in candidates if item[1].get("direction") == direction), None)
+            if first:
+                key = (first[1]["symbol"], first[1]["direction"])
+                selected.append(first)
+                selected_keys.add(key)
+        for item in candidates:
+            key = (item[1]["symbol"], item[1]["direction"])
+            if key in selected_keys:
+                continue
+            selected.append(item)
+            selected_keys.add(key)
+            if len(selected) >= 10:
+                break
+        return selected[:10]
+
+    def _has_daily_scanner_call(self, symbol: str, direction: str, day_prefix: str) -> bool:
+        rows = self.store.list_setups(
+            """
+            SELECT *
+            FROM tracked_setups
+            WHERE symbol = ?
+              AND direction = ?
+              AND source_mode = 'scanner_suggested'
+              AND suggested_at LIKE ?
+            LIMIT 1
+            """,
+            (symbol.upper(), direction, f"{day_prefix}%"),
+        )
+        return bool(rows)
 
     def sync_scan_payload(
         self,
@@ -199,8 +312,11 @@ class SetupTrackerService:
                         "last_seen_at": self._now().isoformat(),
                         "current_price": signal.get("current_price"),
                         "target_price": signal.get("target_price"),
+                        "target_1": signal.get("target_1") or signal.get("target_price"),
+                        "target_2": signal.get("target_2") or signal.get("extended_target_price"),
                         "extended_target_price": signal.get("extended_target_price"),
                         "stop_loss": signal.get("stop_loss"),
+                        "trailing_stop": signal.get("trailing_stop") or signal.get("stop_loss") or signal.get("invalidation"),
                         "invalidation": signal.get("invalidation"),
                         "timeframe_label": signal.get("timeframe_label"),
                         "timeframe_days": signal.get("timeframe_days"),
@@ -220,6 +336,8 @@ class SetupTrackerService:
                         "risk_factors": signal.get("risk_factors", []),
                         "tags": signal.get("tags", []),
                         "status": status,
+                        "hold_or_exit": signal.get("hold_or_exit") or existing.get("hold_or_exit"),
+                        "reason_for_exit_decision": signal.get("reason_for_exit_decision") or existing.get("reason_for_exit_decision"),
                         "last_update_label": label,
                         "last_update_note": note,
                     },
@@ -234,7 +352,29 @@ class SetupTrackerService:
             self.store.record_update(created["id"], record["detected_at"], "Fresh setup", record["last_update_note"], {"bucket": bucket})
             promoted += 1
 
-        return {"promoted": promoted, "updated": updated}
+        auto_created = 0
+        today = self._now().date().isoformat()
+        for bucket, signal in self._collect_auto_calls(payload):
+            symbol = signal["symbol"]
+            if self._has_daily_scanner_call(symbol, signal["direction"], today):
+                continue
+            company_name = profiles.get(symbol, {}).get("company_name") or meta.get(symbol, {}).get("short_name") or symbol
+            sector = profiles.get(symbol, {}).get("sector")
+            record = self._base_record(signal, bucket, company_name, sector, "scanner_suggested")
+            record["tracking_label"] = "Scanner Suggested Call"
+            record["status"] = "active"
+            record["reason_summary"] = signal.get("signal_summary") or self._setup_note(signal)
+            created = self.store.insert_setup(record)
+            self.store.record_update(
+                created["id"],
+                record["detected_at"],
+                "Scanner Suggested Call",
+                "Automatically selected as one of today's top 10 scanner calls.",
+                {"bucket": bucket, "ranked_daily_top_10": True},
+            )
+            auto_created += 1
+
+        return {"promoted": promoted, "updated": updated, "auto_created": auto_created}
 
     def create_manual_watch(
         self,
@@ -283,14 +423,17 @@ class SetupTrackerService:
             return setup["status"], "Still active", setup.get("result_pct") or 0.0, 0.0, 0.0
 
         start = self._parse_dt(setup["detected_at"]).replace(tzinfo=None)
-        window = frame.loc[frame.index >= start].copy()
+        start_date = start.date()
+        window = frame.loc[pd.Series(frame.index.date, index=frame.index) >= start_date].copy()
         if window.empty:
-            window = frame.tail(max(2, int(setup.get("timeframe_days") or 3)))
+            latest_close = float(frame["Close"].iloc[-1])
+            result_pct = self._directional_return(setup["direction"], float(setup.get("entry_price") or 0), latest_close)
+            return setup["status"], "Still active", result_pct, setup.get("max_favorable_move") or 0.0, setup.get("max_adverse_move") or 0.0
         entry = float(setup.get("entry_price") or 0)
         direction = setup["direction"]
         target = float(setup.get("target_price") or entry)
         stop = float(setup.get("stop_loss") or setup.get("invalidation") or entry)
-        bars = window.head(max(1, int(setup.get("timeframe_days") or 3)))
+        bars = window.copy()
 
         if direction == "bullish":
             favorable = (((bars["High"] / entry) - 1) * 100).max()
@@ -317,7 +460,8 @@ class SetupTrackerService:
                 if target and low <= target:
                     return "passed", "Target hit", ((entry / target) - 1) * 100, favorable, adverse
 
-        if len(window) >= max(1, int(setup.get("timeframe_days") or 3)):
+        expires_at = self._parse_dt(setup.get("expires_at"))
+        if self._now() >= expires_at:
             status = "expired"
             label = "No follow-through yet"
         elif status == "watch_only" and favorable > max(0.5, abs(setup.get("expected_move_pct") or 0) * 0.4):
@@ -349,6 +493,16 @@ class SetupTrackerService:
         for setup in open_setups:
             frame = frames.get(setup["symbol"], pd.DataFrame())
             status, label, result_pct, favorable, adverse = self._evaluate_row(setup, frame)
+            current_price = float(frame["Close"].iloc[-1]) if not frame.empty else setup.get("current_price")
+            is_expired = status == "expired"
+            lifecycle = self._build_lifecycle(setup, float(current_price or 0), expired=is_expired)
+            hold_or_exit = lifecycle["hold_or_exit"]
+            scanner_call_status = lifecycle["scanner_call_status"]
+            lifecycle_note = lifecycle["reason_for_exit_decision"]
+            entry = float(setup.get("entry_price") or 0)
+            target_1 = float(setup.get("target_1") or setup.get("target_price") or 0)
+            current_pnl = lifecycle["current_pnl_pct"]
+            target_progress = lifecycle["target_progress_pct"]
             note = {
                 "Target hit": "Price reached the primary target before invalidation within the tracked timeframe.",
                 "Invalidated": "Price broke the invalidation level before the target could complete.",
@@ -356,17 +510,25 @@ class SetupTrackerService:
                 "Setup improved": "Price is moving in the expected direction, but the idea is still open.",
                 "Still active": "Setup remains active while price continues respecting the invalidation level.",
             }.get(label, "Tracked idea evaluated against the latest available price history.")
+            now_iso = self._now().isoformat()
+            timestamp_updates = self._timestamp_updates(setup, lifecycle, now_iso)
             updated = self.store.update_setup(
                 setup["id"],
                 {
                     "status": status,
-                    "current_price": float(frame["Close"].iloc[-1]) if not frame.empty else setup.get("current_price"),
+                    "current_price": current_price,
                     "result_pct": round(result_pct, 2),
+                    "current_pnl_pct": round(current_pnl, 2),
+                    "target_progress_pct": round(target_progress, 2),
+                    "scanner_call_status": scanner_call_status if setup.get("source_mode") == "scanner_suggested" else setup.get("scanner_call_status"),
+                    "hold_or_exit": hold_or_exit,
+                    "reason_for_exit_decision": lifecycle_note,
                     "max_favorable_move": round(float(favorable or 0.0), 2),
                     "max_adverse_move": round(float(adverse or 0.0), 2),
-                    "last_evaluated_at": self._now().isoformat(),
+                    "last_evaluated_at": now_iso,
                     "last_update_label": label,
                     "last_update_note": note,
+                    **timestamp_updates,
                 },
             )
             if updated and (label != setup.get("last_update_label") or status != setup.get("status")):
@@ -375,8 +537,59 @@ class SetupTrackerService:
 
         return {"evaluated": evaluated}
 
+    def normalize_lifecycle_rows(self) -> int:
+        rows = self.store.list_setups(
+            """
+            SELECT *
+            FROM tracked_setups
+            WHERE archived = 0
+              AND source_mode = 'scanner_suggested'
+              AND status IN ('passed', 'failed', 'expired')
+            """
+        )
+        updated_count = 0
+        for setup in rows:
+            current_price = float(setup.get("current_price") or setup.get("entry_price") or 0)
+            was_wrongly_expired = setup.get("status") == "expired" and self._now() < self._parse_dt(setup.get("expires_at"))
+            lifecycle = self._build_lifecycle(setup, current_price, expired=setup.get("status") == "expired" and not was_wrongly_expired)
+            next_status = "active" if was_wrongly_expired else setup.get("status")
+            if next_status == "passed" and lifecycle["scanner_call_status"] == "ACTIVE":
+                lifecycle["scanner_call_status"] = "TARGET_1_HIT"
+                lifecycle["hold_or_exit"] = "PARTIAL_BOOK"
+                lifecycle["reason_for_exit_decision"] = "Target hit, book partial profit."
+                lifecycle["exit_reason"] = "target_1_hit"
+            if next_status == "failed":
+                lifecycle["scanner_call_status"] = "STOP_LOSS_HIT"
+                lifecycle["hold_or_exit"] = "EXIT"
+                lifecycle["reason_for_exit_decision"] = "Stop-loss hit."
+                lifecycle["exit_reason"] = "stop_loss_hit"
+            now_iso = self._now().isoformat()
+            values = {
+                "status": next_status,
+                "scanner_call_status": lifecycle["scanner_call_status"],
+                "hold_or_exit": lifecycle["hold_or_exit"],
+                "reason_for_exit_decision": lifecycle["reason_for_exit_decision"],
+                "current_pnl_pct": lifecycle["current_pnl_pct"],
+                "target_progress_pct": lifecycle["target_progress_pct"],
+                **self._timestamp_updates(setup, lifecycle, now_iso),
+            }
+            if was_wrongly_expired:
+                values["expired_at"] = None
+                values["exit_reason"] = lifecycle.get("exit_reason")
+                values["last_update_label"] = "Still active"
+                values["last_update_note"] = "Call restored because timeframe has not expired yet."
+            self.store.update_setup(setup["id"], values)
+            updated_count += 1
+        return updated_count
+
     def get_dashboard(self) -> dict[str, Any]:
-        self.evaluate_open_setups()
+        if time.time() - self._last_dashboard_eval_at > max(60, self.settings.scan_cache_ttl_sec):
+            try:
+                self._last_dashboard_eval_at = time.time()
+                self.evaluate_open_setups()
+                self.normalize_lifecycle_rows()
+            except Exception:
+                logger.exception("tracker dashboard evaluation failed")
         review_since = (self._now() - timedelta(days=1)).isoformat()
         watchlists = {
             "fresh_setups": self.store.list_setups(
@@ -444,6 +657,64 @@ class SetupTrackerService:
                 LIMIT 8
                 """
             ),
+            "todays_top_10_scanner_calls": self.store.list_setups(
+                """
+                SELECT *
+                FROM tracked_setups
+                WHERE archived = 0
+                  AND source_mode = 'scanner_suggested'
+                  AND suggested_at >= ?
+                ORDER BY confidence DESC, move_quality DESC, suggested_at DESC
+                LIMIT 10
+                """,
+                (review_since,),
+            ),
+            "active_scanner_calls": self.store.list_setups(
+                """
+                SELECT *
+                FROM tracked_setups
+                WHERE archived = 0
+                  AND ignored = 0
+                  AND source_mode = 'scanner_suggested'
+                  AND scanner_call_status IN ('ACTIVE', 'TARGET_1_HIT', 'PARTIAL_BOOK', 'EXIT_SUGGESTED')
+                  AND status != 'expired'
+                ORDER BY suggested_at DESC
+                LIMIT 12
+                """
+            ),
+            "past_target_hit": self.store.list_setups(
+                """
+                SELECT *
+                FROM tracked_setups
+                WHERE archived = 0
+                  AND source_mode = 'scanner_suggested'
+                  AND scanner_call_status IN ('TARGET_1_HIT', 'TARGET_2_HIT')
+                ORDER BY suggested_at DESC
+                LIMIT 12
+                """
+            ),
+            "past_stop_loss_failed": self.store.list_setups(
+                """
+                SELECT *
+                FROM tracked_setups
+                WHERE archived = 0
+                  AND source_mode = 'scanner_suggested'
+                  AND scanner_call_status = 'STOP_LOSS_HIT'
+                ORDER BY suggested_at DESC
+                LIMIT 12
+                """
+            ),
+            "expired_no_followthrough": self.store.list_setups(
+                """
+                SELECT *
+                FROM tracked_setups
+                WHERE archived = 0
+                  AND source_mode = 'scanner_suggested'
+                  AND scanner_call_status = 'EXPIRED'
+                ORDER BY suggested_at DESC
+                LIMIT 12
+                """
+            ),
         }
         all_rows = self.store.list_setups(
             "SELECT * FROM tracked_setups WHERE archived = 0 ORDER BY detected_at DESC"
@@ -464,6 +735,8 @@ class SetupTrackerService:
                 "passed_calls": len(passed),
                 "failed_calls": len(failed),
                 "expired_calls": len(expired),
+                "target_hit_count": len(passed),
+                "stop_loss_count": len(failed),
                 "win_rate": round((len(passed) / win_base) * 100, 1) if win_base else 0.0,
                 "average_return": round(average_return, 2),
                 "best_call": max(resolved, key=lambda item: item.get("result_pct") or -9999, default=None),
@@ -480,6 +753,7 @@ class SetupTrackerService:
 
     def get_symbol_history(self, symbol: str) -> dict[str, Any]:
         self.evaluate_open_setups()
+        self.normalize_lifecycle_rows()
         rows = self.store.list_setups(
             """
             SELECT *

@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 class MarketDataService:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.provider_name = "yfinance"
+        self.available_providers = ("yfinance", "nse_bse_future", "alpha_vantage_future", "twelve_data_future", "polygon_future", "broker_api_future")
         self.history_cache: TTLCache[pd.DataFrame] = TTLCache(settings.history_cache_ttl_sec)
         self.quote_cache: TTLCache[Dict] = TTLCache(max(20, settings.detail_cache_ttl_sec // 2))
         self.symbol_map = {
@@ -201,6 +203,7 @@ class MarketDataService:
         snapshot = {
             "symbol": clean,
             "resolved_symbol": resolved,
+            "data_provider": self.provider_name,
             "price": round(price, 4),
             "previous_close": round(previous_close, 4),
             "change": round(change, 4),

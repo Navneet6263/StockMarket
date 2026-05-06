@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.dependencies import get_market_hub
 from app.routers import (
     evaluation_router,
     health_router,
@@ -44,6 +45,12 @@ fastapi_app.include_router(stocks_router)
 fastapi_app.include_router(evaluation_router)
 fastapi_app.include_router(tracker_router)
 fastapi_app.include_router(legacy_router)
+
+
+@fastapi_app.on_event("startup")
+async def start_market_background_scanner():
+    get_market_hub().start_background_scanner()
+
 
 app = CORSMiddleware(
     fastapi_app,

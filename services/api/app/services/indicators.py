@@ -52,6 +52,7 @@ class IndicatorEngine:
         volume_avg_20 = volume.rolling(20).mean()
         features["volume_avg_20"] = volume_avg_20
         features["relative_volume"] = volume / volume_avg_20
+        features["volume_dryup"] = (volume / volume_avg_20.replace(0, np.nan) <= 0.8).astype(int)
 
         typical_price = (high + low + close) / 3
         rolling_vwap = (typical_price * volume).rolling(20).sum() / volume.rolling(20).sum()
@@ -63,12 +64,14 @@ class IndicatorEngine:
         features["atr"] = atr
         features["atr_pct"] = (atr / close.replace(0, np.nan)) * 100
         features["atr_expansion"] = atr / atr.rolling(50).mean()
+        features["atr_contraction"] = (features["atr_expansion"] <= 0.9).astype(int)
 
         features["return_5d"] = close.pct_change(5) * 100
         features["return_20d"] = close.pct_change(20) * 100
         features["return_60d"] = close.pct_change(60) * 100
 
         features["rsi"] = self._rsi(close, 14)
+        features["rsi_delta_5d"] = features["rsi"] - features["rsi"].shift(5)
         ema_12 = close.ewm(span=12, adjust=False).mean()
         ema_26 = close.ewm(span=26, adjust=False).mean()
         macd_line = ema_12 - ema_26
@@ -76,6 +79,18 @@ class IndicatorEngine:
         features["macd_line"] = macd_line
         features["macd_signal"] = macd_signal
         features["macd_hist"] = macd_line - macd_signal
+        features["macd_hist_delta_3d"] = features["macd_hist"] - features["macd_hist"].shift(3)
+
+        sma_20 = close.rolling(20).mean()
+        std_20 = close.rolling(20).std()
+        bb_upper = sma_20 + (2 * std_20)
+        bb_lower = sma_20 - (2 * std_20)
+        bb_width_pct = ((bb_upper - bb_lower) / close.replace(0, np.nan)) * 100
+        features["bb_upper"] = bb_upper
+        features["bb_lower"] = bb_lower
+        features["bb_width_pct"] = bb_width_pct
+        features["bb_width_ratio"] = bb_width_pct / bb_width_pct.rolling(100, min_periods=30).mean()
+        features["bb_squeeze"] = (features["bb_width_ratio"] <= 0.85).astype(int)
 
         resistance_20 = high.rolling(20).max().shift(1)
         support_20 = low.rolling(20).min().shift(1)
@@ -85,6 +100,10 @@ class IndicatorEngine:
         features["breakdown_20"] = (close < support_20).astype(int)
         features["distance_to_resistance_pct"] = ((resistance_20 - close) / close.replace(0, np.nan)) * 100
         features["distance_to_support_pct"] = ((close - support_20) / close.replace(0, np.nan)) * 100
+        base_high_10 = high.rolling(10).max()
+        base_low_10 = low.rolling(10).min()
+        features["tight_consolidation_pct"] = ((base_high_10 - base_low_10) / close.replace(0, np.nan)) * 100
+        features["higher_lows"] = (low.rolling(5).min() > low.rolling(5).min().shift(5)).astype(int)
 
         candle_range = (high - low).replace(0, np.nan)
         features["close_location"] = ((close - low) / candle_range).clip(0, 1)
@@ -106,10 +125,12 @@ class IndicatorEngine:
             features["benchmark_return_20d"] = benchmark_return_20d
             features["benchmark_change_pct"] = benchmark_change_pct
             features["relative_strength_20d"] = features["return_20d"] - benchmark_return_20d
+            features["relative_strength_delta_5d"] = features["relative_strength_20d"] - features["relative_strength_20d"].shift(5)
         else:
             features["benchmark_return_20d"] = np.nan
             features["benchmark_change_pct"] = np.nan
             features["relative_strength_20d"] = np.nan
+            features["relative_strength_delta_5d"] = np.nan
 
         delivery_candidates = ["DELIV_PER", "DELIVERY_PCT", "DELIVERY_PERCENT"]
         delivery_series = None
@@ -167,6 +188,35 @@ class IndicatorEngine:
             "intraday_above_vwap": bool(close.iloc[-1] > cumulative_vwap.iloc[-1]),
             "intraday_breakout": bool(close.iloc[-1] > prior_high) if pd.notna(prior_high) else False,
         }
+
+    def build_pre_breakout_training_labels(
+        self,
+        frame: pd.DataFrame,
+        *,
+        horizon: int = 5,
+        move_pct: float = 3.0,
+    ) -> pd.DataFrame:
+        """Create supervised labels from future outcomes while keeping indicators point-in-time."""
+        if frame.empty:
+            return pd.DataFrame()
+
+        close = frame["Close"].astype(float)
+        future_high_source = frame["High"].astype(float).shift(-1)
+        future_low_source = frame["Low"].astype(float).shift(-1)
+        future_high = future_high_source.iloc[::-1].rolling(horizon, min_periods=1).max().iloc[::-1]
+        future_low = future_low_source.iloc[::-1].rolling(horizon, min_periods=1).min().iloc[::-1]
+        future_max_return_pct = ((future_high / close.replace(0, np.nan)) - 1) * 100
+        future_max_drawdown_pct = ((future_low / close.replace(0, np.nan)) - 1) * 100
+        return pd.DataFrame(
+            {
+                "label_horizon_candles": horizon,
+                "label_move_threshold_pct": move_pct,
+                "future_max_return_pct": future_max_return_pct,
+                "future_max_drawdown_pct": future_max_drawdown_pct,
+                "pre_breakout_success_label": (future_max_return_pct >= move_pct).astype(int),
+            },
+            index=frame.index,
+        ).replace([np.inf, -np.inf], np.nan)
 
     def build_snapshot(
         self,
