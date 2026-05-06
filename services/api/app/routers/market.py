@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import get_market_hub
+from app.services.hot_picks import build_hot_picks_response
 from app.services.market_hub import MarketHubService
 
 
@@ -30,6 +31,29 @@ async def market_overview(
     hub: MarketHubService = Depends(get_market_hub),
 ):
     return await scan_market_with_timeout(hub, force_refresh)
+
+
+@router.get("/market/hot-picks")
+async def market_hot_picks(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    try:
+        tracker_dashboard = await asyncio.to_thread(hub.get_tracker_dashboard)
+    except Exception:
+        logger.exception("tracker dashboard failed while building hot picks")
+        tracker_dashboard = None
+    base = build_hot_picks_response(payload, tracker_dashboard)
+    return {
+        **base,
+        "marketContext": payload.get("marketContext", {}),
+        "hotPicks": payload.get("hotPicks", []),
+        "baseFormationRadar": payload.get("baseFormationRadar", []),
+        "momentumRadar": payload.get("momentumRadar", []),
+        "blockedBuys": payload.get("blockedBuys", []),
+        "smartDebug": payload.get("smartDebug", {}),
+    }
 
 
 @router.get("/market/opportunities")
@@ -88,3 +112,138 @@ async def market_context(
     hub: MarketHubService = Depends(get_market_hub),
 ):
     return await asyncio.to_thread(hub.get_market_context, symbol, limit)
+
+
+@router.get("/market/candidates")
+async def market_candidates(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    """Medium-conviction setups forming — Watchlist / Candidates bucket."""
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "candidates": payload.get("candidates", []),
+        "count": len(payload.get("candidates", [])),
+        "summary": {
+            "candidates_count": payload.get("summary", {}).get("candidates_count", 0),
+        },
+    }
+
+
+@router.get("/market/fast-movers")
+async def market_fast_movers(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    """Fast movers and missed moves — big % change or volume shock."""
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "fast_movers": payload.get("fast_movers_missed_moves", []),
+        "count": len(payload.get("fast_movers_missed_moves", [])),
+        "summary": {
+            "fast_movers_count": payload.get("summary", {}).get("fast_movers_count", 0),
+        },
+    }
+
+
+@router.get("/market/pre-breakout")
+async def market_pre_breakout(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    """Pre-breakout watch setups. These are alert-only, not buy calls."""
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "pre_breakout_setups": payload.get("pre_breakout_setups", []),
+        "pattern_forming_setups": payload.get("pattern_forming_setups", payload.get("pre_breakout_setups", [])),
+        "alert_above_setups": payload.get("alert_above_setups", []),
+        "count": len(payload.get("pre_breakout_setups", [])),
+        "summary": {
+            "pre_breakout_count": payload.get("summary", {}).get("pre_breakout_count", 0),
+            "alert_above_count": payload.get("summary", {}).get("alert_above_count", 0),
+        },
+    }
+
+
+@router.get("/market/missed-moves")
+async def market_missed_moves(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "missed_moves_analysis": payload.get("missed_moves_analysis", []),
+        "count": len(payload.get("missed_moves_analysis", [])),
+        "summary": {
+            "missed_moves_count": payload.get("summary", {}).get("missed_moves_count", 0),
+        },
+    }
+
+
+@router.get("/market/avoid-late-entry")
+async def market_avoid_late_entry(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "avoid_late_entry": payload.get("avoid_late_entry", []),
+        "count": len(payload.get("avoid_late_entry", [])),
+        "summary": {
+            "avoid_late_entry_count": payload.get("summary", {}).get("avoid_late_entry_count", 0),
+        },
+    }
+
+
+@router.get("/market/re-entry")
+async def market_re_entry(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "momentum_continuation": payload.get("momentum_continuation", []),
+        "re_entry_setups": payload.get("re_entry_setups", payload.get("momentum_continuation", [])),
+        "count": len(payload.get("momentum_continuation", [])),
+        "summary": {
+            "momentum_continuation_count": payload.get("summary", {}).get("momentum_continuation_count", 0),
+            "re_entry_count": payload.get("summary", {}).get("re_entry_count", 0),
+        },
+    }
+
+
+@router.get("/market/avoid")
+async def market_avoid(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    """Avoid / Risky bucket — weak setups, high risk, no-trade signals."""
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "avoid_risky": payload.get("avoid_risky", []),
+        "count": len(payload.get("avoid_risky", [])),
+        "summary": {
+            "avoid_count": payload.get("summary", {}).get("avoid_count", 0),
+        },
+    }
+
+
+@router.get("/market/scan-stats")
+async def market_scan_stats(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    """Full scan statistics — universe size, bucket counts, skipped symbols."""
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "summary": payload.get("summary", {}),
+        "market_discovery": payload.get("market_discovery", {}),
+    }

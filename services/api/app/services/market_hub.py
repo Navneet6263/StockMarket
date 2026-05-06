@@ -20,6 +20,7 @@ from app.services.data_provider import MarketDataService
 from app.services.indicators import IndicatorEngine
 from app.services.narrative import NarrativeService
 from app.services.scoring import ScoringEngine
+from app.services.smart_layers import build_smart_scan_payload
 from app.services.setup_tracker import SetupTrackerService
 
 
@@ -41,8 +42,29 @@ class MarketHubService:
         self.scan_cache: TTLCache[Dict] = TTLCache(settings.scan_cache_ttl_sec)
         self.detail_cache: TTLCache[Dict] = TTLCache(settings.detail_cache_ttl_sec)
         self.scan_refresh_lock = threading.Lock()
+        self.background_scan_started = False
+        self.background_scan_stop = threading.Event()
         self.last_successful_scan: Dict | None = None
         self.last_successful_scan_at = 0.0
+
+    def start_background_scanner(self) -> bool:
+        if self.background_scan_started:
+            return False
+        self.background_scan_started = True
+
+        def loop():
+            logger.info("market pattern background scanner started interval_sec=%s", self.settings.scan_interval_sec)
+            while not self.background_scan_stop.is_set():
+                try:
+                    if not self._last_success_is_usable():
+                        self._start_background_refresh(force_refresh=True)
+                except Exception:
+                    logger.exception("market pattern background scanner tick failed")
+                self.background_scan_stop.wait(max(30, self.settings.scan_interval_sec))
+
+        thread = threading.Thread(target=loop, name="market-pattern-scanner", daemon=True)
+        thread.start()
+        return True
 
     def _scan_symbols(self, discovery: Dict) -> list[str]:
         custom = list(self.settings.custom_universe)
@@ -77,24 +99,177 @@ class MarketHubService:
             "macro_context": self.market_intelligence.get_macro_snapshot(),
             "global_context": self.market_intelligence.get_global_scenario(),
             "top_opportunities": [],
+            "top_validated_calls": [],
             "unusual_volume": [],
             "breakout_candidates": [],
             "bearish_risks": [],
             "top_movers": [],
+            "fast_movers_missed_moves": [],
+            "pre_breakout_setups": [],
+            "pattern_forming_setups": [],
+            "alert_above_setups": [],
+            "retest_entry": [],
+            "momentum_continuation": [],
+            "re_entry_setups": [],
+            "missed_moves_analysis": [],
+            "avoid_late_entry": [],
+            "candidates": [],
+            "avoid_risky": [],
             "summary": {
                 "high_priority": 0,
                 "watchlist": 0,
                 "avoid": 0,
                 "opportunities_count": 0,
+                "top_validated_count": 0,
                 "breakout_count": 0,
                 "bearish_risk_count": 0,
                 "unusual_volume_count": 0,
                 "market_mood": "waiting_for_scan",
                 "scanner_leader": None,
+                "total_scanned_universe": 0,
+                "fast_movers_count": 0,
+                "pre_breakout_count": 0,
+                "pattern_forming_count": 0,
+                "alert_above_count": 0,
+                "retest_entry_count": 0,
+                "momentum_continuation_count": 0,
+                "re_entry_count": 0,
+                "missed_moves_count": 0,
+                "avoid_late_entry_count": 0,
+                "candidates_count": 0,
+                "avoid_count": 0,
             },
             "warning": warning,
             "cache_status": "empty_fallback",
         }
+
+    def _signal_from_tracked_setup(self, row: Dict) -> Dict:
+        current_price = row.get("current_price") or row.get("entry_price") or 0
+        target_price = row.get("target_price") or row.get("target_1") or current_price
+        return {
+            "symbol": row.get("symbol"),
+            "company_name": row.get("company_name") or row.get("symbol"),
+            "direction": row.get("direction") or "neutral",
+            "setup_label": row.get("setup_label") or row.get("tracking_label") or "Tracked scanner call",
+            "alert_level": "watchlist",
+            "confidence": row.get("confidence") or 0,
+            "model_confidence": row.get("model_confidence") or row.get("confidence") or 0,
+            "evidence_confidence": row.get("evidence_confidence"),
+            "historical_evidence_status": row.get("evidence_status") or "not_loaded",
+            "confidence_note": "Loaded from persisted scanner calls while the live scan refreshes.",
+            "probability": round((row.get("confidence") or 0) / 100, 4),
+            "move_quality": row.get("move_quality") or 0,
+            "expected_move_pct": row.get("expected_move_pct") or 0,
+            "risk_level": row.get("risk_level") or "medium",
+            "current_price": current_price,
+            "target_price": target_price,
+            "target_1": row.get("target_1") or target_price,
+            "target_2": row.get("target_2") or row.get("extended_target_price"),
+            "extended_target_price": row.get("extended_target_price"),
+            "extended_target": row.get("target_2") or row.get("extended_target_price"),
+            "stop_loss": row.get("stop_loss"),
+            "trailing_stop": row.get("trailing_stop"),
+            "exit_signal": row.get("hold_or_exit") == "EXIT",
+            "hold_or_exit": row.get("hold_or_exit") or "WAIT",
+            "reason_for_exit_decision": row.get("reason_for_exit_decision") or row.get("last_update_note") or "",
+            "risk_reward": row.get("risk_reward") or 0,
+            "timeframe_label": row.get("timeframe_label") or "tracked",
+            "timeframe_days": row.get("timeframe_days") or 1,
+            "change_pct": row.get("change_pct") or 0,
+            "volume": 0,
+            "relative_volume": row.get("relative_volume") or 1,
+            "gap_pct": 0,
+            "intraday_volume_ratio": row.get("intraday_volume_ratio") or 1,
+            "benchmark_relative_strength": 0,
+            "rsi": 50,
+            "atr_pct": 0,
+            "support": None,
+            "resistance": None,
+            "rolling_vwap": None,
+            "invalidation": row.get("invalidation"),
+            "reasons": row.get("reasons") or [],
+            "weaknesses": [],
+            "risk_factors": row.get("risk_factors") or [],
+            "tags": row.get("tags") or [],
+            "signal_summary": row.get("reason_summary") or row.get("last_update_note") or "Persisted scanner call.",
+            "score_breakdown": {},
+            "discovered_by": [row.get("scanner_bucket") or "scanner_suggested"],
+        }
+
+    def _tracked_fallback_payload(self, warning: str) -> Dict:
+        try:
+            rows = self.tracker.store.list_setups(
+                """
+                SELECT *
+                FROM tracked_setups
+                WHERE archived = 0
+                  AND ignored = 0
+                  AND source_mode = 'scanner_suggested'
+                  AND scanner_call_status IN ('ACTIVE', 'TARGET_1_HIT', 'PARTIAL_BOOK', 'EXIT_SUGGESTED')
+                  AND status != 'expired'
+                ORDER BY suggested_at DESC, confidence DESC
+                LIMIT 20
+                """
+            )
+        except Exception:
+            logger.exception("failed to build tracked fallback payload")
+            rows = []
+
+        if not rows:
+            return self._empty_scan_payload(warning)
+
+        signals = [self._signal_from_tracked_setup(row) for row in rows]
+        bullish = [item for item in signals if item["direction"] == "bullish"]
+        bearish = [item for item in signals if item["direction"] == "bearish"]
+        unusual = [item for item in signals if item.get("relative_volume", 1) >= 1.6]
+        payload = self._empty_scan_payload(warning)
+        payload.update(
+            {
+                "universe_size": len(signals),
+                "valid_signal_count": len(signals),
+                "market_breadth": {
+                    **payload["market_breadth"],
+                    "bullish_setups": len(bullish),
+                    "bearish_setups": len(bearish),
+                    "bullish_ratio": round(len(bullish) / max(len(signals), 1), 3),
+                },
+                "top_opportunities": bullish[:8],
+                "top_validated_calls": bullish[:8],
+                "bearish_risks": bearish[:8],
+                "breakout_candidates": signals[:8],
+                "unusual_volume": unusual[:8],
+                "pre_breakout_setups": [],
+                "pattern_forming_setups": [],
+                "alert_above_setups": [],
+                "retest_entry": [],
+                "momentum_continuation": [],
+                "re_entry_setups": [],
+                "missed_moves_analysis": [],
+                "avoid_late_entry": [],
+                "summary": {
+                    **payload["summary"],
+                    "watchlist": len(signals),
+                    "opportunities_count": len(bullish[:8]),
+                    "top_validated_count": len(bullish[:8]),
+                    "bearish_risk_count": len(bearish[:8]),
+                    "breakout_count": len(signals[:8]),
+                    "unusual_volume_count": len(unusual[:8]),
+                    "scanner_leader": signals[0]["symbol"] if signals else None,
+                    "total_scanned_universe": len(signals),
+                    "valid_signal_count": len(signals),
+                    "pre_breakout_count": 0,
+                    "pattern_forming_count": 0,
+                    "alert_above_count": 0,
+                    "retest_entry_count": 0,
+                    "momentum_continuation_count": 0,
+                    "re_entry_count": 0,
+                    "missed_moves_count": 0,
+                    "avoid_late_entry_count": 0,
+                },
+                "cache_status": "tracked_fallback",
+            }
+        )
+        return payload
 
     def _last_success_is_usable(self) -> bool:
         return (
@@ -163,11 +338,42 @@ class MarketHubService:
         snapshot = self.indicators.build_snapshot(symbol, live_frame, feature_frame, intraday_frame)
         backtest = self.backtest.evaluate(symbol, frame, benchmark_frame) if with_backtest else {}
         signal = self.scoring.evaluate(symbol, snapshot, backtest if with_backtest else None)
+        if with_backtest and self.settings.news_api_key:
+            signal["catalyst_summary"] = self._catalyst_summary(symbol)
         if quote:
             signal["current_price"] = round(safe_float(quote.get("price"), signal["current_price"]), 2)
             signal["change_pct"] = round(safe_float(quote.get("change_percent"), signal["change_pct"]), 2)
             signal["volume"] = safe_int(quote.get("volume"), signal["volume"])
         return signal | {"backtest": backtest}
+
+    def _catalyst_summary(self, symbol: str) -> Dict:
+        try:
+            news = self.market_intelligence.get_news_feed(symbol, limit=4)
+        except Exception:
+            logger.exception("catalyst news fetch failed symbol=%s", symbol)
+            return {"sentiment": "neutral", "summary": "Catalyst scan unavailable.", "catalysts": []}
+
+        positive_words = ("order", "win", "growth", "profit", "upgrade", "approval", "expansion", "deal", "launch")
+        negative_words = ("probe", "loss", "downgrade", "penalty", "fraud", "weak", "fall", "regulation", "ban")
+        catalyst_words = ("earnings", "order", "management", "sector", "regulation", "bulk", "deal", "stake", "result")
+        score = 0
+        catalysts: list[str] = []
+        titles: list[str] = []
+        for item in news.get("items", [])[:4]:
+            title = str(item.get("title") or "")
+            lower = title.lower()
+            titles.append(title)
+            score += sum(1 for word in positive_words if word in lower)
+            score -= sum(1 for word in negative_words if word in lower)
+            catalysts.extend(word for word in catalyst_words if word in lower)
+
+        sentiment = "positive" if score > 0 else "negative" if score < 0 else "neutral"
+        return {
+            "sentiment": sentiment,
+            "summary": titles[0] if titles else "No fresh catalyst headline found.",
+            "catalysts": list(dict.fromkeys(catalysts))[:5],
+            "headlines": titles[:3],
+        }
 
     def _build_market_breadth(self, results: list[Dict], benchmark_frame: pd.DataFrame) -> Dict:
         advancing = len([item for item in results if item["change_pct"] > 0])
@@ -238,6 +444,106 @@ class MarketHubService:
             return "defensive"
         return "mixed"
 
+    def _missed_movers(self, discovery: Dict, results: list[Dict], surfaced: set[str]) -> list[Dict]:
+        result_symbols = {item.get("symbol") for item in results}
+        result_by_symbol = {item.get("symbol"): item for item in results}
+        prior_pre_breakout = {
+            item.get("symbol")
+            for item in (self.last_successful_scan or {}).get("pre_breakout_setups", [])
+            if item.get("symbol")
+        }
+        movers: list[Dict] = []
+        for meta in discovery.get("symbol_meta", {}).values():
+            symbol = meta.get("symbol")
+            change_pct = meta.get("change_pct") or 0
+            volume = meta.get("volume")
+            try:
+                change = float(change_pct or 0)
+            except (TypeError, ValueError):
+                change = 0.0
+            if abs(change) < 5:
+                continue
+            if symbol in surfaced:
+                continue
+            tags = meta.get("tags", [])
+            result = result_by_symbol.get(symbol, {})
+            was_pre_breakout = symbol in prior_pre_breakout
+            if was_pre_breakout:
+                missed_reason = "was_in_prior_pre_breakout_scan"
+            elif symbol not in result_symbols:
+                missed_reason = "not_in_scanned_history_or_failed_data"
+            elif result.get("pre_breakout_score", 0) and result.get("pre_breakout_score", 0) < 5:
+                missed_reason = "setup_score_too_low_before_move"
+            elif "volume_shockers" not in tags and "most_active" not in tags:
+                missed_reason = "volume_came_later_or_setup_was_weak_earlier"
+            else:
+                missed_reason = "late_momentum_without_full_entry_confirmation"
+
+            abs_change = abs(change)
+            is_profit_booking_risk = abs_change >= 8.0
+            is_chase_risk = abs_change >= 5.0
+
+            if is_profit_booking_risk:
+                entry_label = "PROFIT_BOOKING_RISK"
+                display_action = "WAIT_FOR_PULLBACK"
+                chase_warnings = [
+                    f"Stock already moved {abs_change:.1f}% today. "
+                    "High chance of profit booking tomorrow.",
+                    "Do not suggest fresh entry unless new confirmation forms.",
+                ]
+                next_day_risk = [
+                    "High profit booking risk next session.",
+                    "Suggest trailing stop if already holding.",
+                ]
+            elif is_chase_risk:
+                entry_label = "CHASE_RISK"
+                display_action = "WAIT_FOR_PULLBACK"
+                chase_warnings = [
+                    f"Stock moved {abs_change:.1f}% intraday. "
+                    "Avoid late entry unless it holds VWAP/support."
+                ]
+                next_day_risk = []
+            else:
+                entry_label = "EARLY_ENTRY"
+                display_action = "WATCH"
+                chase_warnings = []
+                next_day_risk = []
+
+            ui_guidance = [
+                "⚠️ Attention only — do not chase this move.",
+                "Wait for a pullback to VWAP or support before entry.",
+            ]
+
+            movers.append(
+                {
+                    "symbol": symbol,
+                    "company_name": meta.get("short_name") or symbol,
+                    "price": meta.get("price"),
+                    "change_pct": round(change, 2),
+                    "volume": volume,
+                    "move_bucket": "10%+" if abs_change >= 10 else "8%+" if abs_change >= 8 else "5%+",
+                    "missed_reason": missed_reason,
+                    "was_in_prior_pre_breakout_scan": was_pre_breakout,
+                    "was_pre_breakout_setup_yesterday": was_pre_breakout,
+                    "pre_breakout_score_before_move": result.get("pre_breakout_score"),
+                    "missed_move_analysis": (
+                        "This was already visible in the previous pre-breakout scan."
+                        if was_pre_breakout
+                        else "Missed because the setup was not strong enough, data was unavailable, or volume arrived suddenly."
+                    ),
+                    "tags": tags,
+                    # Chase-risk fields
+                    "entry_label": entry_label,
+                    "display_action": display_action,
+                    "is_chase_risk": is_chase_risk,
+                    "is_profit_booking_risk": is_profit_booking_risk,
+                    "chase_warnings": chase_warnings,
+                    "next_day_risk": next_day_risk,
+                    "ui_guidance": ui_guidance,
+                }
+            )
+        return sorted(movers, key=lambda item: abs(item.get("change_pct") or 0), reverse=True)[:15]
+
     def _shape_scan_payload(self, discovery: Dict, results: list[Dict], benchmark_frame: pd.DataFrame) -> Dict:
         symbol_meta = discovery.get("symbol_meta", {})
         for item in results:
@@ -245,10 +551,37 @@ class MarketHubService:
             if meta:
                 item.setdefault("company_name", meta.get("short_name") or item.get("symbol"))
 
+        def is_confirmed_top_call(item: Dict) -> bool:
+            price = float(item.get("current_price") or 0)
+            stop = float(item.get("trailing_stop") or item.get("stop_loss") or item.get("invalidation") or 0)
+            stop_nearby = bool(price and stop and abs((price - stop) / price) <= 0.085)
+            confirmed = (
+                "breakout" in item.get("tags", [])
+                or "breakdown" in item.get("tags", [])
+                or item.get("setup_stage") == "VALID_BREAKOUT"
+                or item.get("relative_volume", 0) >= 1.6
+                or item.get("intraday_volume_ratio", 0) >= 1.4
+                or (item.get("confidence", 0) >= 70 and item.get("move_quality", 0) >= 55)
+            )
+            return confirmed and stop_nearby
+
+        def is_historically_validated(item: Dict) -> bool:
+            evidence = item.get("historical_evidence") or {}
+            sample_count = int(evidence.get("sample_count") or item.get("historical_context", {}).get("signal_count", 0) or 0)
+            win_rate = float(evidence.get("win_rate") or item.get("historical_context", {}).get("win_rate", 0) or 0)
+            return sample_count >= 30 and win_rate >= 0.60
+
         top_ranked = self._unique_signals(sorted(
             [
                 item for item in results
                 if item["direction"] != "neutral" and item["alert_level"] in {"high_priority", "watchlist", "low_priority"}
+                and item.get("allow_buy_call", True)
+                and not item.get("attention_only", False)
+                and not item.get("overextended_fresh_entry", False)
+                and item.get("setup_stage") not in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
+                and item.get("risk_reward", 0) >= 1.2
+                and is_confirmed_top_call(item)
+                and is_historically_validated(item)
             ],
             key=lambda item: (
                 item["alert_level"] == "high_priority",
@@ -261,10 +594,104 @@ class MarketHubService:
         top_opportunities = top_ranked[:8]
         surfaced = {item["symbol"] for item in top_opportunities}
 
+        retest_entry = self._unique_signals(sorted(
+            [
+                item for item in results
+                if item.get("signal_stage") == "RETEST_ENTRY"
+                or item.get("continuation_type") == "pullback"
+                or "support_bounce" in item.get("pattern_labels", [])
+            ],
+            key=lambda item: (item.get("confidence", 0), item.get("risk_reward", 0), item.get("benchmark_relative_strength", 0)),
+            reverse=True,
+        ))[:12]
+
+        pre_breakout_setups = self._unique_signals(sorted(
+            [
+                item for item in results
+                if item.get("is_pre_breakout")
+                and item.get("attention_only", False)
+                and not item.get("chase_risk", False)
+            ],
+            key=lambda item: (
+                item.get("pre_breakout_confidence", item.get("confidence", 0)),
+                item.get("pre_breakout_score", 0),
+                item.get("benchmark_relative_strength", 0),
+            ),
+            reverse=True,
+        ))[:12]
+
+        alert_above_setups = [
+            item for item in pre_breakout_setups
+            if item.get("pre_breakout_action") == "ALERT_ABOVE_LEVEL"
+            or item.get("recommended_action") == "ALERT_ABOVE_LEVEL"
+        ]
+
+        momentum_continuation = self._unique_signals(sorted(
+            [
+                item for item in results
+                if item.get("is_momentum_continuation")
+                and item.get("attention_only", False)
+                and item.get("allow_buy_call", False) is False
+            ],
+            key=lambda item: (
+                item.get("continuation_action") == "REENTRY_BUY",
+                item.get("continuation_risk_reward", 0),
+                item.get("confidence", 0),
+                item.get("benchmark_relative_strength", 0),
+            ),
+            reverse=True,
+        ))[:12]
+
+        # Candidates bucket — medium conviction, setup forming
+        candidates_bucket = self._unique_signals(sorted(
+            [
+                item for item in results
+                if item["direction"] != "neutral"
+                and item["alert_level"] in {"watchlist", "low_priority"}
+                and item["symbol"] not in surfaced
+                and item["confidence"] >= 55
+                and item.get("allow_buy_call", True)
+                and not item.get("attention_only", False)
+                and not item.get("overextended_fresh_entry", False)
+                and not is_historically_validated(item)
+            ],
+            key=lambda item: (item["move_quality"], item["confidence"]),
+            reverse=True,
+        ))[:15]
+
+        # Avoid / Risky bucket — weak setups, high risk
+        avoid_risky_bucket = self._unique_signals(sorted(
+            [
+                item for item in results
+                if item["alert_level"] == "avoid" or item["risk_level"] == "high"
+            ],
+            key=lambda item: item["confidence"],
+            reverse=True,
+        ))[:10]
+
+        avoid_late_entry = self._unique_signals(sorted(
+            [
+                item for item in results
+                if (
+                    item.get("overextended_fresh_entry")
+                    or item.get("setup_stage") in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
+                    or "avoid_late_entry" in item.get("tags", [])
+                )
+                and not item.get("is_momentum_continuation")
+            ],
+            key=lambda item: (
+                abs(float(item.get("return_20d") or 0)),
+                abs(float(item.get("return_5d") or 0)),
+                abs(float(item.get("change_pct") or 0)),
+            ),
+            reverse=True,
+        ))[:15]
+
         volume_ranked = self._unique_signals(sorted(
             [
                 item for item in results
-                if item["relative_volume"] >= 1.6 or item["intraday_volume_ratio"] >= 1.4
+                if (item["relative_volume"] >= 1.6 or item["intraday_volume_ratio"] >= 1.4)
+                and not item.get("is_pre_breakout")
             ],
             key=lambda item: (item["relative_volume"], item["intraday_volume_ratio"], item["move_quality"]),
             reverse=True,
@@ -277,7 +704,9 @@ class MarketHubService:
 
         breakouts = self._unique_signals([
             item for item in results
-            if "breakout" in item["tags"] or "breakdown" in item["tags"]
+            if ("breakout" in item["tags"] or "breakdown" in item["tags"]
+            or item.get("setup_stage") == "VALID_BREAKOUT")
+            and not item.get("is_pre_breakout")
         ])
         breakout_candidates = self._fill_signal_bucket(
             [
@@ -297,13 +726,16 @@ class MarketHubService:
         )
 
         bearish_ranked = self._unique_signals(sorted(
-            [item for item in results if item["direction"] == "bearish"],
+            [item for item in results if item["direction"] == "bearish" and not item.get("is_pre_breakout")],
             key=lambda item: (item["move_quality"], item["confidence"]),
             reverse=True,
         ))
         bearish_risks = bearish_ranked[:8]
         surfaced.update(item["symbol"] for item in breakout_candidates)
         surfaced.update(item["symbol"] for item in bearish_risks)
+        surfaced.update(item["symbol"] for item in candidates_bucket)
+        surfaced.update(item["symbol"] for item in pre_breakout_setups)
+        surfaced.update(item["symbol"] for item in momentum_continuation)
 
         mover_ranked = [
             {
@@ -313,6 +745,10 @@ class MarketHubService:
                 "change_pct": meta.get("change_pct"),
                 "volume": meta.get("volume"),
                 "tags": meta.get("tags", []),
+                "attention_only": True,
+                "recommended_action": "WAIT_FOR_PULLBACK",
+                "trade_labels": ["CHASE_RISK", "WAIT_FOR_PULLBACK"],
+                "chase_risk_reason": "Fast mover discovery only; do not chase without fresh setup confirmation.",
             }
             for meta in sorted(
                 discovery.get("symbol_meta", {}).values(),
@@ -325,35 +761,91 @@ class MarketHubService:
             mover_ranked,
             8,
         )
+        fast_movers_missed_moves = self._missed_movers(discovery, results, surfaced)
+        missed_moves_analysis = [item for item in fast_movers_missed_moves if abs(float(item.get("change_pct") or 0)) >= 8]
+        for item in fast_movers_missed_moves:
+            change = abs(float(item.get("change_pct") or 0))
+            item["attention_only"] = True
+            item["recommended_action"] = "WAIT_FOR_PULLBACK"
+            item["display_action"] = "WAIT_FOR_PULLBACK"
+            item["entry_label"] = "PROFIT_BOOKING_RISK" if change >= 8 else "CHASE_RISK"
+            item["trade_labels"] = list(
+                dict.fromkeys(
+                    [
+                        "CHASE_RISK",
+                        "PROFIT_BOOKING_RISK" if change >= 8 else "WAIT_FOR_PULLBACK",
+                        "AVOID_LATE_ENTRY",
+                    ]
+                )
+            )
+            item["chase_risk_reason"] = (
+                "High chance of profit booking tomorrow. Suggest trailing stop if already holding."
+                if change >= 8
+                else "Stock already moved strongly; avoid late entry unless it holds VWAP/support."
+            )
+            item["ui_guidance"] = [
+                "Attention only - do not chase this move.",
+                "Wait for a pullback to VWAP or support before entry.",
+            ]
         breadth = self._build_market_breadth(results, benchmark_frame)
         market_mood = self._market_mood(breadth, top_opportunities, bearish_risks)
 
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "universe_size": len(results),
+            "universe_size": int(discovery.get("scan_attempted_count") or len(results)),
+            "valid_signal_count": len(results),
             "market_breadth": breadth,
             "market_discovery": {
                 "source_mode": discovery.get("source_mode"),
                 "note": discovery.get("note"),
                 "bucket_counts": discovery.get("bucket_counts", {}),
+                "total_discovered": len(discovery.get("symbols", [])),
+                "total_scanned": int(discovery.get("scan_attempted_count") or len(results)),
+                "valid_signal_count": len(results),
             },
             "macro_context": self.market_intelligence.get_macro_snapshot(),
             "global_context": self.market_intelligence.get_global_scenario(),
             "top_opportunities": top_opportunities,
+            "top_validated_calls": top_opportunities,
             "unusual_volume": unusual_volume,
             "breakout_candidates": breakout_candidates,
             "bearish_risks": bearish_risks,
             "top_movers": top_movers,
+            "fast_movers_missed_moves": fast_movers_missed_moves,
+            "pre_breakout_setups": pre_breakout_setups,
+            "pattern_forming_setups": pre_breakout_setups,
+            "alert_above_setups": alert_above_setups,
+            "retest_entry": retest_entry,
+            "momentum_continuation": momentum_continuation,
+            "re_entry_setups": momentum_continuation,
+            "missed_moves_analysis": missed_moves_analysis,
+            "avoid_late_entry": avoid_late_entry,
+            "candidates": candidates_bucket,
+            "avoid_risky": avoid_risky_bucket,
             "summary": {
                 "high_priority": len([item for item in results if item["alert_level"] == "high_priority"]),
                 "watchlist": len([item for item in results if item["alert_level"] == "watchlist"]),
                 "avoid": len([item for item in results if item["alert_level"] == "avoid"]),
                 "opportunities_count": len(top_opportunities),
+                "top_validated_count": len(top_opportunities),
                 "breakout_count": len(breakout_candidates),
                 "bearish_risk_count": len(bearish_risks),
                 "unusual_volume_count": len(unusual_volume),
                 "market_mood": market_mood,
                 "scanner_leader": top_opportunities[0]["symbol"] if top_opportunities else None,
+                "total_scanned_universe": int(discovery.get("scan_attempted_count") or len(results)),
+                "valid_signal_count": len(results),
+                "fast_movers_count": len(fast_movers_missed_moves),
+                "pre_breakout_count": len(pre_breakout_setups),
+                "pattern_forming_count": len(pre_breakout_setups),
+                "alert_above_count": len(alert_above_setups),
+                "retest_entry_count": len(retest_entry),
+                "momentum_continuation_count": len(momentum_continuation),
+                "re_entry_count": len(momentum_continuation),
+                "missed_moves_count": len(missed_moves_analysis),
+                "avoid_late_entry_count": len(avoid_late_entry),
+                "candidates_count": len(candidates_bucket),
+                "avoid_count": len(avoid_risky_bucket),
             },
         }
 
@@ -363,6 +855,7 @@ class MarketHubService:
 
         discovery = self.universe.discover_market(force_refresh=force_refresh)
         symbols = self._scan_symbols(discovery)
+        discovery["scan_attempted_count"] = len(symbols)
         benchmark_symbol = self.settings.benchmark_symbol
         try:
             benchmark_frame = self.data.fetch_history(benchmark_symbol, period=self.settings.scan_history_period)
@@ -451,6 +944,15 @@ class MarketHubService:
 
         payload = self._shape_scan_payload(discovery, list(enhanced.values()), benchmark_frame)
         try:
+            payload = build_smart_scan_payload(
+                payload,
+                daily_frames,
+                benchmark_frame,
+                ml_models=None,  # model cache wired in future iteration
+            )
+        except Exception:
+            logger.exception("smart_layers enrichment failed — returning base payload")
+        try:
             self.tracker.sync_scan_payload(payload, discovery.get("symbol_meta", {}))
         except Exception:
             logger.exception("tracker sync failed during market overview refresh")
@@ -486,6 +988,13 @@ class MarketHubService:
                 )
 
             logger.info("market overview cache miss")
+            launched = self._start_background_refresh(force_refresh=True)
+            logger.info(
+                "market overview cold start returning tracked fallback background_refresh_started=%s duration_ms=%s",
+                launched,
+                round((time.perf_counter() - started) * 1000),
+            )
+            return self._tracked_fallback_payload("Live scan is warming up; showing persisted scanner calls.")
 
         if not self.scan_refresh_lock.acquire(blocking=False):
             if self._last_success_is_usable():
@@ -499,7 +1008,7 @@ class MarketHubService:
                     cache_status="refresh_in_progress",
                 )
             logger.warning("market overview refresh already running and no cache available")
-            return self._empty_scan_payload("Market scan is warming up. Try again shortly.")
+            return self._tracked_fallback_payload("Market scan is warming up. Showing persisted scanner calls.")
 
         try:
             payload = self._refresh_scan_market(force_refresh=force_refresh)
