@@ -13,6 +13,8 @@ import {
   humanize,
   toneForDirection,
   toneForRisk,
+  fmt,
+  fmtPct,
 } from "../lib/market";
 import StockDetailPanel from "./StockDetailPanel";
 
@@ -107,7 +109,7 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
           <span className="micro-copy">Updated {formatUpdated(pick.lastUpdated)}</span>
         </div>
         <div className="confidence-ring" style={{ color: toneForDirection(pick.direction) }}>
-          {pick.confidence.toFixed(0)}%
+          {fmt(pick.confidence, 0)}%
         </div>
       </div>
 
@@ -115,7 +117,7 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
 
       <div className="trade-plan-grid">
         <div><span>Price</span><strong>{pick.currentPrice || "-"}</strong></div>
-        <div><span>Score</span><strong>{pick.score?.toFixed(0) || pick.confidence.toFixed(0)}</strong></div>
+        <div><span>Score</span><strong>{pick.score != null ? fmt(pick.score, 0) : fmt(pick.confidence, 0)}</strong></div>
         <div><span>Entry</span><strong>{pick.entryZone}</strong></div>
         <div><span>Trigger</span><strong>{pick.entryTrigger || "-"}</strong></div>
         <div><span>Target Zone</span><strong>{pick.targetZone || pick.target}</strong></div>
@@ -150,7 +152,7 @@ function BaseFormationCard({ pick }: { pick: BaseFormationPick }) {
           </div>
           <span className="micro-copy">Early accumulation - wait for confirmation</span>
         </div>
-        <div className="confidence-ring" style={{ color: "#60a5fa" }}>{pick.accumulationScore.toFixed(0)}%</div>
+        <div className="confidence-ring" style={{ color: "#60a5fa" }}>{fmt(pick.accumulationScore, 0)}%</div>
       </div>
       <p className="pick-reason">{pick.whyInteresting}</p>
       <div className="trade-plan-grid">
@@ -197,7 +199,7 @@ function DebugPanel({ data }: { data?: HotPicksResponse["debug"] }) {
             {(data.top10NearMissCandidates || []).map((item) => (
               <div key={item.symbol} className="journal-row">
                 <strong>{item.symbol}</strong>
-                <span>{item.score.toFixed(0)} | {humanize(item.setupType)}</span>
+                <span>{fmt(item.score, 0)} | {humanize(item.setupType)}</span>
                 <span>{[...(item.softReasons || []), ...(item.rejectionReasons || [])].map(humanize).join(", ") || "needs tuning"}</span>
               </div>
             ))}
@@ -220,16 +222,16 @@ function PerformancePanel({ data }: { data?: HotPicksResponse["performance"] }) 
       </div>
       <div className="summary-strip compact">
         <StatCard label="Active Calls" value={data?.activeCalls ?? 0} tone="#60a5fa" />
-        <StatCard label="Win Rate" value={enough ? `${Number(data?.winRate).toFixed(1)}%` : "Not enough data yet"} tone="#2dd4bf" />
-        <StatCard label="Average Return" value={enough ? `${Number(data?.averageReturn || 0).toFixed(2)}%` : "Not enough data yet"} />
-        <StatCard label="Max Loss" value={enough && data?.maxLoss !== null && data?.maxLoss !== undefined ? `${Number(data.maxLoss).toFixed(2)}%` : "Not enough data yet"} tone="#fb7185" />
+        <StatCard label="Win Rate" value={enough ? `${fmt(Number(data?.winRate), 1)}%` : "Not enough data yet"} tone="#2dd4bf" />
+        <StatCard label="Average Return" value={enough ? `${fmt(Number(data?.averageReturn ?? 0), 2)}%` : "Not enough data yet"} />
+        <StatCard label="Max Loss" value={enough && data?.maxLoss != null ? `${fmt(Number(data.maxLoss), 2)}%` : "Not enough data yet"} tone="#fb7185" />
       </div>
       <div className="journal-list">
         {(data?.last30Calls || []).slice(0, 30).map((call) => (
           <div key={call.id} className="journal-row">
             <strong>{call.symbol}</strong>
-            <span>{humanize(call.direction)} | {call.entry_price?.toFixed(2)} to {call.target_price?.toFixed(2)}</span>
-            <span>{humanize(call.scanner_call_status || call.status)} | {call.result_pct !== null && call.result_pct !== undefined ? `${call.result_pct.toFixed(2)}%` : "active"}</span>
+            <span>{humanize(call.direction)} | {fmt(call.entry_price, 2)} to {fmt(call.target_price, 2)}</span>
+            <span>{humanize(call.scanner_call_status || call.status)} | {call.result_pct != null ? fmtPct(call.result_pct) : "active"}</span>
           </div>
         ))}
         {!(data?.last30Calls || []).length ? <div className="empty-state">No paper trade journal entries yet.</div> : null}

@@ -10,6 +10,8 @@ import {
   toneForRisk,
   toneForStatus,
   toneForTrackingLabel,
+  fmt,
+  fmtPct,
 } from "../lib/market";
 
 type StockDetailPanelProps = {
@@ -93,11 +95,11 @@ export default function StockDetailPanel({
 
       <div className="stat-grid">
         <Stat label="Bias" value={humanize(signal.direction)} tone={toneForDirection(signal.direction)} />
-        <Stat label="Confidence" value={`${signal.confidence.toFixed(0)}%`} />
+        <Stat label="Confidence" value={`${fmt(signal.confidence, 0)}%`} />
         <Stat label="Risk" value={humanize(signal.risk_level)} tone={toneForRisk(signal.risk_level)} />
-        <Stat label="Expected Move" value={`${signal.expected_move_pct > 0 ? "+" : ""}${signal.expected_move_pct.toFixed(2)}%`} tone={toneForDirection(signal.direction)} />
+        <Stat label="Expected Move" value={`${(signal.expected_move_pct ?? 0) > 0 ? "+" : ""}${fmt(signal.expected_move_pct, 2)}%`} tone={toneForDirection(signal.direction)} />
         <Stat label="Timeframe" value={signal.timeframe_label} />
-        <Stat label="Invalidation" value={signal.invalidation ? `INR ${signal.invalidation.toFixed(2)}` : "Monitor support"} tone={toneForRisk(signal.risk_level)} />
+        <Stat label="Invalidation" value={signal.invalidation ? `INR ${fmt(signal.invalidation)}` : "Monitor support"} tone={toneForRisk(signal.risk_level)} />
       </div>
 
       <div className="detail-grid detail-priority">
@@ -116,9 +118,9 @@ export default function StockDetailPanel({
         <div className="mono-label">Confidence Read</div>
         <p className="detail-summary">{signal.confidence_note}</p>
         <div className="micro-copy">
-          Model confidence {signal.model_confidence.toFixed(0)}%
+          Model confidence {fmt(signal.model_confidence, 0)}%
           {signal.evidence_confidence !== null && signal.evidence_confidence !== undefined
-            ? ` | Historical hit-rate proxy ${signal.evidence_confidence.toFixed(0)}%`
+            ? ` | Historical hit-rate proxy ${fmt(signal.evidence_confidence, 0)}%`
             : " | Historical hit-rate proxy unavailable"}
         </div>
         {error ? <div className="micro-copy">Latest refresh note: {error}</div> : null}
@@ -141,9 +143,9 @@ export default function StockDetailPanel({
             <div className="mini-grid">
               <div className="mini-stat"><span>Status</span><strong style={{ color: toneForStatus(latestTracked.status) }}>{humanize(latestTracked.status)}</strong></div>
               <div className="mini-stat"><span>Tracking Label</span><strong style={{ color: toneForTrackingLabel(latestTracked.tracking_label) }}>{latestTracked.tracking_label}</strong></div>
-              <div className="mini-stat"><span>Target</span><strong>INR {latestTracked.target_price.toFixed(2)}</strong></div>
-              <div className="mini-stat"><span>Stop</span><strong>{latestTracked.stop_loss ? `INR ${latestTracked.stop_loss.toFixed(2)}` : "-"}</strong></div>
-              <div className="mini-stat"><span>Result</span><strong>{`${(latestTracked.result_pct || 0) > 0 ? "+" : ""}${(latestTracked.result_pct || 0).toFixed(2)}%`}</strong></div>
+              <div className="mini-stat"><span>Target</span><strong>INR {fmt(latestTracked.target_price)}</strong></div>
+              <div className="mini-stat"><span>Stop</span><strong>{latestTracked.stop_loss ? `INR ${fmt(latestTracked.stop_loss)}` : "-"}</strong></div>
+              <div className="mini-stat"><span>Result</span><strong>{fmtPct(latestTracked.result_pct ?? 0)}</strong></div>
               <div className="mini-stat"><span>Latest Update</span><strong>{latestTracked.last_update_label || "Fresh setup"}</strong></div>
             </div>
             <div className="micro-copy">{latestTracked.last_update_note || "Tracked setup is active."}</div>
@@ -183,7 +185,7 @@ export default function StockDetailPanel({
             <>
               <div className="mini-grid">
                 <div className="mini-stat"><span>Signals</span><strong>{backtestSide?.signal_count ?? 0}</strong></div>
-                <div className="mini-stat"><span>Win Rate</span><strong>{((backtestSide?.win_rate ?? 0) * 100).toFixed(1)}%</strong></div>
+                <div className="mini-stat"><span>Win Rate</span><strong>{fmt((backtestSide?.win_rate ?? 0) * 100, 1)}%</strong></div>
                 <div className="mini-stat"><span>Profit Factor</span><strong>{backtestSide?.profit_factor ?? 0}</strong></div>
                 <div className="mini-stat"><span>Expectancy</span><strong>{backtestSide?.expectancy_pct ?? 0}%</strong></div>
               </div>
@@ -191,7 +193,7 @@ export default function StockDetailPanel({
               <div className="bullet-list">
                 {(detail.backtest.calibration || []).slice(0, 4).length ? (
                   (detail.backtest.calibration || []).slice(0, 4).map((item) => (
-                    <div key={item.bucket}>- Confidence {item.bucket}: {item.signal_count} signals, {(item.win_rate * 100).toFixed(1)}% win rate</div>
+                    <div key={item.bucket}>- Confidence {item.bucket}: {item.signal_count} signals, {fmt(item.win_rate * 100, 1)}% win rate</div>
                   ))
                 ) : (
                   <div className="empty-state">Confidence bucket calibration is not populated yet.</div>
@@ -220,7 +222,7 @@ export default function StockDetailPanel({
             {trackedHistory?.setups?.length ? (
               trackedHistory.setups.slice(0, 5).map((item) => (
                 <div key={item.id}>
-                  - {new Date(item.detected_at).toLocaleDateString()}: {item.tracking_label}, {humanize(item.status)}, target {item.target_price.toFixed(2)}, stop {item.stop_loss ? item.stop_loss.toFixed(2) : "-"}
+                  - {new Date(item.detected_at).toLocaleDateString()}: {item.tracking_label}, {humanize(item.status)}, target {fmt(item.target_price)}, stop {item.stop_loss ? fmt(item.stop_loss) : "-"}
                 </div>
               ))
             ) : (

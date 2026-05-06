@@ -7,6 +7,8 @@ import {
   toneForDirection,
   toneForRisk,
   toneForStatus,
+  fmt,
+  fmtPct,
 } from "../lib/market";
 
 type TrackedSetupCardProps = {
@@ -63,12 +65,12 @@ export default function TrackedSetupCard({
       </div>
 
       <div className="mini-grid">
-        <div className="mini-stat"><span>Entry</span><strong>INR {item.entry_price.toFixed(2)}</strong></div>
-        <div className="mini-stat"><span>Current</span><strong>INR {(item.current_price || item.entry_price).toFixed(2)}</strong></div>
-        <div className="mini-stat"><span>Target</span><strong>INR {(item.target_1 || item.target_price).toFixed(2)}</strong></div>
-        <div className="mini-stat"><span>Stop</span><strong>{item.stop_loss ? `INR ${item.stop_loss.toFixed(2)}` : "-"}</strong></div>
-        <div className="mini-stat"><span>Trail</span><strong>{item.trailing_stop ? `INR ${item.trailing_stop.toFixed(2)}` : "-"}</strong></div>
-        <div className="mini-stat"><span>P&L</span><strong style={{ color: pnl >= 0 ? "#34d399" : "#fb7185" }}>{`${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}%`}</strong></div>
+        <div className="mini-stat"><span>Entry</span><strong>INR {fmt(item.entry_price)}</strong></div>
+        <div className="mini-stat"><span>Current</span><strong>INR {fmt(item.current_price ?? item.entry_price)}</strong></div>
+        <div className="mini-stat"><span>Target</span><strong>INR {fmt(item.target_1 ?? item.target_price)}</strong></div>
+        <div className="mini-stat"><span>Stop</span><strong>{item.stop_loss ? `INR ${fmt(item.stop_loss)}` : "-"}</strong></div>
+        <div className="mini-stat"><span>Trail</span><strong>{item.trailing_stop ? `INR ${fmt(item.trailing_stop)}` : "-"}</strong></div>
+        <div className="mini-stat"><span>P&L</span><strong style={{ color: pnl >= 0 ? "#34d399" : "#fb7185" }}>{fmtPct(pnl)}</strong></div>
         <div className="mini-stat"><span>Advice</span><strong style={{ color: toneForAdvice(advice) }}>{humanize(advice)}</strong></div>
       </div>
 
@@ -76,7 +78,7 @@ export default function TrackedSetupCard({
 
       <div className="badge-row">
         <span className="chip">{item.timeframe_label}</span>
-        <span className="chip">{`${(item.target_progress_pct || 0).toFixed(0)}% progress`}</span>
+        <span className="chip">{`${fmt(item.target_progress_pct ?? 0, 0)}% progress`}</span>
         <span className="chip" style={{ color: toneForRisk(item.risk_level) }}>{humanize(item.risk_level)} risk</span>
         {item.pinned ? <span className="chip ghost">Pinned</span> : null}
       </div>

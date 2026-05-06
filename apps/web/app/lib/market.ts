@@ -596,3 +596,16 @@ export function toneForTrackingLabel(label?: string) {
   if (label === "Low Liquidity" || label === "Avoid / High Risk") return "#fb7185";
   return "#cbd5e1";
 }
+
+/** Safe toFixed — returns fallback string when value is null/undefined/NaN */
+export function fmt(value: number | null | undefined, decimals = 2, fallback = "-"): string {
+  if (value === null || value === undefined || !isFinite(value)) return fallback;
+  return Number(value).toFixed(decimals);
+}
+
+/** Safe percentage formatter with sign */
+export function fmtPct(value: number | null | undefined, decimals = 2, fallback = "-"): string {
+  if (value === null || value === undefined || !isFinite(value)) return fallback;
+  const n = Number(value);
+  return `${n >= 0 ? "+" : ""}${n.toFixed(decimals)}%`;
+}
