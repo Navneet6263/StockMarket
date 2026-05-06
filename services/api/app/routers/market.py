@@ -247,3 +247,40 @@ async def market_scan_stats(
         "summary": payload.get("summary", {}),
         "market_discovery": payload.get("market_discovery", {}),
     }
+
+
+@router.get("/market/nifty-context")
+async def market_nifty_context(
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    """
+    Financial expert level Nifty analysis.
+    Returns trend structure, key S/R levels, momentum quality,
+    VIX regime, and plain-language narrative for stock selection.
+    """
+    return await asyncio.to_thread(hub._get_nifty_context)
+
+
+@router.get("/market/breakout-radar")
+async def market_breakout_radar(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    """
+    '1-2 din mein fatne wale' stocks.
+    Stocks building a base near resistance with accumulation signals,
+    aligned with Nifty direction. These are the setups to watch closely.
+    """
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "breakout_radar": payload.get("breakout_radar", []),
+        "nifty_context": payload.get("nifty_context", {}),
+        "count": len(payload.get("breakout_radar", [])),
+        "summary": {
+            "nifty_bias": payload.get("summary", {}).get("nifty_bias", "neutral"),
+            "nifty_regime": payload.get("summary", {}).get("nifty_regime", "unknown"),
+            "market_score": payload.get("summary", {}).get("market_score", 50),
+            "breakout_radar_count": payload.get("summary", {}).get("breakout_radar_count", 0),
+        },
+    }

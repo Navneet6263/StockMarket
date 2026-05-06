@@ -22,6 +22,8 @@ from app.services.narrative import NarrativeService
 from app.services.scoring import ScoringEngine
 from app.services.smart_layers import build_smart_scan_payload
 from app.services.setup_tracker import SetupTrackerService
+from app.services.nifty_context_analyzer import analyze_nifty_context, stock_nifty_alignment_score
+from app.services.breakout_radar import build_breakout_radar
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +48,9 @@ class MarketHubService:
         self.background_scan_stop = threading.Event()
         self.last_successful_scan: Dict | None = None
         self.last_successful_scan_at = 0.0
+        self._nifty_context_cache: Dict | None = None
+        self._nifty_context_at: float = 0.0
+        self._nifty_context_ttl: float = 300.0  # 5 minutes
 
     def start_background_scanner(self) -> bool:
         if self.background_scan_started:
@@ -115,6 +120,8 @@ class MarketHubService:
             "avoid_late_entry": [],
             "candidates": [],
             "avoid_risky": [],
+            "breakout_radar": [],
+            "nifty_context": {"nifty_bias": "neutral", "nifty_regime": "unknown", "market_score": 50, "data_available": False},
             "summary": {
                 "high_priority": 0,
                 "watchlist": 0,
@@ -298,6 +305,20 @@ class MarketHubService:
         thread = threading.Thread(target=refresh, name="market-overview-refresh", daemon=True)
         thread.start()
         return True
+
+    def _get_nifty_context(self) -> Dict:
+        """Get Nifty context with caching (5 min TTL)."""
+        now = time.time()
+        if self._nifty_context_cache and (now - self._nifty_context_at) < self._nifty_context_ttl:
+            return self._nifty_context_cache
+        try:
+            ctx = analyze_nifty_context()
+            self._nifty_context_cache = ctx
+            self._nifty_context_at = now
+            return ctx
+        except Exception:
+            logger.exception("nifty context analysis failed")
+            return {"nifty_bias": "neutral", "nifty_regime": "unknown", "market_score": 50, "data_available": False}
 
     def _top_symbols(self, results: list[Dict], limit: int) -> list[str]:
         ranked = sorted(
@@ -790,6 +811,27 @@ class MarketHubService:
         breadth = self._build_market_breadth(results, benchmark_frame)
         market_mood = self._market_mood(breadth, top_opportunities, bearish_risks)
 
+        # ── Nifty Context (Financial Expert Level Index Analysis) ─────────────
+        nifty_context = self._get_nifty_context()
+
+        # Enrich each signal with Nifty alignment score
+        for item in results:
+            try:
+                alignment = stock_nifty_alignment_score(item, nifty_context)
+                item["nifty_alignment_score"] = alignment["nifty_alignment_score"]
+                item["nifty_alignment"] = alignment["nifty_alignment"]
+                item["nifty_alignment_warnings"] = alignment["nifty_alignment_warnings"]
+            except Exception:
+                pass
+
+        # ── Breakout Radar ("1-2 din mein fatne wale") ───────────────────────
+        # Use all scanned signals (not just top_opportunities) to find pre-breakout setups
+        breakout_radar_picks = build_breakout_radar(
+            all_signals=results,
+            nifty_context=nifty_context,
+            max_results=10,
+        )
+
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "universe_size": int(discovery.get("scan_attempted_count") or len(results)),
@@ -805,6 +847,8 @@ class MarketHubService:
             },
             "macro_context": self.market_intelligence.get_macro_snapshot(),
             "global_context": self.market_intelligence.get_global_scenario(),
+            "nifty_context": nifty_context,
+            "breakout_radar": breakout_radar_picks,
             "top_opportunities": top_opportunities,
             "top_validated_calls": top_opportunities,
             "unusual_volume": unusual_volume,
@@ -846,6 +890,10 @@ class MarketHubService:
                 "avoid_late_entry_count": len(avoid_late_entry),
                 "candidates_count": len(candidates_bucket),
                 "avoid_count": len(avoid_risky_bucket),
+                "breakout_radar_count": len(breakout_radar_picks),
+                "nifty_bias": nifty_context.get("nifty_bias", "neutral"),
+                "nifty_regime": nifty_context.get("nifty_regime", "unknown"),
+                "market_score": nifty_context.get("market_score", 50),
             },
         }
 
