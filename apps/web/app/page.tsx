@@ -5,6 +5,7 @@ import { API_URL, humanize, fmt, fmtPct } from "./lib/market";
 const TABS = [
   { id: "dashboard", label: "🏠 Dashboard", api: "/api/market/hot-picks" },
   { id: "hot-picks", label: "🔥 Hot Picks", api: "/api/market/hot-picks" },
+  { id: "strict-options", label: "Strict Options", api: "/api/market/hot-picks" },
   { id: "watchlist", label: "👁 Watchlist", api: "/api/market/candidates" },
   { id: "base-radar", label: "📊 Base Formation", api: "/api/market/pre-breakout" },
   { id: "momentum", label: "⚡ Momentum", api: "/api/market/fast-movers" },
@@ -15,6 +16,30 @@ const TABS = [
 ];
 
 function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => void }) {
+  if (item.entryRule && item.instrumentRule) {
+    return (
+      <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: item.status === "STRICT_READY" ? "var(--green)" : "var(--orange)" }}>
+        <div className="stock-card-top">
+          <h3>{item.symbol}</h3>
+          <span className={`badge ${item.side === "PE" ? "bearish" : "bullish"}`}>{item.actionLabel}</span>
+        </div>
+        <div className="stock-meta">
+          <span className="tag watch">{humanize(item.status)}</span>
+          <span className="tag">{fmt(item.confidence, 0)}%</span>
+          <span className="tag">{item.bucket}</span>
+        </div>
+        <p className="stock-reason">{item.entryRule}</p>
+        <p className="stock-reason" style={{ color: "var(--orange)" }}>{item.expiryRule}</p>
+        <div className="stock-targets">
+          <div><span>Underlying</span><strong>{item.underlyingPrice}</strong></div>
+          <div><span>Trigger</span><strong>{item.underlyingTrigger}</strong></div>
+          <div><span>Invalid</span><strong>{item.underlyingInvalidation}</strong></div>
+        </div>
+        <p className="stock-reason">{item.riskRule}</p>
+      </div>
+    );
+  }
+
   const change = item.change_pct ?? item.changePct ?? 0;
   const price = item.currentPrice ?? item.current_price ?? item.price ?? 0;
   const action = item.action ?? item.effectiveAction ?? item.display_action ?? item.recommended_action ?? "WATCH";
@@ -109,6 +134,7 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
 function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
   if (tab === "dashboard" || tab === "hot-picks") return data.hotPicks || data.top_opportunities || [];
+  if (tab === "strict-options") return data.strictOptions?.radar || [];
   if (tab === "watchlist") return data.candidates || [];
   if (tab === "base-radar") return data.pre_breakout_setups || data.pattern_forming_setups || [];
   if (tab === "momentum" || tab === "fast-movers") return data.fast_movers || data.results || [];

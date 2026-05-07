@@ -320,6 +320,50 @@ export type BaseFormationPick = {
   };
 };
 
+export type StrictOptionIdea = {
+  symbol: string;
+  bucket: string;
+  side: "CE" | "PE" | "NO_TRADE" | string;
+  status: "STRICT_READY" | "WATCH_TRIGGER" | "NO_TRADE" | string;
+  actionLabel: string;
+  confidence: number;
+  underlyingPrice: string;
+  underlyingTrigger: string;
+  underlyingInvalidation: string;
+  distanceToTriggerPct?: number | null;
+  instrumentRule: string;
+  entryRule: string;
+  targetRule: string;
+  invalidationRule: string;
+  expiryRule: string;
+  riskRule: string;
+  niftyGate: string;
+  blockers: string[];
+};
+
+export type StrictOptionsResponse = {
+  niftyGate: {
+    status: string;
+    side: "bullish" | "bearish" | "neutral" | string;
+    message: string;
+    niftyBias: string;
+    niftyRegime: string;
+    marketScore: number;
+    benchmarkChangePct: number;
+    pcr?: number | null;
+    pcrSignal?: string;
+    dataAvailable?: boolean;
+  };
+  radar: StrictOptionIdea[];
+  blocked: StrictOptionIdea[];
+  summary: {
+    strictReady: number;
+    watchOnly: number;
+    blockedHighScore: number;
+  };
+  warnings: string[];
+};
+
 export type HotPicksDebug = {
   totalScanned: number;
   sourceCandidates: number;
@@ -349,12 +393,15 @@ export type HotPicksResponse = {
     watchlist?: number;
     momentumRadar?: number;
     baseFormation?: number;
+    strictOptionsReady?: number;
+    strictOptionsWatch?: number;
   };
   hotPicks: HotPick[];
   watchlist: HotPick[];
   momentumRadar?: HotPick[];
   catalystRadar?: HotPick[];
   baseFormationRadar?: BaseFormationPick[];
+  strictOptions?: StrictOptionsResponse;
   rejectionSummary?: {
     totalRejected: number;
     countsByReason: Record<string, number>;

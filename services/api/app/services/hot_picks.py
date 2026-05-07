@@ -4,6 +4,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
+from app.services.strict_options import build_strict_options_response
+
 
 DISCLAIMER = "This is not financial advice. Use this only for research and paper trading."
 
@@ -296,15 +298,6 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
     setup = 0.0
     if chart["breakoutConfirmed"] or "breakdown" in tags:
         setup += 13
-    
-    # Identify high-probability VCP base building (Extreme contraction + volume dry up near resistance)
-    tight_pct = _safe_float(chart.get("tightConsolidationPct"), 99.0)
-    dist_res = _safe_float(chart.get("distanceToResistancePct"), 99.0)
-    if tight_pct <= 4.5 and dist_res <= 2.5 and (relative_volume <= 0.65 or chart["volumeDryup"]):
-        setup += 22  # Massive boost for "about to break out" setups
-    elif tight_pct <= 6.0 and dist_res <= 4.0:
-        setup += 12
-
     if chart["nearBreakout"] or signal.get("is_pre_breakout"):
         setup += 7
     if chart["pullbackToSupport"]:
@@ -700,9 +693,9 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
 
     rejected = [item for item in mapped if item["rejectionReasons"]]
     eligible = [item for item in mapped if not item["rejectionReasons"]]
-    hot = [item for item in eligible if item["score"] >= 75 and item["cleanRiskSetup"]][:8]
+    hot = [item for item in eligible if item["score"] >= 80][:8]  # Restored strict 80+ score requirement
     hot_symbols = {item["symbol"] for item in hot}
-    watchlist = [item for item in eligible if 60 <= item["score"] < 75 and item["symbol"] not in hot_symbols][:16]
+    watchlist = [item for item in eligible if 60 <= item["score"] < 80 and item["symbol"] not in hot_symbols][:16]
     used = hot_symbols | {item["symbol"] for item in watchlist}
     momentum = [
         item for item in eligible
@@ -746,6 +739,15 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         return priority, _safe_float(item.get("accumulationScore"))
 
     base_items.sort(key=base_sort_key, reverse=True)
+    strict_options = build_strict_options_response(
+        scan,
+        [
+            ("Hot Picks", hot),
+            ("Watchlist", watchlist),
+            ("Momentum Radar", momentum),
+            ("Silent Accumulation", base_items),
+        ],
+    )
 
     reason_counts = Counter()
     for item in mapped:
@@ -807,12 +809,15 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
             "watchlist": len(watchlist),
             "momentumRadar": len(momentum),
             "baseFormation": len(base_items),
+            "strictOptionsReady": strict_options["summary"]["strictReady"],
+            "strictOptionsWatch": strict_options["summary"]["watchOnly"],
         },
         "hotPicks": hot,
         "watchlist": watchlist,
         "momentumRadar": momentum,
         "catalystRadar": catalyst_radar,
         "baseFormationRadar": base_items[:12],
+        "strictOptions": strict_options,
         "rejectionSummary": {
             "totalRejected": len(rejected),
             "countsByReason": dict(reason_counts),

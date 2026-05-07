@@ -566,32 +566,54 @@ class ScoringEngine:
         probability = 0.5 if direction == "neutral" else round(confidence / 100, 4)
         signal_summary = "; ".join(reasons[:3]) if reasons else "Confirmation is still weak."
         pattern_context = self._pattern_context(snapshot, direction=direction, price=price)
+        
+        # Determine actual entry trigger (use price if it has already broken out)
+        entry_price = price
+        if direction == "bullish" and pattern_context["entry_trigger"] > price:
+            entry_price = pattern_context["entry_trigger"]
+        elif direction == "bearish" and pattern_context["entry_trigger"] < price:
+            entry_price = pattern_context["entry_trigger"]
+
+        # Cap stop loss to max 2.5x ATR to avoid unrealistic Risk/Reward
+        atr_val = self._safe(snapshot, "atr") or (price * 0.02)
         if direction == "bullish":
-            target_price = price * (1 + abs(expected_move_pct) / 100)
-            extended_target_price = price * (1 + abs(expected_move_pct) * 1.35 / 100)
+            if invalidation and invalidation < entry_price - (atr_val * 2.5):
+                invalidation = entry_price - (atr_val * 2.5)
+            if invalidation and invalidation >= entry_price:
+                invalidation = entry_price - atr_val
         elif direction == "bearish":
-            target_price = price * (1 - abs(expected_move_pct) / 100)
-            extended_target_price = price * (1 - abs(expected_move_pct) * 1.35 / 100)
-        else:
-            target_price = price
-            extended_target_price = price
+            if invalidation and invalidation > entry_price + (atr_val * 2.5):
+                invalidation = entry_price + (atr_val * 2.5)
+            if invalidation and invalidation <= entry_price:
+                invalidation = entry_price + atr_val
 
         stop_loss = invalidation
-        stop_distance = abs(price - stop_loss) if stop_loss else 0.0
-        target_distance = abs(target_price - price)
-        risk_reward = round(target_distance / stop_distance, 2) if stop_distance > 0 else 0.0
-        target_1 = target_price
-        target_2 = extended_target_price
+        stop_distance = abs(entry_price - stop_loss) if stop_loss else 0.0
+        
+        # Ensure minimum 1.5 Risk/Reward based on expected move
+        base_target_distance = entry_price * (abs(expected_move_pct) / 100)
+        target_distance = max(base_target_distance, stop_distance * 1.5)
+        
         if direction == "bullish":
-            extended_target = price * (1 + abs(expected_move_pct) * 1.75 / 100)
+            target_price = entry_price + target_distance
+            extended_target_price = entry_price + (target_distance * 1.5)
+            extended_target = entry_price + (target_distance * 2.0)
             trailing_stop = max(stop_loss or 0, self._safe(snapshot, "ema_20") or 0, self._safe(snapshot, "rolling_vwap") or 0) or stop_loss
         elif direction == "bearish":
-            extended_target = price * (1 - abs(expected_move_pct) * 1.75 / 100)
+            target_price = entry_price - target_distance
+            extended_target_price = entry_price - (target_distance * 1.5)
+            extended_target = entry_price - (target_distance * 2.0)
             trailing_candidates = [value for value in [stop_loss, self._safe(snapshot, "ema_20"), self._safe(snapshot, "rolling_vwap")] if value]
             trailing_stop = min(trailing_candidates) if trailing_candidates else stop_loss
         else:
-            extended_target = price
+            target_price = entry_price
+            extended_target_price = entry_price
+            extended_target = entry_price
             trailing_stop = stop_loss
+            
+        risk_reward = round(target_distance / stop_distance, 2) if stop_distance > 0 else 0.0
+        target_1 = target_price
+        target_2 = extended_target_price
 
         above_vwap = bool(snapshot.get("above_vwap"))
         above_ema20 = bool(snapshot.get("price_above_ema20"))

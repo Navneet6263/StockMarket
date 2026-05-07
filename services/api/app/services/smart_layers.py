@@ -25,7 +25,7 @@ W_MARKET = float(os.getenv("SMART_W_MARKET", "0.20"))
 W_ML = float(os.getenv("SMART_W_ML", "0.15"))
 
 # ── Classification thresholds ─────────────────────────────────────────────────
-HOT_PICK_MIN = int(os.getenv("HOT_PICK_MIN_SCORE", "75"))
+HOT_PICK_MIN = int(os.getenv("HOT_PICK_MIN_SCORE", "80"))  # Strict 80+ for highest quality institutional setups
 WATCHLIST_MIN = int(os.getenv("WATCHLIST_MIN_SCORE", "60"))
 BASE_RADAR_MIN_BASE = int(os.getenv("BASE_RADAR_MIN_BASE_SCORE", "60"))
 

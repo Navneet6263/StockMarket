@@ -2,15 +2,17 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional
 from datetime import datetime
+from py_vollib.black_scholes import black_scholes
 import yfinance as yf
 
 class ActiveTradeTracker:
     def __init__(self):
         self.active_trades = {}
         
-    def track_trade(self, trade_id: str, instrument: str, option_type: str, 
-                   strike: float, buying_price: float, lot_size: int, 
-                   spot_price: float, df: pd.DataFrame, prediction: Dict, 
+    def track_trade(self, trade_id: str, instrument: str, option_type: str,
+                   strike: float, buying_price: float, lot_size: int,
+                   spot_price: float, df: pd.DataFrame, prediction: Dict,
+                   expiry_date: datetime, iv: float,
                    mtf_data: Dict = None) -> Dict:
         """
         Track active trade and provide real-time AI feedback
@@ -25,12 +27,14 @@ class ActiveTradeTracker:
             spot_price: Current Nifty spot price
             df: Historical price data
             prediction: ML prediction data
+            expiry_date: Option expiry datetime
+            iv: Implied Volatility for the option (e.g., 0.20 for 20%)
             mtf_data: Multi-timeframe data
         """
         
         # Calculate current option price (simplified)
         current_option_price = self._estimate_option_price(
-            spot_price, strike, option_type, buying_price
+            spot_price, strike, option_type, buying_price, expiry_date, iv
         )
         
         # Calculate P&L
@@ -81,31 +85,47 @@ class ActiveTradeTracker:
             }
         }
     
-    def _estimate_option_price(self, spot: float, strike: float, 
-                               option_type: str, entry_price: float) -> float:
+    def _estimate_option_price(self, spot: float, strike: float,
+                               option_type: str, entry_price: float,
+                               expiry_date: datetime,
+                               iv: float = 0.20,  # Implied Volatility (e.g., 20%)
+                               risk_free_rate: float = 0.07) -> float:
         """
-        Estimate current option price based on spot movement
-        Simplified Black-Scholes approximation
+        Estimate current option price using the Black-Scholes model.
+        This is far more accurate than a simple delta approximation.
+        
+        Args:
+            spot: Current underlying price (e.g., Nifty spot)
+            strike: Option strike price
+            option_type: 'CALL' or 'PUT'
+            entry_price: Original buying price (used as a fallback)
+            expiry_date: Expiry datetime of the option
+            iv: Implied Volatility (annualized, e.g., 0.20 for 20%)
+            risk_free_rate: Annual risk-free interest rate (e.g., 0.07 for 7%)
         """
-        # Distance from strike
-        if option_type == "CALL":
-            intrinsic = max(0, spot - strike)
-            # If spot moved up, option gains value
-            spot_change_pct = (spot - strike) / strike
-            price_multiplier = 1 + (spot_change_pct * 2)  # Delta approximation
-        else:  # PUT
-            intrinsic = max(0, strike - spot)
-            # If spot moved down, put gains value
-            spot_change_pct = (strike - spot) / strike
-            price_multiplier = 1 + (spot_change_pct * 2)  # Delta approximation
-        
-        # Estimate current price
-        estimated_price = entry_price * max(0.1, price_multiplier)
-        
-        # Add intrinsic value
-        estimated_price = max(estimated_price, intrinsic)
-        
-        return estimated_price
+        try:
+            # Calculate time to expiration in years
+            time_to_expiry = (expiry_date - datetime.now()).total_seconds() / (365.25 * 24 * 3600)
+
+            if time_to_expiry <= 0:
+                # Option has expired, calculate intrinsic value
+                return max(0, spot - strike) if option_type.upper() == "CALL" else max(0, strike - spot)
+
+            flag = 'c' if option_type.upper() == "CALL" else 'p'
+
+            # Calculate theoretical price using Black-Scholes
+            theoretical_price = black_scholes(flag=flag, S=spot, K=strike, t=time_to_expiry, r=risk_free_rate, sigma=iv)
+            return max(0.05, theoretical_price)  # Ensure price is not negative or zero
+
+        except Exception:
+            # Fallback to the old, simpler estimation if Black-Scholes fails
+            if option_type == "CALL":
+                spot_change_pct = (spot - strike) / strike
+                price_multiplier = 1 + (spot_change_pct * 2)
+            else:  # PUT
+                spot_change_pct = (strike - spot) / strike
+                price_multiplier = 1 + (spot_change_pct * 2)
+            return entry_price * max(0.1, price_multiplier)
     
     def _generate_ai_feedback(self, option_type: str, pnl_pct: float, 
                              spot: float, strike: float, support: float, 

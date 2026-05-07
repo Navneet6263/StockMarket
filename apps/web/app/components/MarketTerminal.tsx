@@ -7,6 +7,7 @@ import {
   HotPick,
   HotPicksResponse,
   BaseFormationPick,
+  StrictOptionIdea,
   StockDetail,
   TrackerDashboard,
   TrackerSymbolHistory,
@@ -179,6 +180,83 @@ function BaseFormationCard({ pick }: { pick: BaseFormationPick }) {
         Distance: {fmtPct(pick.distanceToTriggerPct, 2)} | Horizon: {humanize(pick.timeHorizon)}
       </div>
     </article>
+  );
+}
+
+function toneForOptionStatus(status: string) {
+  if (status === "STRICT_READY") return "#34d399";
+  if (status === "WATCH_TRIGGER") return "#fbbf24";
+  return "#94a3b8";
+}
+
+function StrictOptionCard({ idea }: { idea: StrictOptionIdea }) {
+  return (
+    <article className="hot-pick-card option-card">
+      <div className="hot-card-top">
+        <div>
+          <div className="symbol-line">
+            <strong>{idea.symbol}</strong>
+            <span className={`setup-badge ${idea.side === "PE" ? "bearish" : "bullish"}`}>{idea.actionLabel}</span>
+            <span className="setup-badge">{humanize(idea.status)}</span>
+          </div>
+          <span className="micro-copy">{idea.bucket} | Nifty gate: {humanize(idea.niftyGate)}</span>
+        </div>
+        <div className="confidence-ring" style={{ color: toneForOptionStatus(idea.status) }}>
+          {fmt(idea.confidence, 0)}%
+        </div>
+      </div>
+
+      <div className={`decision-strip ${idea.side === "PE" ? "bearish" : "bullish"}`}>{idea.entryRule}</div>
+
+      <div className="trade-plan-grid">
+        <div><span>Underlying</span><strong>{idea.underlyingPrice}</strong></div>
+        <div><span>Trigger</span><strong>{idea.underlyingTrigger}</strong></div>
+        <div><span>Invalidation</span><strong>{idea.underlyingInvalidation}</strong></div>
+        <div><span>Distance</span><strong>{fmtPct(idea.distanceToTriggerPct, 2)}</strong></div>
+        <div><span>Option Type</span><strong>{idea.instrumentRule}</strong></div>
+        <div><span>Target</span><strong>{idea.targetRule}</strong></div>
+      </div>
+
+      <div className="risk-copy">{idea.expiryRule}</div>
+      <div className="risk-copy">{idea.riskRule}</div>
+      <div className="micro-copy">{idea.invalidationRule}</div>
+    </article>
+  );
+}
+
+function StrictOptionsPanel({ data }: { data?: HotPicksResponse["strictOptions"] }) {
+  if (!data) return null;
+  const gateTone = data.niftyGate.side === "bullish" ? "#2dd4bf" : data.niftyGate.side === "bearish" ? "#fb7185" : "#fbbf24";
+  return (
+    <section className="dashboard-band strict-options-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Options Gate</p>
+          <h2>Strict options radar</h2>
+        </div>
+        <span className="micro-copy">Research only. No far OTM weekly options; trigger + Nifty gate must confirm.</span>
+      </div>
+
+      <div className="summary-strip compact">
+        <StatCard label="Nifty Gate" value={humanize(data.niftyGate.status)} tone={gateTone} />
+        <StatCard label="Nifty Score" value={fmt(data.niftyGate.marketScore, 0)} />
+        <StatCard label="PCR" value={data.niftyGate.pcr != null ? fmt(Number(data.niftyGate.pcr), 2) : "-"} />
+        <StatCard label="Ready Options" value={data.summary.strictReady} tone="#34d399" />
+        <StatCard label="Watch Options" value={data.summary.watchOnly} tone="#fbbf24" />
+      </div>
+
+      <div className="decision-strip">{data.niftyGate.message}</div>
+
+      <div className="watch-pick-grid">
+        {data.radar.map((idea) => <StrictOptionCard key={`${idea.symbol}-${idea.side}`} idea={idea} />)}
+        {!data.radar.length ? (
+          <div className="empty-state">
+            No strict option entries right now. Wait for Nifty alignment, trigger confirmation, volume, and tight invalidation.
+          </div>
+        ) : null}
+      </div>
+      {data.warnings.map((warning) => <div key={warning} className="micro-copy">{warning}</div>)}
+    </section>
   );
 }
 
@@ -394,6 +472,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
         <StatCard label="Bearish" value={hotPicks?.summary.bearish ?? 0} tone="#fb7185" />
         <StatCard label="Momentum Radar" value={hotPicks?.summary.momentumRadar ?? hotPicks?.momentumRadar?.length ?? 0} tone="#fbbf24" />
         <StatCard label="Base Formation" value={hotPicks?.summary.baseFormation ?? hotPicks?.baseFormationRadar?.length ?? 0} tone="#60a5fa" />
+        <StatCard label="Strict Options" value={(hotPicks?.summary.strictOptionsReady ?? 0) + (hotPicks?.summary.strictOptionsWatch ?? 0)} tone="#fbbf24" />
       </section>
 
       {selectedSymbol ? (
@@ -406,6 +485,8 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
           loading={detailLoading}
         />
       ) : null}
+
+      <StrictOptionsPanel data={hotPicks?.strictOptions} />
 
       <section className="dashboard-band">
         <div className="section-heading">
