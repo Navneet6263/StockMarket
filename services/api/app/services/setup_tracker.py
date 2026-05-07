@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
+import os
 import time
 from typing import Any
 from uuid import uuid4
@@ -18,8 +19,42 @@ TRACKABLE_BUCKETS = ("top_opportunities", "breakout_candidates", "unusual_volume
 AUTO_CALL_BUCKETS = ("top_opportunities", "breakout_candidates", "unusual_volume", "bearish_risks")
 logger = logging.getLogger(__name__)
 
+# ── ATR Chandelier Exit config ────────────────────────────────────────────────
+CHANDELIER_MULTIPLIER = float(os.getenv("CHANDELIER_ATR_MULTIPLIER", "3.0"))
+CHANDELIER_PERIOD     = int(os.getenv("CHANDELIER_ATR_PERIOD", "22"))
+ENABLE_DYNAMIC_TRAIL  = os.getenv("ENABLE_DYNAMIC_TRAILING_STOP", "true").lower() == "true"
 
-class SetupTrackerService:
+
+def chandelier_exit(frame: pd.DataFrame, direction: str = "bullish") -> float | None:
+    """
+    ATR-based Chandelier Exit trailing stop.
+    Long:  highest_high(period) - multiplier * ATR(period)
+    Short: lowest_low(period)  + multiplier * ATR(period)
+    Returns the trailing stop price or None if insufficient data.
+    """
+    if not ENABLE_DYNAMIC_TRAIL or frame is None or frame.empty or len(frame) < CHANDELIER_PERIOD:
+        return None
+    try:
+        high  = frame["High"].astype(float)
+        low   = frame["Low"].astype(float)
+        close = frame["Close"].astype(float)
+        tr = pd.concat([
+            high - low,
+            (high - close.shift()).abs(),
+            (low  - close.shift()).abs(),
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(CHANDELIER_PERIOD).mean().iloc[-1]
+        if pd.isna(atr) or atr <= 0:
+            return None
+        if direction == "bullish":
+            return round(float(high.rolling(CHANDELIER_PERIOD).max().iloc[-1]) - CHANDELIER_MULTIPLIER * atr, 2)
+        else:
+            return round(float(low.rolling(CHANDELIER_PERIOD).min().iloc[-1]) + CHANDELIER_MULTIPLIER * atr, 2)
+    except Exception as exc:
+        logger.debug("chandelier_exit failed: %s", exc)
+        return None
+
+
     def __init__(self, settings: Settings, data: MarketDataService):
         self.settings = settings
         self.data = data
@@ -494,6 +529,18 @@ class SetupTrackerService:
             frame = frames.get(setup["symbol"], pd.DataFrame())
             status, label, result_pct, favorable, adverse = self._evaluate_row(setup, frame)
             current_price = float(frame["Close"].iloc[-1]) if not frame.empty else setup.get("current_price")
+
+            # Dynamic trailing stop via Chandelier Exit
+        if not frame.empty and ENABLE_DYNAMIC_TRAIL:
+            dynamic_trail = chandelier_exit(frame, setup["direction"])
+            if dynamic_trail:
+                existing_trail = float(setup.get("trailing_stop") or 0)
+                if setup["direction"] == "bullish" and dynamic_trail > existing_trail:
+                    self.store.update_setup(setup["id"], {"trailing_stop": dynamic_trail})
+                    logger.debug("[TRAIL] %s bullish chandelier=%.2f prev=%.2f", setup["symbol"], dynamic_trail, existing_trail)
+                elif setup["direction"] == "bearish" and (existing_trail == 0 or dynamic_trail < existing_trail):
+                    self.store.update_setup(setup["id"], {"trailing_stop": dynamic_trail})
+                    logger.debug("[TRAIL] %s bearish chandelier=%.2f prev=%.2f", setup["symbol"], dynamic_trail, existing_trail)
             is_expired = status == "expired"
             lifecycle = self._build_lifecycle(setup, float(current_price or 0), expired=is_expired)
             hold_or_exit = lifecycle["hold_or_exit"]

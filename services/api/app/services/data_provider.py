@@ -9,6 +9,7 @@ import yfinance as yf
 
 from app.core.cache import TTLCache
 from app.core.settings import Settings
+from app.services.broker_adapter import get_broker_adapter
 
 
 logger = logging.getLogger(__name__)
@@ -17,8 +18,8 @@ logger = logging.getLogger(__name__)
 class MarketDataService:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.provider_name = "yfinance"
-        self.available_providers = ("yfinance", "nse_bse_future", "alpha_vantage_future", "twelve_data_future", "polygon_future", "broker_api_future")
+        self.broker = get_broker_adapter()
+        self.provider_name = self.broker.__class__.__name__.replace("Adapter", "").lower()
         self.history_cache: TTLCache[pd.DataFrame] = TTLCache(settings.history_cache_ttl_sec)
         self.quote_cache: TTLCache[Dict] = TTLCache(max(20, settings.detail_cache_ttl_sec // 2))
         self.symbol_map = {
@@ -60,7 +61,7 @@ class MarketDataService:
     def fetch_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
         clean = self.clean_symbol(symbol)
         if clean in set(self.settings.invalid_symbols):
-            logger.info("skipped invalid symbol=%s period=%s interval=%s", clean, period, interval)
+            logger.info("skipped invalid symbol=%s", clean)
             return pd.DataFrame()
         resolved = self.resolve_symbol(symbol)
         cache_key = f"{resolved}:{period}:{interval}"
@@ -68,6 +69,16 @@ class MarketDataService:
         if cached is not None:
             return cached.copy()
 
+        # Try broker adapter first (AngelOne when configured)
+        if self.broker.is_available() and self.provider_name != "yfinance":
+            frame = self.broker.fetch_history(clean, period, interval)
+            if not frame.empty:
+                normalized = self._normalize_frame(frame)
+                if not normalized.empty:
+                    self.history_cache.set(cache_key, normalized)
+                    return normalized.copy()
+
+        # Fallback: yfinance
         try:
             history = yf.Ticker(resolved).history(
                 period=period,
@@ -78,13 +89,11 @@ class MarketDataService:
         except TypeError:
             history = yf.Ticker(resolved).history(period=period, interval=interval, auto_adjust=False)
         except Exception as exc:
-            logger.warning("history fetch failed symbol=%s period=%s interval=%s error=%s", clean, period, interval, exc)
+            logger.warning("history fetch failed symbol=%s error=%s", clean, exc)
             return pd.DataFrame()
         frame = self._normalize_frame(history)
         if not frame.empty:
             self.history_cache.set(cache_key, frame)
-        else:
-            logger.info("skipped no-data symbol=%s period=%s interval=%s", clean, period, interval)
         return frame.copy()
 
     def fetch_batch_history(

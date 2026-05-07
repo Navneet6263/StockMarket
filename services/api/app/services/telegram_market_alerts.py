@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import queue
 import threading
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,52 @@ MAX_ALERTS_PER_SCAN = int(os.getenv("TELEGRAM_MARKET_ALERT_MAX_PER_SCAN", "5"))
 BUY_ZONE_TOLERANCE_PCT = float(os.getenv("TELEGRAM_BUY_ZONE_TOLERANCE_PCT", "1.0"))
 ACCUMULATION_MIN_SCORE = float(os.getenv("TELEGRAM_ACCUMULATION_MIN_SCORE", "6"))
 BREAKOUT_DISTANCE_MAX_PCT = float(os.getenv("TELEGRAM_BREAKOUT_DISTANCE_MAX_PCT", "2.5"))
+_SEND_TIMEOUT = int(os.getenv("TELEGRAM_SEND_TIMEOUT_SEC", "8"))
+_QUEUE_MAX = int(os.getenv("TELEGRAM_QUEUE_MAX", "50"))
+
+
+class _TelegramSendWorker:
+    """Background worker — scanner never blocks on Telegram sends."""
+
+    def __init__(self):
+        self._q: queue.Queue[str] = queue.Queue(maxsize=_QUEUE_MAX)
+        self._thread = threading.Thread(target=self._run, daemon=True, name="telegram-send-worker")
+        self._thread.start()
+
+    def enqueue(self, text: str) -> bool:
+        try:
+            self._q.put_nowait(text)
+            return True
+        except queue.Full:
+            return False
+
+    def _run(self):
+        while True:
+            try:
+                text = self._q.get(timeout=5)
+                self._do_send(text)
+                self._q.task_done()
+            except queue.Empty:
+                continue
+            except Exception:
+                pass
+
+    @staticmethod
+    def _do_send(text: str):
+        config = _telegram_config()
+        if not config["configured"]:
+            return
+        try:
+            requests.post(
+                f"{config['api']}/sendMessage",
+                json={"chat_id": config["chat_id"], "text": text, "parse_mode": "HTML"},
+                timeout=_SEND_TIMEOUT,
+            )
+        except Exception:
+            pass
+
+
+_send_worker = _TelegramSendWorker()
 
 
 def _default_watch_state_path() -> Path:
@@ -85,6 +132,7 @@ class TelegramMarketAlertService:
             return
 
     def _send(self, text: str) -> bool:
+        """Non-blocking send via background queue worker."""
         config = _telegram_config()
         if not self.enabled:
             self.last_status = {"ok": False, "message": "Telegram market alerts disabled."}
@@ -92,20 +140,12 @@ class TelegramMarketAlertService:
         if not config["configured"]:
             self.last_status = {"ok": False, "message": "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set."}
             return False
-        try:
-            response = requests.post(
-                f"{config['api']}/sendMessage",
-                json={"chat_id": config["chat_id"], "text": text, "parse_mode": "HTML"},
-                timeout=10,
-            )
-            if response.status_code != 200:
-                self.last_status = {"ok": False, "message": f"{response.status_code} {response.text}"}
-                return False
-            self.last_status = {"ok": True, "message": "Market alert sent", "sent_at": datetime.now(timezone.utc).isoformat()}
-            return True
-        except Exception as exc:
-            self.last_status = {"ok": False, "message": str(exc)}
-            return False
+        queued = _send_worker.enqueue(text)
+        if queued:
+            self.last_status = {"ok": True, "message": "Market alert queued", "queued_at": datetime.now(timezone.utc).isoformat()}
+        else:
+            self.last_status = {"ok": False, "message": "Send queue full — alert dropped."}
+        return queued
 
     def _entry_zone_text(self, item: dict[str, Any]) -> str:
         zone = item.get("entry_zone") or item.get("re_entry_zone") or {}
