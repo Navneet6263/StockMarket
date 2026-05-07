@@ -15,6 +15,7 @@ from app.routers import (
     stocks_router,
     tracker_router,
 )
+from app.routers.live import router as live_router
 
 
 CURRENT_DIR = os.path.dirname(__file__)
@@ -45,6 +46,7 @@ fastapi_app.include_router(stocks_router)
 fastapi_app.include_router(evaluation_router)
 fastapi_app.include_router(tracker_router)
 fastapi_app.include_router(legacy_router)
+fastapi_app.include_router(live_router)
 
 
 @fastapi_app.on_event("startup")
