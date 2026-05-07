@@ -7,7 +7,7 @@ import yfinance as yf
 from yfinance import EquityQuery
 
 from app.core.settings import Settings, get_settings
-from app.market_universe_config import UNIVERSE_CONFIG
+from app.market_universe_config import UNIVERSE_CONFIG, get_full_nse_universe
 
 
 class MarketUniverseService:
@@ -63,8 +63,9 @@ class MarketUniverseService:
             "NIFTY_100": UNIVERSE_CONFIG.nifty_100,
             "NIFTY200": UNIVERSE_CONFIG.nifty_200,
             "NIFTY_200": UNIVERSE_CONFIG.nifty_200,
-            "NIFTY500": UNIVERSE_CONFIG.nifty_500_seed,
-            "NIFTY_500": UNIVERSE_CONFIG.nifty_500_seed,
+            "NIFTY500": UNIVERSE_CONFIG.nifty_200,
+            "NIFTY_500": UNIVERSE_CONFIG.nifty_200,
+            "ALL_NSE": get_full_nse_universe(),
             "FNO": UNIVERSE_CONFIG.fno_stocks,
             "F&O": UNIVERSE_CONFIG.fno_stocks,
         }
@@ -72,6 +73,10 @@ class MarketUniverseService:
         invalid_symbols = set(self.settings.invalid_symbols)
         for group in self.settings.universe_groups:
             configured.extend(group_map.get(group.upper(), ()))
+        # If AngelOne is active and no specific group set, use full NSE
+        import os
+        if os.getenv("BROKER_PROVIDER", "yfinance").lower() == "angelone" and not configured:
+            configured = list(get_full_nse_universe())
         configured.extend(self.settings.custom_universe)
         return list(
             dict.fromkeys(

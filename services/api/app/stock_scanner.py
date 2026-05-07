@@ -23,7 +23,7 @@ REQUEST_DELAY = float(os.getenv("REQUEST_DELAY_SEC", "0.05"))
 RETRY_COUNT = int(os.getenv("SCAN_RETRY_COUNT", "2"))
 RETRY_DELAY = float(os.getenv("SCAN_RETRY_DELAY", "0.5"))
 CACHE_TTL_MIN = int(os.getenv("SCAN_CACHE_TTL_MIN", "10"))
-DEEP_SCAN_LIMIT = int(os.getenv("SCAN_DEEP_LIMIT", "200"))
+DEEP_SCAN_LIMIT = int(os.getenv("SCAN_DEEP_LIMIT", "1500"))
 PREVIEW_LIMIT = int(os.getenv("SCAN_PREVIEW_LIMIT", "10"))
 MODEL_CACHE_TTL_MIN = int(os.getenv("MODEL_CACHE_TTL_MIN", "60"))
 
