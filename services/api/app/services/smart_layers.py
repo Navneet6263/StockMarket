@@ -83,7 +83,7 @@ def enrich_signal(
         classification = "blocked_buy"
         blocked_reason = market_context.get("blockedReason", "Market breadth weak; fresh buy calls blocked.")
         action_override = "WATCH"
-    elif smart_score >= HOT_PICK_MIN and direction != "neutral" and not buy_blocked:
+    elif _is_hot_pick_candidate(signal, smart_score, buy_blocked):
         classification = "hot_pick"
         blocked_reason = None
         action_override = None
@@ -256,6 +256,34 @@ def _volume_score(signal: Dict, delivery: Dict) -> float:
     elif delivery.get("deliverySignal") == "distribution_risk":
         base = max(base - 20, 0)
     return base
+
+
+def _is_hot_pick_candidate(signal: Dict, smart_score: int, buy_blocked: bool) -> bool:
+    if buy_blocked or smart_score < HOT_PICK_MIN:
+        return False
+    if signal.get("direction") != "bullish":
+        return False
+    if (
+        signal.get("attention_only")
+        or signal.get("chase_risk")
+        or signal.get("overextended_fresh_entry")
+        or signal.get("next_day_profit_booking_risk")
+        or not signal.get("allow_buy_call", True)
+    ):
+        return False
+
+    labels = {str(label).upper() for label in signal.get("trade_labels", [])}
+    setup_stage = str(signal.get("setup_stage") or "").upper()
+    action = str(signal.get("action") or signal.get("recommended_action") or "").upper()
+    if labels.intersection({"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK", "WAIT_FOR_PULLBACK"}):
+        return False
+    if setup_stage in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}:
+        return False
+    if action in {"WAIT_FOR_PULLBACK", "AVOID", "EXIT", "SELL"}:
+        return False
+
+    risk_reward = float(signal.get("risk_reward") or 0)
+    return not risk_reward or risk_reward >= 1.2
 
 
 def _market_score(market_context: Dict, sector: Dict) -> float:

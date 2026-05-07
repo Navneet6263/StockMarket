@@ -114,10 +114,13 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
       </div>
 
       <p className="pick-reason">{pick.reason}</p>
+      {pick.tradeDecision ? <div className={`decision-strip ${pick.direction}`}>{pick.tradeDecision}</div> : null}
 
       <div className="trade-plan-grid">
         <div><span>Price</span><strong>{pick.currentPrice || "-"}</strong></div>
         <div><span>Score</span><strong>{pick.score != null ? fmt(pick.score, 0) : fmt(pick.confidence, 0)}</strong></div>
+        <div><span>Bias</span><strong>{pick.biasLabel || humanize(pick.direction)}</strong></div>
+        <div><span>Status</span><strong>{pick.entryStatus || "Watch"}</strong></div>
         <div><span>Entry</span><strong>{pick.entryZone}</strong></div>
         <div><span>Trigger</span><strong>{pick.entryTrigger || "-"}</strong></div>
         <div><span>Target Zone</span><strong>{pick.targetZone || pick.target}</strong></div>
@@ -142,31 +145,38 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
 }
 
 function BaseFormationCard({ pick }: { pick: BaseFormationPick }) {
+  const direction = pick.direction || "neutral";
   return (
     <article className="hot-pick-card base-card">
       <div className="hot-card-top">
         <div>
           <div className="symbol-line">
             <strong>{pick.symbol}</strong>
-            <span className="setup-badge bullish">{humanize(pick.stage)}</span>
+            <span className={`setup-badge ${direction}`}>{pick.biasLabel || humanize(pick.stage)}</span>
+            <span className="setup-badge">{pick.entryStatus || "Watch only"}</span>
           </div>
-          <span className="micro-copy">Early accumulation - wait for confirmation</span>
+          <span className="micro-copy">{pick.tradeDecision || "Early accumulation - wait for confirmation"}</span>
         </div>
-        <div className="confidence-ring" style={{ color: "#60a5fa" }}>{fmt(pick.accumulationScore, 0)}%</div>
+        <div className="confidence-ring" style={{ color: toneForDirection(direction) }}>{fmt(pick.accumulationScore, 0)}%</div>
       </div>
       <p className="pick-reason">{pick.whyInteresting}</p>
+      {pick.confirmationText ? <div className={`decision-strip ${direction}`}>{pick.confirmationText}</div> : null}
       <div className="trade-plan-grid">
+        <div><span>Price</span><strong>{pick.currentPrice || "-"}</strong></div>
+        <div><span>Trigger</span><strong>{pick.triggerPrice || "-"}</strong></div>
         <div><span>Range</span><strong>{pick.range}</strong></div>
-        <div><span>Breakout Level</span><strong>{pick.keyResistance}</strong></div>
+        <div><span>{direction === "bearish" ? "Resistance" : "Breakout Level"}</span><strong>{pick.keyResistance}</strong></div>
         <div><span>Support</span><strong>{pick.supportZone}</strong></div>
         <div><span>Invalidation</span><strong>{pick.invalidation}</strong></div>
+        <div><span>Trigger Rule</span><strong>{pick.breakoutTrigger}</strong></div>
+        <div><span>Target Zone</span><strong>{pick.targetZone || "-"}</strong></div>
       </div>
       <div className="risk-line">
         <span>{humanize(pick.pattern)}</span>
         <span>{humanize(pick.volumeBehavior)}</span>
       </div>
       <div className="micro-copy">
-        Trigger: {pick.breakoutTrigger} | Horizon: {humanize(pick.timeHorizon)}
+        Distance: {fmtPct(pick.distanceToTriggerPct, 2)} | Horizon: {humanize(pick.timeHorizon)}
       </div>
     </article>
   );
@@ -378,7 +388,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
       <section className="summary-strip hot-summary">
         <StatCard label="Market Mood" value={humanize(hotPicks?.marketMood || "sideways")} tone={toneForDirection(hotPicks?.marketMood === "bearish" ? "bearish" : "bullish")} />
         <StatCard label="Total Stocks Scanned" value={loading ? "..." : hotPicks?.summary.totalScanned ?? 0} />
-        <StatCard label="High Confidence" value={hotPicks?.summary.highConfidence ?? 0} tone="#34d399" />
+        <StatCard label="Fresh Buy Picks" value={hotPicks?.summary.highConfidence ?? 0} tone="#34d399" />
         <StatCard label="Breakouts" value={hotPicks?.summary.breakouts ?? 0} tone="#60a5fa" />
         <StatCard label="Bullish" value={hotPicks?.summary.bullish ?? 0} tone="#2dd4bf" />
         <StatCard label="Bearish" value={hotPicks?.summary.bearish ?? 0} tone="#fb7185" />
@@ -410,7 +420,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
             {hotPicks.hotPicks.slice(0, 5).map((pick) => <HotPickCard key={pick.symbol} pick={pick} onSelect={setSelectedSymbol} />)}
           </div>
         ) : !loading ? (
-          <EmptyState title="No high-quality Hot Picks right now" body="The scanner is intentionally hiding weak, low-volume, sideways, or unclear setups." onRetry={() => loadHotPicks(true)} />
+          <EmptyState title="No fresh buy Hot Picks right now" body="High-score stocks can still appear below as watch-only, late-entry, or bearish-risk setups." onRetry={() => loadHotPicks(true)} />
         ) : null}
       </section>
 
@@ -420,7 +430,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
             <p className="eyebrow">Base Formation / Early Movers</p>
             <h2>Silent Accumulation Detector</h2>
           </div>
-          <span className="micro-copy">Not immediate buy signals. Early accumulation - wait for confirmation.</span>
+          <span className="micro-copy">Watchlist only. Ready and near-trigger cards are sorted first; late-entry and bearish-risk cards are warnings.</span>
         </div>
         <div className="watch-pick-grid">
           {(hotPicks?.baseFormationRadar || []).map((pick) => <BaseFormationCard key={`base-${pick.symbol}`} pick={pick} />)}
@@ -447,6 +457,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
             <p className="eyebrow">Momentum Radar</p>
             <h2>Early movers and volume/momentum candidates</h2>
           </div>
+          <span className="micro-copy">High score here does not mean fresh buy. Follow Status first, then trigger and invalidation.</span>
         </div>
         <div className="watch-pick-grid">
           {(hotPicks?.momentumRadar || []).map((pick) => <HotPickCard key={`momentum-${pick.symbol}`} pick={pick} compact onSelect={setSelectedSymbol} />)}

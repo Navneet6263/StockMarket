@@ -48,9 +48,9 @@ async def market_hot_picks(
     return {
         **base,
         "marketContext": payload.get("marketContext", {}),
-        "hotPicks": payload.get("hotPicks", []),
-        "baseFormationRadar": payload.get("baseFormationRadar", []),
-        "momentumRadar": payload.get("momentumRadar", []),
+        "smartHotPicks": payload.get("hotPicks", []),
+        "smartBaseFormationRadar": payload.get("baseFormationRadar", []),
+        "smartMomentumRadar": payload.get("momentumRadar", []),
         "blockedBuys": payload.get("blockedBuys", []),
         "smartDebug": payload.get("smartDebug", {}),
     }

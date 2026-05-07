@@ -277,6 +277,10 @@ export type HotPick = {
   catalystReason?: string;
   catalystSource?: string | null;
   catalystTime?: string | null;
+  biasLabel?: string;
+  entryStatus?: string;
+  tradeDecision?: string;
+  confirmationText?: string;
   cleanRiskSetup?: boolean;
   rejectionReasons?: string[];
   softReasons?: string[];
@@ -285,13 +289,22 @@ export type HotPick = {
 
 export type BaseFormationPick = {
   symbol: string;
+  direction?: "bullish" | "bearish" | "neutral" | string;
+  currentPrice?: string;
   stage: "strong base" | "building base" | "loose consolidation" | string;
+  biasLabel?: string;
+  entryStatus?: string;
+  tradeDecision?: string;
+  confirmationText?: string;
   accumulationScore: number;
   range: string;
   keyResistance: string;
   supportZone: string;
   breakoutTrigger: string;
+  triggerPrice?: string;
   invalidation: string;
+  targetZone?: string;
+  distanceToTriggerPct?: number | null;
   volumeBehavior: string;
   pattern: string;
   whyInteresting: string;

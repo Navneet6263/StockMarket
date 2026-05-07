@@ -122,6 +122,32 @@ class TelegramMarketAlertService:
         )
         return f"near {trigger:.2f}" if trigger else "-"
 
+    def _entry_text(self, item: dict[str, Any]) -> str:
+        price = _safe_float(item.get("current_price") or item.get("price"))
+        zone = item.get("entry_zone") or item.get("re_entry_zone") or {}
+        low = _safe_float(zone.get("low"))
+        high = _safe_float(zone.get("high"))
+        trigger = self._trigger_price(item)
+
+        if low and high:
+            lower = min(low, high)
+            upper = max(low, high)
+            zone_text = f"{lower:.2f} - {upper:.2f}"
+            if price and lower <= price <= upper:
+                return f"{price:.2f} (inside zone {zone_text})"
+            if price and price < lower:
+                return f"wait for {zone_text}"
+            if trigger:
+                return f"above {trigger:.2f} or pullback to {zone_text}"
+            return zone_text
+
+        if trigger:
+            if price and price >= trigger:
+                return f"{price:.2f} if it holds above {trigger:.2f}"
+            return f"above {trigger:.2f}"
+
+        return f"{price:.2f}" if price and self._is_buy_zone(item) else "-"
+
     def _trigger_price(self, item: dict[str, Any]) -> float:
         return _safe_float(
             item.get("safe_entry_price")
@@ -132,13 +158,54 @@ class TelegramMarketAlertService:
             or item.get("resistance")
         )
 
+    def _direction(self, item: dict[str, Any]) -> str:
+        direction = str(item.get("direction") or "").lower()
+        if direction in {"bullish", "up"}:
+            return "bullish"
+        if direction in {"bearish", "down"}:
+            return "bearish"
+        return "neutral"
+
     def _fail_price(self, item: dict[str, Any]) -> float:
         return _safe_float(
             item.get("stop_loss")
             or item.get("invalidation")
+            or item.get("invalidation_level")
+            or item.get("invalidationLevel")
             or item.get("support_level")
             or item.get("support")
         )
+
+    def _trigger_distance_pct(self, item: dict[str, Any]) -> float | None:
+        sentinel = -999999.0
+        explicit = _safe_float(
+            item.get("distance_to_trigger_pct")
+            or item.get("distanceToTriggerPct")
+            or item.get("distanceToResistancePct"),
+            sentinel,
+        )
+        if explicit != sentinel:
+            return explicit
+        price = _safe_float(item.get("current_price") or item.get("price"))
+        trigger = self._trigger_price(item)
+        if not price or not trigger:
+            return None
+        if self._direction(item) == "bearish":
+            return round(((price - trigger) / price) * 100, 2)
+        return round(((trigger - price) / price) * 100, 2)
+
+    def _pattern_text(self, item: dict[str, Any]) -> str:
+        pattern = (
+            item.get("biasLabel")
+            or item.get("pattern")
+            or item.get("basePatternType")
+            or item.get("base_basePatternType")
+            or item.get("setup_type")
+            or item.get("breakout_readiness_label")
+            or item.get("setup_label")
+        )
+        text = str(pattern or "").strip().replace("_", " ")
+        return text if text else "pattern not classified"
 
     def _is_buy_zone(self, item: dict[str, Any]) -> bool:
         if (item.get("direction") or "").lower() not in {"bullish", "up"}:
@@ -164,13 +231,43 @@ class TelegramMarketAlertService:
             return distance_pct <= BUY_ZONE_TOLERANCE_PCT
         return False
 
+    def _is_fresh_hot_pick(self, item: dict[str, Any]) -> bool:
+        if (item.get("direction") or "").lower() != "bullish":
+            return False
+
+        labels = {str(label).upper() for label in item.get("trade_labels", [])}
+        setup_stage = str(item.get("setup_stage") or "").upper()
+        action = str(item.get("action") or item.get("effectiveAction") or item.get("recommended_action") or "").upper()
+        if (
+            item.get("attention_only")
+            or item.get("chase_risk")
+            or item.get("overextended_fresh_entry")
+            or item.get("next_day_profit_booking_risk")
+            or labels.intersection({"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK", "WAIT_FOR_PULLBACK"})
+            or setup_stage in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
+            or action in {"WAIT_FOR_PULLBACK", "AVOID", "EXIT", "SELL"}
+        ):
+            return False
+
+        rr = _safe_float(item.get("risk_reward") or item.get("rr"))
+        if rr and rr < 1.2:
+            return False
+
+        return self._is_buy_zone(item) or bool(self._trigger_price(item))
+
     def _trade_instruction(self, category: str, item: dict[str, Any]) -> str:
+        if item.get("tradeDecision"):
+            return str(item["tradeDecision"])
+
         price = _safe_float(item.get("current_price") or item.get("price"))
         trigger = self._trigger_price(item)
         fail = self._fail_price(item)
         in_zone = self._is_buy_zone(item)
+        direction = self._direction(item)
 
         if category == "SILENT ACCUMULATION":
+            if direction == "bearish":
+                return f"BEARISH WATCH: avoid fresh long. Weakness confirms below {trigger:.2f}." if trigger else "BEARISH WATCH: avoid fresh long until structure improves."
             if fail and price and price <= fail:
                 return "FAILED: price broke the fail level. Do not enter."
             if trigger and price and price >= trigger:
@@ -190,21 +287,34 @@ class TelegramMarketAlertService:
     def _format_alert(self, category: str, item: dict[str, Any]) -> str:
         symbol = self._safe(item.get("symbol"))
         price = _safe_float(item.get("current_price") or item.get("price"))
-        confidence = _safe_float(item.get("smartScore") or item.get("confidence") or item.get("breakout_readiness_score"))
+        confidence = _safe_float(
+            item.get("smartScore")
+            or item.get("confidence")
+            or item.get("breakout_readiness_score")
+            or item.get("accumulationScore")
+            or item.get("baseQualityScore")
+            or item.get("base_baseQualityScore")
+        )
         volume = _safe_float(item.get("relative_volume") or item.get("volume_ratio") or item.get("intraday_volume_ratio"), 1.0)
         rr = _safe_float(item.get("risk_reward") or item.get("rr"))
         trigger = self._trigger_price(item)
         stop = self._fail_price(item)
         t1 = _safe_float(item.get("target_1") or item.get("target_price") or item.get("target"))
+        distance = self._trigger_distance_pct(item)
         reasons = item.get("reasons") or []
         if isinstance(item.get("reason"), str):
             reasons = [item["reason"]]
+        if isinstance(item.get("whyInteresting"), str):
+            reasons = [item["whyInteresting"], *reasons]
 
         lines = [
             f"<b>{symbol} | {self._safe(category)}</b>",
             "------------------------------",
             f"Action: <b>{self._safe(self._trade_instruction(category, item))}</b>",
+            f"Bias: <b>{self._safe(self._pattern_text(item))}</b>",
+            f"Status: <b>{self._safe(item.get('entryStatus') or item.get('recommended_action') or item.get('action') or 'WATCH')}</b>",
             f"Price: <code>{price:.2f}</code>" if price else "Price: -",
+            f"Entry: <code>{self._safe(self._entry_text(item))}</code>",
             f"Entry zone: <code>{self._safe(self._entry_zone_text(item))}</code>",
             f"Buy above: <code>{trigger:.2f}</code>" if trigger else "Buy above: -",
             f"SL: <code>{stop:.2f}</code>" if stop else "SL: -",
@@ -214,6 +324,7 @@ class TelegramMarketAlertService:
             f"Score: {confidence:.1f}" if confidence else "Score: -",
             f"Volume: {volume:.2f}x",
             f"RR: 1:{rr:.2f}" if rr else "RR: -",
+            f"Distance to trigger: {distance:.2f}%" if distance is not None else "Distance to trigger: -",
         ]
         if item.get("breakout_readiness_label"):
             lines.append(f"Setup: {self._safe(item.get('breakout_readiness_label'))}")
@@ -349,8 +460,8 @@ class TelegramMarketAlertService:
         candidates: list[tuple[int, str, dict[str, Any]]] = []
         seen: set[str] = set()
 
-        for item in payload.get("hotPicks") or payload.get("top_opportunities") or []:
-            if (item.get("direction") or "").lower() == "bullish":
+        for item in [*(payload.get("hotPicks") or []), *(payload.get("top_opportunities") or [])]:
+            if self._is_fresh_hot_pick(item):
                 self._add_candidate(candidates, seen, 100, "HOT PICK", item)
 
         for item in payload.get("top_opportunities") or []:
@@ -358,8 +469,16 @@ class TelegramMarketAlertService:
                 self._add_candidate(candidates, seen, 95, "BUY ZONE", item)
 
         for item in [*(payload.get("breakout_radar") or []), *(payload.get("baseFormationRadar") or [])]:
-            accumulation = _safe_float(item.get("accumulation_score") or item.get("accumulationScore"))
-            distance = _safe_float(item.get("distance_to_trigger_pct") or item.get("distanceToResistancePct"), 99.0)
+            accumulation = _safe_float(
+                item.get("accumulation_score")
+                or item.get("accumulationScore")
+                or item.get("baseQualityScore")
+                or item.get("base_baseQualityScore")
+                or item.get("breakout_readiness_score")
+            )
+            distance = self._trigger_distance_pct(item)
+            if distance is None:
+                distance = 99.0
             if accumulation >= ACCUMULATION_MIN_SCORE and distance <= BREAKOUT_DISTANCE_MAX_PCT:
                 self._add_candidate(candidates, seen, 85, "SILENT ACCUMULATION", item)
 

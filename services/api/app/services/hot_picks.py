@@ -32,11 +32,165 @@ def _fmt_zone(low: Any, high: Any) -> str:
     return "-"
 
 
+def _display_label(value: Any, fallback: str = "watch") -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"unknown", "unavailable", "none", "nan"}:
+        return fallback
+    return text.replace("_", " ")
+
+
+def _direction(signal: dict[str, Any]) -> str:
+    direction = str(signal.get("direction") or "neutral").lower()
+    if direction in {"up", "bullish"}:
+        return "bullish"
+    if direction in {"down", "bearish"}:
+        return "bearish"
+    return "neutral"
+
+
+def _signal_trigger(signal: dict[str, Any]) -> float:
+    return _safe_float(
+        signal.get("safe_entry_price")
+        or signal.get("entry_trigger")
+        or signal.get("trigger_price")
+        or signal.get("alert_above_price")
+        or signal.get("alert_price")
+        or signal.get("breakoutTrigger")
+        or signal.get("breakout_level")
+        or signal.get("resistance_level")
+        or signal.get("resistance")
+    )
+
+
+def _signal_fail_level(signal: dict[str, Any]) -> float:
+    return _safe_float(
+        signal.get("stop_loss")
+        or signal.get("invalidation")
+        or signal.get("invalidation_level")
+        or signal.get("invalidationLevel")
+        or signal.get("support")
+        or signal.get("support_level")
+    )
+
+
+def _action_value(signal: dict[str, Any]) -> str:
+    return str(
+        signal.get("effectiveAction")
+        or signal.get("actionOverride")
+        or signal.get("recommended_action")
+        or signal.get("action")
+        or ""
+    ).upper()
+
+
+def _has_late_entry_risk(signal: dict[str, Any]) -> bool:
+    labels = {str(label).upper() for label in signal.get("trade_labels", [])}
+    setup_stage = str(signal.get("setup_stage") or "").upper()
+    action = _action_value(signal)
+    return bool(
+        signal.get("chase_risk")
+        or signal.get("overextended_fresh_entry")
+        or signal.get("next_day_profit_booking_risk")
+        or labels.intersection({"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK", "WAIT_FOR_PULLBACK"})
+        or setup_stage in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
+        or action in {"WAIT_FOR_PULLBACK", "AVOID", "EXIT", "SELL"}
+    )
+
+
+def _is_watch_only(signal: dict[str, Any]) -> bool:
+    action = _action_value(signal)
+    return bool(
+        signal.get("attention_only")
+        or signal.get("is_pre_breakout")
+        or action in {"WATCH", "ALERT", "ALERT_ABOVE_LEVEL", "WAIT_FOR_CONFIRMATION"}
+    )
+
+
+def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: float | None = None) -> dict[str, str]:
+    direction = _direction(signal)
+    price = _safe_float(signal.get("current_price") or signal.get("price"))
+    trigger = _safe_float(trigger) or _signal_trigger(signal)
+    fail = _safe_float(fail) or _signal_fail_level(signal)
+    action = _action_value(signal)
+    distance_pct = ((trigger - price) / price) * 100 if price and trigger else None
+
+    trigger_text = _fmt_price(trigger)
+    fail_text = _fmt_price(fail)
+
+    if direction == "bearish":
+        if trigger:
+            return {
+                "biasLabel": "Bearish pattern",
+                "entryStatus": "Avoid fresh long",
+                "tradeDecision": f"Bearish risk. Avoid fresh long; downside confirms below {trigger_text}.",
+                "confirmationText": f"Bearish view is active only below {trigger_text}. Invalid above {fail_text}.",
+            }
+        return {
+            "biasLabel": "Bearish pattern",
+            "entryStatus": "Avoid fresh long",
+            "tradeDecision": "Bearish risk, but confirmation level is not clean.",
+            "confirmationText": "Wait for a clean breakdown level before taking action.",
+        }
+
+    if direction != "bullish":
+        return {
+            "biasLabel": "Neutral range",
+            "entryStatus": "No trade",
+            "tradeDecision": "No fresh entry. Direction is not confirmed yet.",
+            "confirmationText": "Wait for price to break the range before deciding up or down.",
+        }
+
+    if _has_late_entry_risk(signal):
+        return {
+            "biasLabel": "Bullish late-entry risk",
+            "entryStatus": "Wait for pullback",
+            "tradeDecision": "Late entry risk. Do not chase; wait for pullback, fresh base, or trigger retest.",
+            "confirmationText": f"Only reconsider on pullback/retest or a strong hold above {trigger_text}. Risk below {fail_text}.",
+        }
+
+    if action in {"BUY", "REENTRY_BUY"} or (price and trigger and price >= trigger):
+        return {
+            "biasLabel": "Bullish trigger active",
+            "entryStatus": "Ready above trigger",
+            "tradeDecision": f"Trigger active. Entry only if price sustains above {trigger_text}; risk below {fail_text}.",
+            "confirmationText": f"Breakout/re-entry is active above {trigger_text}. Failed below {fail_text}.",
+        }
+
+    if trigger:
+        if distance_pct is not None and 0 <= distance_pct <= 1.0:
+            return {
+                "biasLabel": "Bullish near trigger",
+                "entryStatus": "Alert above trigger",
+                "tradeDecision": f"Near trigger. No buy until price breaks above {trigger_text} with volume.",
+                "confirmationText": f"Upside confirms above {trigger_text}. Failed below {fail_text}.",
+            }
+        if _is_watch_only(signal):
+            return {
+                "biasLabel": "Bullish setup forming",
+                "entryStatus": "Watch only",
+                "tradeDecision": f"Setup forming. Set alert above {trigger_text}; no entry before confirmation.",
+                "confirmationText": f"Upside confirms above {trigger_text}. Failed below {fail_text}.",
+            }
+        return {
+            "biasLabel": "Bullish setup forming",
+            "entryStatus": "Watch only",
+            "tradeDecision": f"No buy yet. Buy only above {trigger_text} with volume confirmation.",
+            "confirmationText": f"Upside confirms above {trigger_text}. Failed below {fail_text}.",
+        }
+
+    return {
+        "biasLabel": "Bullish watch",
+        "entryStatus": "Wait",
+        "tradeDecision": "Bullish evidence exists, but trigger is not clean yet.",
+        "confirmationText": "Wait for scanner to provide a clean entry trigger and invalidation.",
+    }
+
+
 def _entry_zone(signal: dict[str, Any]) -> str:
     zone = signal.get("entry_zone") or {}
     low = _safe_float(zone.get("low"))
     high = _safe_float(zone.get("high"))
-    trigger = _safe_float(signal.get("safe_entry_price") or signal.get("entry_trigger") or signal.get("current_price"))
+    trigger = _signal_trigger(signal) or _safe_float(signal.get("current_price"))
     if low and high:
         return _fmt_zone(low, high)
     if trigger:
@@ -45,6 +199,8 @@ def _entry_zone(signal: dict[str, Any]) -> str:
 
 
 def _setup_type(signal: dict[str, Any]) -> str:
+    if signal.get("setup_type"):
+        return _display_label(signal.get("setup_type"), "momentum candidate")
     if signal.get("is_momentum_continuation"):
         return "momentum continuation"
     if signal.get("is_pre_breakout"):
@@ -90,11 +246,11 @@ def _chart_features(signal: dict[str, Any]) -> dict[str, Any]:
     features = signal.get("chart_features") or {}
     tags = set(signal.get("tags") or [])
     labels = set(signal.get("pattern_labels") or [])
-    relative_volume = _safe_float(signal.get("relative_volume"), 1.0)
+    relative_volume = _safe_float(signal.get("relative_volume") or signal.get("volume_ratio"), 1.0)
     intraday_volume = _safe_float(signal.get("intraday_volume_ratio"), 1.0)
     rsi = _safe_float(signal.get("rsi"), 50.0)
-    stop = _safe_float(signal.get("stop_loss") or signal.get("invalidation") or signal.get("invalidation_level"))
-    price = _safe_float(signal.get("current_price"))
+    stop = _signal_fail_level(signal)
+    price = _safe_float(signal.get("current_price") or signal.get("price"))
     distance_from_stop = features.get("distance_from_stop_pct")
     if distance_from_stop is None and price and stop:
         distance_from_stop = round((abs(price - stop) / price) * 100, 2)
@@ -123,14 +279,14 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
     """100-point practical discovery score derived from available scanner evidence."""
     tags = set(signal.get("tags") or [])
     labels = set(signal.get("pattern_labels") or [])
-    direction = signal.get("direction") or "neutral"
-    relative_volume = _safe_float(signal.get("relative_volume"), 1.0)
+    direction = _direction(signal)
+    relative_volume = _safe_float(signal.get("relative_volume") or signal.get("volume_ratio"), 1.0)
     intraday_volume = _safe_float(signal.get("intraday_volume_ratio"), 1.0)
     volume = _safe_float(signal.get("volume"))
     rsi = _safe_float(signal.get("rsi"), 50.0)
     risk_reward = _safe_float(signal.get("risk_reward"))
-    invalidation = _safe_float(signal.get("invalidation") or signal.get("stop_loss") or signal.get("invalidation_level"))
-    price = _safe_float(signal.get("current_price"))
+    invalidation = _signal_fail_level(signal)
+    price = _safe_float(signal.get("current_price") or signal.get("price"))
     confidence = _safe_float(signal.get("confidence"))
     move_quality = _safe_float(signal.get("move_quality"))
     relative_strength = _safe_float(signal.get("benchmark_relative_strength"))
@@ -238,18 +394,29 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
 
 
 def _prediction_wording(signal: dict[str, Any], score: float) -> str:
-    direction = signal.get("direction", "neutral")
-    trigger = signal.get("alert_above_price") or signal.get("alert_price") or signal.get("entry_trigger") or signal.get("resistance")
-    invalidation = signal.get("invalidation") or signal.get("stop_loss") or signal.get("support")
-    if score >= 75:
+    direction = _direction(signal)
+    trigger = _signal_trigger(signal)
+    invalidation = _signal_fail_level(signal)
+    if _has_late_entry_risk(signal):
+        prefix = "High score watch, but late-entry risk" if score >= 75 else "Watchlist setup with late-entry risk"
+    elif _is_watch_only(signal) and direction == "bullish":
+        prefix = "Pre-breakout watch setup" if score >= 60 else "Early bullish watch setup"
+    elif score >= 75:
         prefix = "High probability setup"
     elif score >= 60:
         prefix = "Watchlist setup"
     else:
         prefix = "Momentum candidate"
-    action = "May move if breakout sustains" if direction == "bullish" else "May move lower if weakness sustains" if direction == "bearish" else "Needs confirmation"
-    trigger_text = f" Watch above {_fmt_price(trigger)}." if trigger else ""
-    invalid_text = f" Invalid below {_fmt_price(invalidation)}." if invalidation else " Invalidation level unavailable."
+
+    if _has_late_entry_risk(signal):
+        action = "Avoid chasing; wait for pullback or retest"
+    elif _is_watch_only(signal) and direction == "bullish":
+        action = "No buy until trigger confirms"
+    else:
+        action = "May move if breakout sustains" if direction == "bullish" else "May move lower if weakness sustains" if direction == "bearish" else "Needs confirmation"
+
+    trigger_text = f" Watch above {_fmt_price(trigger)}." if trigger and direction != "bearish" else f" Watch below {_fmt_price(trigger)}." if trigger else ""
+    invalid_text = f" Invalid near {_fmt_price(invalidation)}." if invalidation else " Invalidation level unavailable."
     return f"{prefix}. {action}.{trigger_text}{invalid_text}"
 
 
@@ -258,6 +425,10 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
     catalyst = scored["catalyst"]
     chart = scored["chart"]
     score = scored["score"]
+    direction = _direction(signal)
+    trigger = _signal_trigger(signal)
+    stop = _signal_fail_level(signal)
+    guidance = _guidance(signal, trigger=trigger, fail=stop)
     reason_parts = [
         _prediction_wording(signal, score),
         signal.get("pattern_reason") or signal.get("pre_breakout_reason") or signal.get("continuation_reason") or signal.get("signal_summary"),
@@ -267,17 +438,16 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
     reason = " ".join(part for part in reason_parts if part) or "Scanner found aligned technical evidence."
     risk_items = signal.get("risk_factors") or []
     target = signal.get("new_target") or signal.get("target_1") or signal.get("target_price")
-    stop = signal.get("stop_loss") or signal.get("invalidation") or signal.get("invalidation_level")
     return {
         "symbol": signal.get("symbol"),
-        "currentPrice": _fmt_price(signal.get("current_price")),
+        "currentPrice": _fmt_price(signal.get("current_price") or signal.get("price")),
         "setupType": _setup_type(signal),
-        "direction": signal.get("direction", "neutral"),
+        "direction": direction,
         "confidence": score,
         "score": score,
         "scoreBreakdown": scored["breakdown"],
         "entryZone": _entry_zone(signal),
-        "entryTrigger": _fmt_price(signal.get("safe_entry_price") or signal.get("entry_trigger") or signal.get("alert_above_price") or signal.get("resistance")),
+        "entryTrigger": _fmt_price(trigger),
         "target": _fmt_price(target),
         "targetZone": _fmt_price(target),
         "stoploss": _fmt_price(stop),
@@ -289,6 +459,7 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "timeHorizon": signal.get("timeframe_label") or "swing",
         "lastUpdated": last_updated,
         **catalyst,
+        **guidance,
         "chart": chart,
         "cleanRiskSetup": scored["cleanRiskSetup"],
         "raw": signal,
@@ -297,32 +468,78 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
     }
 
 
+def _raw_base_range(signal: dict[str, Any]) -> tuple[float, float, float]:
+    raw = signal.get("baseRange") or signal.get("base_baseRange") or {}
+    if not isinstance(raw, dict):
+        return 0.0, 0.0, 0.0
+    low = _safe_float(raw.get("low"))
+    high = _safe_float(raw.get("high"))
+    range_pct = _safe_float(raw.get("rangePct"))
+    return low, high, range_pct
+
+
+def _base_bias(signal: dict[str, Any], labels: set[str], tags: set[str]) -> str:
+    direction = _direction(signal)
+    if direction != "neutral":
+        return direction
+    bullish_evidence = {"accumulation", "higher_lows", "support_respect", "resistance_pressure", "ema_hold", "trend_up"}
+    bearish_evidence = {"distribution", "trend_down", "breakdown"}
+    if labels.intersection(bullish_evidence) or tags.intersection(bullish_evidence):
+        return "bullish"
+    if labels.intersection(bearish_evidence) or tags.intersection(bearish_evidence):
+        return "bearish"
+    return "neutral"
+
+
 def _base_formation(signal: dict[str, Any], last_updated: str) -> dict[str, Any] | None:
     chart = _chart_features(signal)
-    price = _safe_float(signal.get("current_price"))
-    support = _safe_float(signal.get("support") or signal.get("invalidation"))
-    resistance = _safe_float(signal.get("resistance") or signal.get("breakout_level"))
+    price = _safe_float(signal.get("current_price") or signal.get("price"))
+    base_low, base_high, base_range_pct = _raw_base_range(signal)
+    support = _safe_float(
+        signal.get("support")
+        or signal.get("support_level")
+        or base_low
+        or signal.get("invalidation")
+        or signal.get("invalidation_level")
+        or signal.get("invalidationLevel")
+        or signal.get("base_invalidationLevel")
+    )
+    resistance = _safe_float(
+        signal.get("resistance")
+        or signal.get("resistance_level")
+        or signal.get("breakout_level")
+        or base_high
+        or signal.get("breakoutTrigger")
+        or signal.get("base_breakoutTrigger")
+    )
     if not price or not support or not resistance or support >= resistance:
         return None
 
-    tight = _safe_float(chart.get("tightConsolidationPct"), 99.0)
+    base_labels = {str(label).lower() for label in (signal.get("baseLabels") or signal.get("base_baseLabels") or [])}
+    labels = {str(label).lower() for label in (signal.get("pattern_labels") or [])} | base_labels
+    tags = {str(tag).lower() for tag in (signal.get("tags") or [])}
+    base_direction = _base_bias(signal, labels, tags)
+
+    tight_source = chart.get("tightConsolidationPct")
+    if tight_source is None and base_range_pct:
+        tight_source = base_range_pct
+    tight = _safe_float(tight_source, 99.0)
     atr_expansion = _safe_float(chart.get("atrExpansion"), 1.0)
     bb_width = _safe_float(chart.get("bbWidthRatio"), 1.0)
     distance_to_resistance = _safe_float(chart.get("distanceToResistancePct"), 99.0)
     distance_to_support = _safe_float(chart.get("distanceToSupportPct"), 99.0)
-    relative_volume = _safe_float(signal.get("relative_volume"), 1.0)
+    relative_volume = _safe_float(signal.get("relative_volume") or signal.get("volume_ratio"), 1.0)
     intraday_volume = _safe_float(signal.get("intraday_volume_ratio"), 1.0)
-    tags = set(signal.get("tags") or [])
-    labels = set(signal.get("pattern_labels") or [])
+    delivery_signal = str(signal.get("deliverySignal") or signal.get("delivery_deliverySignal") or "").lower()
 
     range_pct = ((resistance - support) / price) * 100
     range_score = 20 if tight <= 4 or range_pct <= 6 else 14 if tight <= 7 or range_pct <= 9 else 8
-    support_score = 15 if chart["pullbackToSupport"] or distance_to_support <= 2.0 else 10 if support < price else 5
-    resistance_score = 15 if distance_to_resistance <= 2.0 or chart["nearBreakout"] else 10 if distance_to_resistance <= 4.0 else 5
+    support_score = 15 if chart["pullbackToSupport"] or distance_to_support <= 2.0 or "support_respect" in labels else 10 if support < price else 5
+    resistance_score = 15 if distance_to_resistance <= 2.0 or chart["nearBreakout"] or "resistance_pressure" in labels else 10 if distance_to_resistance <= 4.0 else 5
     volume_score = 0
-    if chart["volumeDryup"]:
+    if chart["volumeDryup"] or "volume_dryup" in labels:
         volume_score += 10
-    if relative_volume >= 1.3 or intraday_volume >= 1.25 or "accumulation" in tags:
+    if relative_volume >= 1.3 or intraday_volume >= 1.25 or "accumulation" in tags or "accumulation" in labels or delivery_signal == "accumulation":
         volume_score += 10
     elif relative_volume <= 1.0:
         volume_score += 5
@@ -331,30 +548,100 @@ def _base_formation(signal: dict[str, Any], last_updated: str) -> dict[str, Any]
         trend_score += 8
     if "trend_up" in tags or "ema_hold" in labels:
         trend_score += 7
-    squeeze_score = 15 if chart["bbSqueeze"] or bb_width <= 0.85 or atr_expansion <= 0.9 else 8 if atr_expansion <= 1.05 else 0
-    score = round(min(100, range_score + support_score + resistance_score + min(20, volume_score) + min(15, trend_score) + squeeze_score), 1)
-    if score < 50:
+    squeeze_score = 15 if chart["bbSqueeze"] or bb_width <= 0.85 or atr_expansion <= 0.9 or "vcp_contraction" in labels else 8 if atr_expansion <= 1.05 else 0
+    computed_score = round(min(100, range_score + support_score + resistance_score + min(20, volume_score) + min(15, trend_score) + squeeze_score), 1)
+    source_score = _safe_float(signal.get("baseQualityScore") or signal.get("base_baseQualityScore"))
+    score = round(max(computed_score, source_score), 1)
+    if score < 50 or signal.get("symbol") is None:
         return None
-    if signal.get("symbol") is None:
-        return None
-    stage = "strong base" if score >= 75 else "building base" if score >= 60 else "loose consolidation"
-    pattern = "higher lows" if chart["higherLows"] else "tight range" if tight <= 6 or range_pct <= 8 else "flat base"
-    volume_behavior = "drying up with spike observed" if chart["volumeDryup"] and (relative_volume >= 1.3 or intraday_volume >= 1.25) else "drying up" if chart["volumeDryup"] else "spike observed" if relative_volume >= 1.3 or intraday_volume >= 1.25 else "normal"
+
+    breakout_trigger = _safe_float(
+        signal.get("alert_above_price")
+        or signal.get("alert_price")
+        or signal.get("breakoutTrigger")
+        or signal.get("base_breakoutTrigger")
+        or signal.get("entry_trigger")
+    )
+    invalidation_level = _safe_float(
+        signal.get("invalidation")
+        or signal.get("invalidation_level")
+        or signal.get("invalidationLevel")
+        or signal.get("base_invalidationLevel")
+    )
+    if base_direction == "bearish":
+        trade_trigger = _safe_float(signal.get("entry_trigger")) or round(support * 0.998, 2)
+        fail_level = invalidation_level or round(resistance * 1.01, 2)
+        trigger_text = f"below {_fmt_price(trade_trigger)} with volume"
+        invalidation_text = f"above {_fmt_price(fail_level)}"
+        distance_to_trigger = ((price - trade_trigger) / price) * 100 if price and trade_trigger else None
+    else:
+        trade_trigger = breakout_trigger or round(resistance * 1.002, 2)
+        fail_level = invalidation_level or round(support * 0.99, 2)
+        trigger_text = f"above {_fmt_price(trade_trigger)} with volume"
+        invalidation_text = f"below {_fmt_price(fail_level)}"
+        distance_to_trigger = ((trade_trigger - price) / price) * 100 if price and trade_trigger else None
+
+    guidance = _guidance({**signal, "direction": base_direction}, trigger=trade_trigger, fail=fail_level)
+    strength = "strong base" if score >= 75 else "building base" if score >= 60 else "loose consolidation"
+    if base_direction in {"bullish", "bearish"}:
+        stage = f"{strength} - {base_direction}"
+    else:
+        stage = strength
+    raw_pattern = signal.get("basePatternType") or signal.get("base_basePatternType") or signal.get("setup_type")
+    fallback_pattern = "higher lows" if chart["higherLows"] or "higher_lows" in labels else "tight range" if tight <= 6 or range_pct <= 8 else "flat base"
+    pattern = _display_label(raw_pattern, fallback_pattern)
+    if pattern == "no clear base":
+        pattern = fallback_pattern
+
+    if delivery_signal == "accumulation":
+        volume_behavior = "delivery accumulation"
+    elif (chart["volumeDryup"] or "volume_dryup" in labels) and (relative_volume >= 1.3 or intraday_volume >= 1.25):
+        volume_behavior = "dry-up then volume spike"
+    elif chart["volumeDryup"] or "volume_dryup" in labels:
+        volume_behavior = "volume dry-up"
+    elif relative_volume >= 1.3 or intraday_volume >= 1.25:
+        volume_behavior = "volume spike"
+    else:
+        volume_behavior = "quiet volume"
+
+    base_reason = (
+        signal.get("baseReason")
+        or signal.get("base_baseReason")
+        or signal.get("pattern_reason")
+        or signal.get("pre_breakout_reason")
+        or "Base is forming through consolidation, support respect, and improving structure."
+    )
+    range_width = max(resistance - support, 0)
+    target_level = 0.0
+    if base_direction == "bullish" and trade_trigger and range_width:
+        target_level = trade_trigger + range_width * 0.75
+    elif base_direction == "bearish" and trade_trigger and range_width:
+        target_level = max(0, trade_trigger - range_width * 0.75)
+
     return {
         "symbol": signal.get("symbol"),
+        "direction": base_direction,
+        "currentPrice": _fmt_price(price),
         "stage": stage,
+        "biasLabel": guidance["biasLabel"],
+        "entryStatus": guidance["entryStatus"],
+        "tradeDecision": guidance["tradeDecision"],
+        "confirmationText": guidance["confirmationText"],
         "accumulationScore": score,
         "range": _fmt_zone(support, resistance),
         "keyResistance": _fmt_price(resistance),
         "supportZone": _fmt_price(support),
-        "breakoutTrigger": f"above {_fmt_price(resistance)} with volume",
-        "invalidation": f"below {_fmt_price(support)}",
+        "breakoutTrigger": trigger_text,
+        "triggerPrice": _fmt_price(trade_trigger),
+        "invalidation": invalidation_text,
+        "targetZone": _fmt_price(target_level),
         "volumeBehavior": volume_behavior,
         "pattern": pattern,
-        "whyInteresting": "Early accumulation - wait for confirmation. Base is forming through consolidation, support respect, and improving structure.",
+        "whyInteresting": f"{guidance['biasLabel']}. {base_reason}"[:420],
         "risk": signal.get("risk_level", "medium"),
-        "timeHorizon": "positional" if score >= 75 else "swing",
+        "timeHorizon": signal.get("pre_breakout_timeframe") or signal.get("timeframe_label") or ("positional" if score >= 75 else "swing"),
         "lastUpdated": last_updated,
+        "distanceToTriggerPct": round(distance_to_trigger, 2) if distance_to_trigger is not None else None,
         "debug": {
             "avgRangePct": round(range_pct, 2),
             "resistanceTouches": 1 if distance_to_resistance <= 2 else 0,
@@ -376,6 +663,9 @@ def _all_signals(scan: dict[str, Any]) -> list[dict[str, Any]]:
         *(scan.get("momentum_continuation") or []),
         *(scan.get("retest_entry") or []),
         *(scan.get("avoid_late_entry") or []),
+        *(scan.get("breakout_radar") or []),
+        *(scan.get("baseFormationRadar") or []),
+        *(scan.get("momentumRadar") or []),
     ]
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
@@ -429,7 +719,24 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         base = _base_formation(signal, last_updated)
         if base:
             base_items.append(base)
-    base_items.sort(key=lambda item: item["accumulationScore"], reverse=True)
+    def base_sort_key(item: dict[str, Any]) -> tuple[int, float]:
+        status = str(item.get("entryStatus") or "")
+        direction = item.get("direction")
+        if direction == "bullish" and status == "Ready above trigger":
+            priority = 50
+        elif direction == "bullish" and status == "Alert above trigger":
+            priority = 40
+        elif direction == "bullish" and status == "Watch only":
+            priority = 30
+        elif direction == "bullish" and status == "Wait for pullback":
+            priority = 20
+        elif direction == "bearish":
+            priority = 10
+        else:
+            priority = 0
+        return priority, _safe_float(item.get("accumulationScore"))
+
+    base_items.sort(key=base_sort_key, reverse=True)
 
     reason_counts = Counter()
     for item in mapped:
@@ -484,7 +791,7 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         "isStale": scan.get("cache_status") in {"stale", "refresh_failed_stale", "tracked_fallback", "refresh_in_progress"},
         "summary": {
             "totalScanned": debug["totalScanned"],
-            "highConfidence": len([item for item in eligible if item["score"] >= 75]),
+            "highConfidence": len(hot),
             "bullish": breadth.get("bullish_setups", 0),
             "bearish": breadth.get("bearish_setups", 0),
             "breakouts": summary.get("breakout_count", 0),
