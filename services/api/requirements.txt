@@ -12,3 +12,7 @@ joblib
 nsepython
 xgboost
 python-telegram-bot
+smartapi-python==1.5.5
+pyotp==2.9.0
+logzero==1.7.0
+websocket-client==1.9.0

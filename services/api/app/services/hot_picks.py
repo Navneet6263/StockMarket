@@ -296,6 +296,15 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
     setup = 0.0
     if chart["breakoutConfirmed"] or "breakdown" in tags:
         setup += 13
+    
+    # Identify high-probability VCP base building (Extreme contraction + volume dry up near resistance)
+    tight_pct = _safe_float(chart.get("tightConsolidationPct"), 99.0)
+    dist_res = _safe_float(chart.get("distanceToResistancePct"), 99.0)
+    if tight_pct <= 4.5 and dist_res <= 2.5 and (relative_volume <= 0.65 or chart["volumeDryup"]):
+        setup += 22  # Massive boost for "about to break out" setups
+    elif tight_pct <= 6.0 and dist_res <= 4.0:
+        setup += 12
+
     if chart["nearBreakout"] or signal.get("is_pre_breakout"):
         setup += 7
     if chart["pullbackToSupport"]:
