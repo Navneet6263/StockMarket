@@ -673,14 +673,24 @@ export function toneForTrackingLabel(label?: string) {
 }
 
 /** Safe toFixed — returns fallback string when value is null/undefined/NaN */
-export function fmt(value: number | null | undefined, decimals = 2, fallback = "-"): string {
-  if (value === null || value === undefined || !isFinite(value)) return fallback;
-  return Number(value).toFixed(decimals);
+export function asNumber(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const match = value.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function fmt(value: number | string | null | undefined, decimals = 2, fallback = "-"): string {
+  const parsed = asNumber(value);
+  if (parsed === null) return fallback;
+  return parsed.toFixed(decimals);
 }
 
 /** Safe percentage formatter with sign */
-export function fmtPct(value: number | null | undefined, decimals = 2, fallback = "-"): string {
-  if (value === null || value === undefined || !isFinite(value)) return fallback;
-  const n = Number(value);
+export function fmtPct(value: number | string | null | undefined, decimals = 2, fallback = "-"): string {
+  const n = asNumber(value);
+  if (n === null) return fallback;
   return `${n >= 0 ? "+" : ""}${n.toFixed(decimals)}%`;
 }

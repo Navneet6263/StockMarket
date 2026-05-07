@@ -40,8 +40,8 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
     );
   }
 
-  const change = item.change_pct ?? item.changePct ?? 0;
-  const price = item.currentPrice ?? item.current_price ?? item.price ?? 0;
+  const change = item.change_pct ?? item.changePct ?? item.raw?.change_pct ?? 0;
+  const price = item.currentPrice ?? item.current_price ?? item.price ?? item.raw?.current_price ?? item.raw?.price ?? 0;
   const action = item.action ?? item.effectiveAction ?? item.display_action ?? item.recommended_action ?? "WATCH";
   const actionClass = action === "BUY" || action === "REENTRY_BUY" ? "buy" : action === "SELL" ? "sell" : "watch";
   const direction = item.direction || "neutral";

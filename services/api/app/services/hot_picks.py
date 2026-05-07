@@ -465,9 +465,15 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
     reason = " ".join(part for part in reason_parts if part) or "Scanner found aligned technical evidence."
     risk_items = signal.get("risk_factors") or []
     target = signal.get("new_target") or signal.get("target_1") or signal.get("target_price")
+    price_value = _safe_float(signal.get("current_price") or signal.get("price"))
     return {
         "symbol": signal.get("symbol"),
         "currentPrice": _fmt_price(signal.get("current_price") or signal.get("price")),
+        "current_price": round(price_value, 2) if price_value else None,
+        "price": round(price_value, 2) if price_value else None,
+        "change_pct": round(_safe_float(signal.get("change_pct")), 2),
+        "relative_volume": round(_safe_float(signal.get("relative_volume") or signal.get("volume_ratio"), 1.0), 2),
+        "risk_reward": _safe_float(signal.get("risk_reward")),
         "setupType": _setup_type(signal),
         "direction": direction,
         "confidence": score,
