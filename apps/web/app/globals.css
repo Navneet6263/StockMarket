@@ -79,3 +79,9 @@ body { font-family: var(--font-sans), system-ui, sans-serif; background: var(--b
   .stock-grid { grid-template-columns: 1fr; }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
 }
+
+.detail-panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+.detail-panel h2 { font-size: 20px; }
+.detail-panel ul { list-style: none; padding-left: 0; }
+.detail-panel li { padding: 3px 0; }
+.detail-panel li::before { content: "→ "; color: var(--accent); }
