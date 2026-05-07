@@ -193,3 +193,45 @@ def get_nifty_context(symbol: str = "NIFTY") -> Dict:
         "fiiDii": fii_dii,
         "optionsPcr": pcr,
     }
+
+
+def analyze_nifty_context() -> Dict:
+    """Alias used by market_hub — returns nifty_bias, nifty_regime, market_score."""
+    ctx = get_nifty_context()
+    mood = ctx.get("combinedMood", "neutral")
+    fii = ctx.get("fiiDii", {})
+    pcr = ctx.get("optionsPcr", {})
+    score = 50
+    if "bullish" in mood:
+        score = 70
+    elif "bearish" in mood:
+        score = 30
+    regime = "trending_up" if score >= 65 else "trending_down" if score <= 35 else "sideways"
+    return {
+        "nifty_bias": mood,
+        "nifty_regime": regime,
+        "market_score": score,
+        "data_available": fii.get("available", False) or pcr.get("available", False),
+        "fii_net": fii.get("fiiNet"),
+        "dii_net": fii.get("diiNet"),
+        "pcr": pcr.get("pcr"),
+        "pcr_signal": pcr.get("pcrSignal"),
+        "max_pain": pcr.get("maxPain"),
+    }
+
+
+def stock_nifty_alignment_score(signal: Dict, nifty_ctx: Dict) -> float:
+    """Score 0-1 how aligned a stock signal is with Nifty context."""
+    direction = (signal.get("direction") or "").lower()
+    nifty_bias = (nifty_ctx.get("nifty_bias") or "neutral").lower()
+    if direction == "neutral" or nifty_bias == "neutral":
+        return 0.5
+    if direction == "bullish" and "bullish" in nifty_bias:
+        return 0.85
+    if direction == "bearish" and "bearish" in nifty_bias:
+        return 0.85
+    if direction == "bullish" and "bearish" in nifty_bias:
+        return 0.2
+    if direction == "bearish" and "bullish" in nifty_bias:
+        return 0.2
+    return 0.5
