@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+import os
 from typing import Dict, Iterable
 
 import pandas as pd
@@ -20,6 +21,7 @@ class MarketDataService:
         self.settings = settings
         self.broker = get_broker_adapter()
         self.provider_name = self.broker.__class__.__name__.replace("Adapter", "").lower()
+        self.use_broker_history = os.getenv("USE_BROKER_HISTORY", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.history_cache: TTLCache[pd.DataFrame] = TTLCache(settings.history_cache_ttl_sec)
         self.quote_cache: TTLCache[Dict] = TTLCache(max(20, settings.detail_cache_ttl_sec // 2))
         self.symbol_map = {
@@ -70,7 +72,7 @@ class MarketDataService:
             return cached.copy()
 
         # Try broker adapter first (AngelOne when configured)
-        if self.broker.is_available() and self.provider_name != "yfinance":
+        if self.use_broker_history and self.broker.is_available() and self.provider_name != "yfinance":
             frame = self.broker.fetch_history(clean, period, interval)
             if not frame.empty:
                 normalized = self._normalize_frame(frame)
@@ -184,41 +186,62 @@ class MarketDataService:
         if cached is not None:
             return dict(cached)
 
-        ticker = yf.Ticker(resolved)
+        broker_quote: Dict = {}
+        if self.broker.is_available() and self.provider_name != "yfinance":
+            try:
+                broker_quote = self.broker.fetch_live_quote(clean) or {}
+            except Exception:
+                logger.warning("broker live quote failed symbol=%s", clean, exc_info=True)
+
         history = self.fetch_history(clean, period="5d", interval="1d")
-        if history.empty:
+        if history.empty and not broker_quote.get("price"):
             raise ValueError(f"No live data available for {clean}")
 
-        latest_close = float(history["Close"].iloc[-1])
-        previous_close = float(history["Close"].iloc[-2]) if len(history) > 1 else latest_close
-        volume = int(history["Volume"].iloc[-1])
-
-        fast_info = {}
-        try:
-            fast_info = dict(getattr(ticker, "fast_info", {}) or {})
-        except Exception:
-            fast_info = {}
-
-        price = float(
-            fast_info.get("lastPrice")
-            or fast_info.get("last_price")
-            or fast_info.get("regularMarketPrice")
-            or latest_close
+        broker_price = float(broker_quote.get("price") or 0)
+        latest_close = float(history["Close"].iloc[-1]) if not history.empty else broker_price
+        previous_close = (
+            float(history["Close"].iloc[-2])
+            if not history.empty and len(history) > 1
+            else float(broker_quote.get("previous_close") or broker_quote.get("close") or latest_close)
         )
-        volume = int(fast_info.get("lastVolume") or fast_info.get("last_volume") or volume)
+        volume = int(history["Volume"].iloc[-1]) if not history.empty else int(broker_quote.get("volume") or 0)
+
+        if broker_quote.get("price"):
+            price = float(broker_quote.get("price") or latest_close)
+            volume = int(broker_quote.get("volume") or volume)
+            data_provider = str(broker_quote.get("data_provider") or self.provider_name)
+            timestamp = str(broker_quote.get("timestamp") or datetime.now(timezone.utc).isoformat())
+        else:
+            ticker = yf.Ticker(resolved)
+            fast_info = {}
+            try:
+                fast_info = dict(getattr(ticker, "fast_info", {}) or {})
+            except Exception:
+                fast_info = {}
+
+            price = float(
+                fast_info.get("lastPrice")
+                or fast_info.get("last_price")
+                or fast_info.get("regularMarketPrice")
+                or latest_close
+            )
+            volume = int(fast_info.get("lastVolume") or fast_info.get("last_volume") or volume)
+            data_provider = "yfinance"
+            timestamp = datetime.now(timezone.utc).isoformat()
+
         change = price - previous_close
         change_pct = (change / previous_close) * 100 if previous_close else 0.0
 
         snapshot = {
             "symbol": clean,
             "resolved_symbol": resolved,
-            "data_provider": self.provider_name,
+            "data_provider": data_provider,
             "price": round(price, 4),
             "previous_close": round(previous_close, 4),
             "change": round(change, 4),
             "change_percent": round(change_pct, 4),
             "volume": volume,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": timestamp,
         }
         self.quote_cache.set(cache_key, snapshot)
         return dict(snapshot)

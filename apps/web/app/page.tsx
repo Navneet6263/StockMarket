@@ -60,6 +60,9 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         {(item.risk_reward || item.rr) ? <span className="tag">RR 1:{fmt(item.risk_reward ?? item.rr, 1)}</span> : null}
         {item.confidence ? <span className="tag">{fmt(item.confidence ?? item.score, 0)}%</span> : null}
         {item.relative_volume ? <span className="tag">{fmt(item.relative_volume, 1)}x vol</span> : null}
+        {item.entry_quality ? <span className="tag">{humanize(item.entry_quality)} entry</span> : null}
+        {item.seller_pressure ? <span className="tag">{humanize(item.seller_pressure)} sellers</span> : null}
+        {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking</span> : null}
       </div>
       <p className="stock-reason">
         {item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || ""}
@@ -105,6 +108,8 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
         <div className="stat-card"><span>Confidence</span><strong>{fmt(s.confidence, 0)}%</strong></div>
         <div className="stat-card"><span>Risk</span><strong>{humanize(s.risk_level)}</strong></div>
         <div className="stat-card"><span>RR</span><strong>1:{fmt(s.risk_reward, 1)}</strong></div>
+        <div className="stat-card"><span>Entry Quality</span><strong>{humanize(s.entry_quality || "watch")}</strong></div>
+        <div className="stat-card"><span>Seller Pressure</span><strong>{humanize(s.seller_pressure || "unknown")}</strong></div>
       </div>
       <div className="stock-targets" style={{ marginTop: 12 }}>
         <div><span>Entry</span><strong>₹{fmt(s.entry_trigger ?? s.current_price)}</strong></div>
@@ -125,6 +130,11 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
           <ul style={{ margin: "6px 0", paddingLeft: 18, color: "var(--red)", fontSize: 13 }}>
             {s.risk_factors.slice(0, 3).map((r: string, i: number) => <li key={i}>{r}</li>)}
           </ul>
+        </div>
+      ) : null}
+      {s.reentry_plan ? (
+        <div style={{ marginTop: 8, color: "var(--muted)", fontSize: 13 }}>
+          <strong>Best action:</strong> {humanize(s.best_action || s.recommended_action)}. {s.reentry_plan}
         </div>
       ) : null}
     </div>

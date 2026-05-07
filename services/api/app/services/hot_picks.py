@@ -89,13 +89,29 @@ def _has_late_entry_risk(signal: dict[str, Any]) -> bool:
     labels = {str(label).upper() for label in signal.get("trade_labels", [])}
     setup_stage = str(signal.get("setup_stage") or "").upper()
     action = _action_value(signal)
+    entry_quality = str(signal.get("entry_quality") or "").lower()
+    seller_pressure = str(signal.get("seller_pressure") or "").lower()
+    profit_booking_risk = str(signal.get("profit_booking_risk") or "").lower()
     return bool(
         signal.get("chase_risk")
         or signal.get("overextended_fresh_entry")
         or signal.get("next_day_profit_booking_risk")
-        or labels.intersection({"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK", "WAIT_FOR_PULLBACK"})
-        or setup_stage in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
-        or action in {"WAIT_FOR_PULLBACK", "AVOID", "EXIT", "SELL"}
+        or entry_quality in {"poor", "avoid"}
+        or seller_pressure in {"high", "very_high"}
+        or profit_booking_risk in {"high", "very_high"}
+        or labels.intersection(
+            {
+                "CHASE_RISK",
+                "AVOID_LATE_ENTRY",
+                "PROFIT_BOOKING_RISK",
+                "WAIT_FOR_PULLBACK",
+                "PROFIT_BOOKING_ZONE",
+                "SELLER_REJECTION",
+                "CLIMACTIC_MOVE",
+            }
+        )
+        or setup_stage in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK", "PROFIT_BOOKING_ZONE"}
+        or action in {"WAIT_FOR_PULLBACK", "AVOID", "AVOID_CHASE", "EXIT", "SELL"}
     )
 
 
@@ -143,10 +159,19 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
         }
 
     if _has_late_entry_risk(signal):
+        seller_pressure = _display_label(signal.get("seller_pressure"), "elevated")
+        profit_risk = _display_label(signal.get("profit_booking_risk"), "elevated")
+        reentry_plan = str(signal.get("reentry_plan") or "").strip()
+        decision = (
+            f"Late entry risk. Seller pressure is {seller_pressure} and "
+            f"profit-booking risk is {profit_risk}; wait for pullback/retest."
+        )
+        if reentry_plan:
+            decision = f"{decision} {reentry_plan}"
         return {
             "biasLabel": "Bullish late-entry risk",
             "entryStatus": "Wait for pullback",
-            "tradeDecision": "Late entry risk. Do not chase; wait for pullback, fresh base, or trigger retest.",
+            "tradeDecision": decision[:260],
             "confirmationText": f"Only reconsider on pullback/retest or a strong hold above {trigger_text}. Risk below {fail_text}.",
         }
 
@@ -462,6 +487,13 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "lastUpdated": last_updated,
         **catalyst,
         **guidance,
+        "entryQuality": signal.get("entry_quality"),
+        "entryTiming": signal.get("entry_timing"),
+        "sellerPressure": signal.get("seller_pressure"),
+        "sellerPressureScore": signal.get("seller_pressure_score"),
+        "profitBookingRisk": signal.get("profit_booking_risk"),
+        "bestAction": signal.get("best_action"),
+        "reentryPlan": signal.get("reentry_plan"),
         "chart": chart,
         "cleanRiskSetup": scored["cleanRiskSetup"],
         "raw": signal,

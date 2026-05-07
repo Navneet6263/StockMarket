@@ -42,6 +42,8 @@ class AngelOneAdapter:
         self._api = None
         self._session_token: str | None = None
         self._connected = False
+        self._instrument_master: list[Dict] | None = None
+        self._instrument_cache: dict[str, Dict] = {}
         self._connect()
 
     def _connect(self):
@@ -69,22 +71,39 @@ class AngelOneAdapter:
     def is_available(self) -> bool:
         return self._connected and self._api is not None
 
-    def _nse_token(self, symbol: str) -> str | None:
-        """Resolve NSE token for a symbol using AngelOne instrument list."""
+    def _load_instruments(self) -> list[Dict]:
+        if self._instrument_master is not None:
+            return self._instrument_master
         try:
             import requests
             resp = requests.get(
                 "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json",
                 timeout=10,
             )
-            instruments = resp.json()
-            clean = symbol.upper().replace(".NS", "")
-            for item in instruments:
-                if item.get("exch_seg") == "NSE" and item.get("name") == clean and item.get("instrumenttype") == "EQ":
-                    return item.get("token")
+            self._instrument_master = resp.json()
         except Exception as exc:
-            logger.warning("[BROKER] token lookup failed symbol=%s: %s", symbol, exc)
+            logger.warning("[BROKER] instrument master lookup failed: %s", exc)
+            self._instrument_master = []
+        return self._instrument_master
+
+    def _nse_instrument(self, symbol: str) -> Dict | None:
+        """Resolve NSE equity instrument using AngelOne instrument list."""
+        clean = symbol.upper().replace(".NS", "")
+        if clean in self._instrument_cache:
+            return self._instrument_cache[clean]
+        for item in self._load_instruments():
+            if item.get("exch_seg") != "NSE" or item.get("name") != clean:
+                continue
+            trading_symbol = str(item.get("symbol") or "")
+            instrument_type = str(item.get("instrumenttype") or "")
+            if trading_symbol.endswith("-EQ") or instrument_type in {"EQ", ""}:
+                self._instrument_cache[clean] = item
+                return item
         return None
+
+    def _nse_token(self, symbol: str) -> str | None:
+        instrument = self._nse_instrument(symbol)
+        return str(instrument.get("token")) if instrument and instrument.get("token") else None
 
     def fetch_history(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
         if not self.is_available():
@@ -125,10 +144,12 @@ class AngelOneAdapter:
         if not self.is_available():
             return {}
         try:
-            token = self._nse_token(symbol)
+            instrument = self._nse_instrument(symbol)
+            token = str(instrument.get("token")) if instrument and instrument.get("token") else ""
             if not token:
                 return {}
-            resp = self._api.ltpData("NSE", symbol.upper().replace(".NS", ""), token)
+            trading_symbol = str(instrument.get("symbol") or symbol.upper().replace(".NS", ""))
+            resp = self._api.ltpData("NSE", trading_symbol, token)
             if not resp.get("status"):
                 return {}
             data = resp.get("data", {})
@@ -136,6 +157,10 @@ class AngelOneAdapter:
             return {
                 "symbol": symbol.upper().replace(".NS", ""),
                 "price": price,
+                "previous_close": float(data.get("close") or price),
+                "open": float(data.get("open") or 0),
+                "high": float(data.get("high") or 0),
+                "low": float(data.get("low") or 0),
                 "volume": int(data.get("tradedQty", 0)),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "data_provider": "angelone",

@@ -3,6 +3,12 @@ from __future__ import annotations
 import os
 
 from dotenv import load_dotenv
+
+
+CURRENT_DIR = os.path.dirname(__file__)
+PARENT_DIR = os.path.dirname(CURRENT_DIR)
+load_dotenv(os.path.join(PARENT_DIR, ".env"), override=True)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,10 +23,6 @@ from app.routers import (
 )
 from app.routers.live import router as live_router
 
-
-CURRENT_DIR = os.path.dirname(__file__)
-PARENT_DIR = os.path.dirname(CURRENT_DIR)
-load_dotenv(os.path.join(PARENT_DIR, ".env"))
 
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000",

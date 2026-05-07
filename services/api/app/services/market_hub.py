@@ -1092,6 +1092,8 @@ class MarketHubService:
     def get_stock_detail(self, symbol: str, force_refresh: bool = False) -> Dict:
         clean = self.data.clean_symbol(symbol)
         cache_key = f"detail:{clean}"
+        if force_refresh:
+            self.data.quote_cache.clear()
         if not force_refresh:
             cached = self.detail_cache.get(cache_key)
             if cached is not None:

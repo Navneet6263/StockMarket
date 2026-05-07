@@ -60,6 +60,14 @@ export type MarketSignal = {
   setup_stage?: string;
   trade_labels?: string[];
   recommended_action?: string;
+  entry_quality?: "good" | "watch" | "poor" | "avoid" | string;
+  entry_timing?: string;
+  seller_pressure?: "low" | "medium" | "high" | "very_high" | string;
+  seller_pressure_score?: number;
+  profit_booking_risk?: "low" | "medium" | "high" | "very_high" | string;
+  best_action?: string;
+  reentry_plan?: string;
+  entry_timing_reasons?: string[];
   attention_only?: boolean;
   allow_buy_call?: boolean;
   chase_risk?: boolean;
@@ -281,6 +289,13 @@ export type HotPick = {
   entryStatus?: string;
   tradeDecision?: string;
   confirmationText?: string;
+  entryQuality?: string;
+  entryTiming?: string;
+  sellerPressure?: string;
+  sellerPressureScore?: number;
+  profitBookingRisk?: string;
+  bestAction?: string;
+  reentryPlan?: string;
   cleanRiskSetup?: boolean;
   rejectionReasons?: string[];
   softReasons?: string[];

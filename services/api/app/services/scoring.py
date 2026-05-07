@@ -5,6 +5,7 @@ from typing import Dict, List
 import numpy as np
 
 from app.services.chase_risk import classify_chase_risk
+from app.services.entry_timing import analyze_entry_timing
 from app.services.lifecycle import build_lifecycle_advice
 
 
@@ -665,6 +666,14 @@ class ScoringEngine:
         if chase.get("overextended_fresh_entry"):
             risk_factors.append(chase["chase_risk_reason"])
             tags.extend(["avoid_late_entry", "overextended"])
+        entry_timing = analyze_entry_timing(snapshot, direction=direction)
+        if direction == "bullish" and entry_timing.get("profit_booking_risk") in {"high", "very_high"}:
+            tags.extend(["profit_booking_zone", "seller_pressure", "avoid_late_entry"])
+            risk_factors.extend(entry_timing.get("reasons", [])[:2])
+        elif direction == "bullish" and entry_timing.get("entry_quality") == "watch":
+            weaknesses.extend(entry_timing.get("reasons", [])[:1])
+        elif direction == "bearish" and entry_timing.get("seller_pressure") in {"high", "very_high"}:
+            tags.append("seller_pressure")
         pre_breakout = self._pre_breakout_setup(
             snapshot,
             price=price,
@@ -686,12 +695,16 @@ class ScoringEngine:
         if continuation.get("is_momentum_continuation"):
             tags.extend(["momentum_continuation", "re_entry_setup"])
 
-        if pre_breakout.get("is_pre_breakout"):
+        entry_blocks_fresh_buy = direction == "bullish" and entry_timing.get("entry_quality") in {"poor", "avoid"}
+        if pre_breakout.get("is_pre_breakout") and not entry_blocks_fresh_buy:
             signal_stage = "PATTERN_FORMING" if pre_breakout.get("pre_breakout_action") == "WATCH" else "ALERT_ABOVE_LEVEL"
             action = pre_breakout.get("pre_breakout_action", "WATCH")
-        elif continuation.get("is_momentum_continuation"):
+        elif continuation.get("is_momentum_continuation") and not entry_blocks_fresh_buy:
             signal_stage = "RETEST_ENTRY" if continuation.get("continuation_type") == "pullback" else "RE_ENTRY_SETUP"
             action = continuation.get("continuation_action", "WAIT_FOR_REENTRY")
+        elif entry_blocks_fresh_buy:
+            signal_stage = str(entry_timing.get("setup_stage") or "AVOID_LATE_ENTRY")
+            action = "WAIT_FOR_PULLBACK"
         elif chase.get("overextended_fresh_entry") or chase.get("chase_risk"):
             signal_stage = "AVOID_CHASE"
             action = "WAIT_FOR_PULLBACK"
@@ -773,7 +786,9 @@ class ScoringEngine:
             **pre_breakout,
             **continuation,
             "setup_stage": (
-                "PRE_BREAKOUT"
+                str(entry_timing.get("setup_stage") or "AVOID_LATE_ENTRY")
+                if entry_blocks_fresh_buy
+                else "PRE_BREAKOUT"
                 if pre_breakout.get("is_pre_breakout")
                 else "MOMENTUM_CONTINUATION"
                 if continuation.get("is_momentum_continuation")
@@ -784,17 +799,29 @@ class ScoringEngine:
                     (pre_breakout.get("pre_breakout_labels", []) if pre_breakout.get("is_pre_breakout") else [])
                     + (continuation.get("continuation_labels", []) if continuation.get("is_momentum_continuation") else [])
                     + chase.get("trade_labels", [])
+                    + entry_timing.get("trade_labels", [])
                 )
             ),
-            "recommended_action": (
-                pre_breakout.get("pre_breakout_action")
-                if pre_breakout.get("is_pre_breakout")
-                else continuation.get("continuation_action")
-                if continuation.get("is_momentum_continuation")
-                else chase["recommended_action"]
+            "recommended_action": action,
+            "entry_quality": entry_timing.get("entry_quality"),
+            "entry_timing": entry_timing.get("entry_timing"),
+            "seller_pressure": entry_timing.get("seller_pressure"),
+            "seller_pressure_score": entry_timing.get("seller_pressure_score"),
+            "profit_booking_risk": entry_timing.get("profit_booking_risk"),
+            "best_action": entry_timing.get("best_action"),
+            "reentry_plan": entry_timing.get("reentry_plan"),
+            "entry_timing_reasons": entry_timing.get("reasons", []),
+            "attention_only": (
+                bool(pre_breakout.get("is_pre_breakout"))
+                or bool(continuation.get("is_momentum_continuation"))
+                or chase["attention_only"]
+                or bool(entry_timing.get("attention_only"))
             ),
-            "attention_only": bool(pre_breakout.get("is_pre_breakout")) or bool(continuation.get("is_momentum_continuation")) or chase["attention_only"],
-            "allow_buy_call": False if pre_breakout.get("is_pre_breakout") else chase["allow_buy_call"],
+            "allow_buy_call": (
+                False
+                if pre_breakout.get("is_pre_breakout") or entry_blocks_fresh_buy
+                else bool(chase["allow_buy_call"] and entry_timing.get("allow_buy_call", True))
+            ),
             "risk_reward": risk_reward,
             "timeframe_label": timeframe_label,
             "timeframe_days": timeframe_days,

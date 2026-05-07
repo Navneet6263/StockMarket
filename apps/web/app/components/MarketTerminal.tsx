@@ -122,6 +122,9 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
         <div><span>Score</span><strong>{pick.score != null ? fmt(pick.score, 0) : fmt(pick.confidence, 0)}</strong></div>
         <div><span>Bias</span><strong>{pick.biasLabel || humanize(pick.direction)}</strong></div>
         <div><span>Status</span><strong>{pick.entryStatus || "Watch"}</strong></div>
+        {pick.entryQuality ? <div><span>Entry Quality</span><strong>{humanize(pick.entryQuality)}</strong></div> : null}
+        {pick.sellerPressure ? <div><span>Seller Pressure</span><strong>{humanize(pick.sellerPressure)}</strong></div> : null}
+        {pick.profitBookingRisk ? <div><span>Profit Booking</span><strong>{humanize(pick.profitBookingRisk)}</strong></div> : null}
         <div><span>Entry</span><strong>{pick.entryZone}</strong></div>
         <div><span>Trigger</span><strong>{pick.entryTrigger || "-"}</strong></div>
         <div><span>Target Zone</span><strong>{pick.targetZone || pick.target}</strong></div>
@@ -137,6 +140,7 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
         <span>{humanize(pick.timeHorizon)}</span>
       </div>
       <div className="risk-copy">{pick.risk}</div>
+      {pick.reentryPlan ? <div className="risk-copy">{pick.reentryPlan}</div> : null}
       <div className="micro-copy">{pick.catalystReason || "No fresh catalyst found"}</div>
       <button type="button" className="ghost-button compact" onClick={() => onSelect(pick.symbol)}>
         Open Detail
