@@ -1,14 +1,21 @@
 ﻿require("dotenv").config();
 
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../../../.env") });
+require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true });
+
 const http = require("http");
 const { WebSocketServer } = require("ws");
 const axios = require("axios");
+const { AngelOneStream } = require("./angeloneStream");
 
 const port = Number(process.env.WS_PORT || 4001);
 const apiUrl = process.env.API_URL || "http://localhost:8000";
+const fallbackPollIntervalMs = Number(process.env.FALLBACK_POLL_INTERVAL_MS || 2000);
 
 const server = http.createServer();
 const wss = new WebSocketServer({ server });
+const angelStream = new AngelOneStream();
 
 const subscriptions = new Map();
 const activeTrades = new Map();
@@ -23,6 +30,10 @@ function broadcast(payload) {
 }
 
 async function fetchLiveData(symbol) {
+  const tick = angelStream.getLatest(symbol);
+  if (tick && !angelStream.shouldUseFallback(symbol)) {
+    return tick;
+  }
   try {
     const response = await axios.get(`${apiUrl}/live/${symbol}`);
     return response.data;
@@ -45,13 +56,25 @@ wss.on("connection", (ws) => {
           subscriptions.set(symbol, new Set());
         }
         subscriptions.get(symbol).add(ws);
-        ws.send(JSON.stringify({ type: "subscribed", symbol: symbol, ts: new Date().toISOString() }));
+        angelStream.subscribe(symbol).catch((error) => {
+          console.error(`AngelOne subscribe failed ${symbol}:`, error.message);
+        });
+        ws.send(JSON.stringify({
+          type: "subscribed",
+          symbol: symbol,
+          ts: new Date().toISOString(),
+          source: angelStream.isConfigured() ? "angelone_ws" : "http_fallback",
+          angelone: angelStream.status()
+        }));
       }
       
       if (message.type === "unsubscribe" && message.symbol) {
         const symbol = message.symbol.toUpperCase();
         if (subscriptions.has(symbol)) {
           subscriptions.get(symbol).delete(ws);
+          if (subscriptions.get(symbol).size === 0) {
+            angelStream.unsubscribe(symbol).catch(() => {});
+          }
         }
       }
       
@@ -91,12 +114,35 @@ wss.on("connection", (ws) => {
   });
 });
 
+angelStream.onTick((symbol, tick) => {
+  const clients = subscriptions.get(symbol);
+  if (!clients || clients.size === 0) return;
+  const message = JSON.stringify({
+    type: "live_update",
+    symbol,
+    data: tick,
+    ts: new Date().toISOString(),
+    source: "angelone_ws"
+  });
+  clients.forEach((client) => {
+    if (client.readyState === 1) {
+      client.send(message);
+    }
+  });
+});
+
 async function sendLiveUpdates() {
   for (const [symbol, clients] of subscriptions.entries()) {
-    if (clients.size > 0) {
+    if (clients.size > 0 && angelStream.shouldUseFallback(symbol)) {
       const liveData = await fetchLiveData(symbol);
       if (liveData) {
-        const message = JSON.stringify({ type: "live_update", symbol: symbol, data: liveData, ts: new Date().toISOString() });
+        const message = JSON.stringify({
+          type: "live_update",
+          symbol: symbol,
+          data: liveData,
+          ts: new Date().toISOString(),
+          source: liveData.source || liveData.data_source || "http_fallback"
+        });
         clients.forEach((client) => {
           if (client.readyState === 1) {
             client.send(message);
@@ -158,14 +204,19 @@ async function sendTradeUpdates() {
   }
 }
 
-setInterval(sendLiveUpdates, 2000);
+setInterval(sendLiveUpdates, fallbackPollIntervalMs);
 setInterval(sendTradeUpdates, 1000);
 
 setInterval(() => {
-  broadcast({ type: "heartbeat", ts: new Date().toISOString(), active_subscriptions: Array.from(subscriptions.keys()) });
+  broadcast({
+    type: "heartbeat",
+    ts: new Date().toISOString(),
+    active_subscriptions: Array.from(subscriptions.keys()),
+    angelone: angelStream.status()
+  });
 }, 30000);
 
 server.listen(port, () => {
   console.log(`Enhanced WebSocket server on ${port}`);
-  console.log("Features: Live data, Patterns, ML predictions");
+  console.log("Features: AngelOne tick streaming with HTTP fallback, trade tracking");
 });

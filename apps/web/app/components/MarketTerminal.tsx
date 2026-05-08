@@ -57,6 +57,26 @@ function shouldKeepPreviousDashboard(next: HotPicksResponse, previous: HotPicksR
   );
 }
 
+function livePriceFromTick(tick: any) {
+  return tick?.price ?? tick?.ltp ?? tick?.data?.price ?? tick?.data?.ltp;
+}
+
+function inrText(value: any) {
+  return `INR ${fmt(value)}`;
+}
+
+function overlayHotPick(pick: HotPick, tick: any): HotPick {
+  const livePrice = livePriceFromTick(tick);
+  if (!livePrice) return pick;
+  return { ...pick, currentPrice: inrText(livePrice) };
+}
+
+function overlayBasePick(pick: BaseFormationPick, tick: any): BaseFormationPick {
+  const livePrice = livePriceFromTick(tick);
+  if (!livePrice) return pick;
+  return { ...pick, currentPrice: inrText(livePrice) };
+}
+
 function StatCard({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
   return (
     <div className="dashboard-stat">
@@ -367,6 +387,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
   const [detailError, setDetailError] = useState("");
+  const [liveTicks, setLiveTicks] = useState<Record<string, any>>({});
   const detailRequestRef = useRef(0);
   const hasLoadedHotPicksRef = useRef(false);
   const hotPicksRef = useRef<HotPicksResponse | null>(null);
@@ -460,6 +481,41 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
     return Array.from(map.entries()).slice(0, 100);
   }, [hotPicks, trackerDashboard]);
 
+  const liveSymbols = useMemo(() => {
+    const set = new Set<string>();
+    [
+      ...(hotPicks?.hotPicks || []),
+      ...(hotPicks?.watchlist || []),
+      ...(hotPicks?.momentumRadar || []),
+      ...(hotPicks?.catalystRadar || []),
+    ].forEach((pick) => pick.symbol && set.add(pick.symbol));
+    (hotPicks?.baseFormationRadar || []).forEach((pick) => pick.symbol && set.add(pick.symbol));
+    return Array.from(set).slice(0, 100);
+  }, [hotPicks]);
+
+  useEffect(() => {
+    if (!liveSymbols.length) return;
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:4001";
+    const ws = new WebSocket(wsUrl);
+    ws.onopen = () => {
+      liveSymbols.forEach(symbol => ws.send(JSON.stringify({ type: "subscribe", symbol })));
+    };
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === "live_update" && message.symbol) {
+          setLiveTicks(prev => ({ ...prev, [message.symbol]: message.data || message }));
+        }
+      } catch {}
+    };
+    return () => {
+      liveSymbols.forEach(symbol => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "unsubscribe", symbol }));
+      });
+      ws.close();
+    };
+  }, [liveSymbols]);
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const symbol = searchSymbol.trim().toUpperCase();
@@ -535,7 +591,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
         {loading && !hotPicks ? <SkeletonGrid /> : null}
         {hotPicks?.hotPicks.length ? (
           <div className="hot-picks-grid">
-            {hotPicks.hotPicks.slice(0, 5).map((pick) => <HotPickCard key={pick.symbol} pick={pick} onSelect={setSelectedSymbol} />)}
+            {hotPicks.hotPicks.slice(0, 5).map((pick) => <HotPickCard key={pick.symbol} pick={overlayHotPick(pick, liveTicks[pick.symbol])} onSelect={setSelectedSymbol} />)}
           </div>
         ) : !loading ? (
           <EmptyState title="No fresh buy Hot Picks right now" body="High-score stocks can still appear below as watch-only, late-entry, or bearish-risk setups." onRetry={() => loadHotPicks(true)} />
@@ -551,7 +607,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
           <span className="micro-copy">Watchlist only. Ready and near-trigger cards are sorted first; late-entry and bearish-risk cards are warnings.</span>
         </div>
         <div className="watch-pick-grid">
-          {(hotPicks?.baseFormationRadar || []).map((pick) => <BaseFormationCard key={`base-${pick.symbol}`} pick={pick} />)}
+          {(hotPicks?.baseFormationRadar || []).map((pick) => <BaseFormationCard key={`base-${pick.symbol}`} pick={overlayBasePick(pick, liveTicks[pick.symbol])} />)}
           {hotPicks && !(hotPicks.baseFormationRadar || []).length ? <div className="empty-state">No clean base formation candidates from the current scan.</div> : null}
         </div>
       </section>
@@ -564,7 +620,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
           </div>
         </div>
         <div className="watch-pick-grid">
-          {(hotPicks?.watchlist || []).map((pick) => <HotPickCard key={`watch-${pick.symbol}`} pick={pick} compact onSelect={setSelectedSymbol} />)}
+          {(hotPicks?.watchlist || []).map((pick) => <HotPickCard key={`watch-${pick.symbol}`} pick={overlayHotPick(pick, liveTicks[pick.symbol])} compact onSelect={setSelectedSymbol} />)}
           {hotPicks && !hotPicks.watchlist.length ? <div className="empty-state">No moderate setups passed the score filter.</div> : null}
         </div>
       </section>
@@ -578,7 +634,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
           <span className="micro-copy">High score here does not mean fresh buy. Follow Status first, then trigger and invalidation.</span>
         </div>
         <div className="watch-pick-grid">
-          {(hotPicks?.momentumRadar || []).map((pick) => <HotPickCard key={`momentum-${pick.symbol}`} pick={pick} compact onSelect={setSelectedSymbol} />)}
+          {(hotPicks?.momentumRadar || []).map((pick) => <HotPickCard key={`momentum-${pick.symbol}`} pick={overlayHotPick(pick, liveTicks[pick.symbol])} compact onSelect={setSelectedSymbol} />)}
           {hotPicks && !(hotPicks.momentumRadar || []).length ? <div className="empty-state">No momentum radar candidates passed the score filter.</div> : null}
         </div>
       </section>
@@ -591,7 +647,7 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
           </div>
         </div>
         <div className="watch-pick-grid">
-          {(hotPicks?.catalystRadar || []).map((pick) => <HotPickCard key={`catalyst-${pick.symbol}`} pick={pick} compact onSelect={setSelectedSymbol} />)}
+          {(hotPicks?.catalystRadar || []).map((pick) => <HotPickCard key={`catalyst-${pick.symbol}`} pick={overlayHotPick(pick, liveTicks[pick.symbol])} compact onSelect={setSelectedSymbol} />)}
           {hotPicks && !(hotPicks.catalystRadar || []).length ? <div className="empty-state">No fresh catalyst found in the current data source.</div> : null}
         </div>
       </section>

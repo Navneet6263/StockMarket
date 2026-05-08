@@ -21,6 +21,26 @@ function priceText(value: any) {
   return formatted === "-" ? "-" : `₹${formatted}`;
 }
 
+function livePriceFromTick(tick: any) {
+  return tick?.price ?? tick?.ltp ?? tick?.data?.price ?? tick?.data?.ltp;
+}
+
+function overlayLiveTick(item: any, tick: any) {
+  const livePrice = livePriceFromTick(tick);
+  if (!livePrice) return item;
+  const previousClose = tick?.previous_close ?? tick?.data?.previous_close;
+  const changePct = previousClose ? ((Number(livePrice) - Number(previousClose)) / Number(previousClose)) * 100 : undefined;
+  return {
+    ...item,
+    current_price: Number(livePrice),
+    price: Number(livePrice),
+    currentPrice: Number(livePrice),
+    change_pct: changePct ?? item.change_pct,
+    live_source: tick?.source || "angelone_ws",
+    live_ts: tick?.server_received_at || tick?.ts,
+  };
+}
+
 function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => void }) {
   if (item.entryRule && item.instrumentRule) {
     return (
@@ -173,6 +193,7 @@ export default function Page() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+  const [liveTicks, setLiveTicks] = useState<Record<string, any>>({});
   const activeTabRef = useRef(tab);
 
   useEffect(() => {
@@ -213,8 +234,34 @@ export default function Page() {
 
   const data = dataByTab[tab] || null;
   const items = extractItems(tab, data);
+  const liveItems = items.map((item: any) => overlayLiveTick(item, liveTicks[item.symbol]));
   const mood = summary?.marketMood || data?.marketMood || "loading";
   const stats = summary?.summary || data?.summary || {};
+
+  useEffect(() => {
+    if (selectedSymbol || !items.length) return;
+    const symbols = Array.from(new Set(items.map((item: any) => item.symbol).filter(Boolean))).slice(0, 80);
+    if (!symbols.length) return;
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:4001";
+    const ws = new WebSocket(wsUrl);
+    ws.onopen = () => {
+      symbols.forEach(symbol => ws.send(JSON.stringify({ type: "subscribe", symbol })));
+    };
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === "live_update" && message.symbol) {
+          setLiveTicks(prev => ({ ...prev, [message.symbol]: message.data || message }));
+        }
+      } catch {}
+    };
+    return () => {
+      symbols.forEach(symbol => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "unsubscribe", symbol }));
+      });
+      ws.close();
+    };
+  }, [items, selectedSymbol]);
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -263,13 +310,13 @@ export default function Page() {
               <div className="stat-card"><span>Breakouts</span><strong>{stats.breakouts ?? stats.breakout_count ?? 0}</strong></div>
               <div className="stat-card"><span>Bullish</span><strong style={{ color: "var(--green)" }}>{stats.bullish ?? stats.bullish_setups ?? 0}</strong></div>
               <div className="stat-card"><span>Bearish</span><strong style={{ color: "var(--red)" }}>{stats.bearish ?? stats.bearish_risk_count ?? 0}</strong></div>
-              <div className="stat-card"><span>This Tab</span><strong>{items.length}</strong></div>
+              <div className="stat-card"><span>This Tab</span><strong>{liveItems.length}</strong></div>
             </div>
 
-            <h2 className="section-title">{TABS.find(t => t.id === tab)?.label} ({items.length} stocks)</h2>
-            {items.length ? (
+            <h2 className="section-title">{TABS.find(t => t.id === tab)?.label} ({liveItems.length} stocks)</h2>
+            {liveItems.length ? (
               <div className="stock-grid">
-                {items.map((item: any, i: number) => <StockCard key={item.symbol || i} item={item} onSelect={setSelectedSymbol} />)}
+                {liveItems.map((item: any, i: number) => <StockCard key={item.symbol || i} item={item} onSelect={setSelectedSymbol} />)}
               </div>
             ) : (
               <p className="empty-msg">{loading ? "Scanning market..." : "No stocks found in this category right now."}</p>
