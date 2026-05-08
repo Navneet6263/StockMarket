@@ -2,6 +2,7 @@
 
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../../.env") });
+require("dotenv").config({ path: path.resolve(__dirname, "../../api/.env"), override: true });
 require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true });
 
 const http = require("http");
@@ -9,9 +10,15 @@ const { WebSocketServer } = require("ws");
 const axios = require("axios");
 const { AngelOneStream } = require("./angeloneStream");
 
+function positiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 const port = Number(process.env.WS_PORT || 4001);
 const apiUrl = process.env.API_URL || "http://localhost:8000";
-const fallbackPollIntervalMs = Number(process.env.FALLBACK_POLL_INTERVAL_MS || 2000);
+const fallbackPollIntervalMs = positiveNumber(process.env.FALLBACK_POLL_INTERVAL_MS, 500);
+const fallbackPollConcurrency = Math.max(1, Math.floor(positiveNumber(process.env.FALLBACK_POLL_CONCURRENCY, 10)));
 
 const server = http.createServer();
 const wss = new WebSocketServer({ server });
@@ -19,6 +26,7 @@ const angelStream = new AngelOneStream();
 
 const subscriptions = new Map();
 const activeTrades = new Map();
+let fallbackPollRunning = false;
 
 function broadcast(payload) {
   const message = JSON.stringify(payload);
@@ -131,25 +139,39 @@ angelStream.onTick((symbol, tick) => {
   });
 });
 
+async function sendFallbackUpdate(symbol, clients) {
+  const liveData = await fetchLiveData(symbol);
+  if (!liveData) return;
+  const message = JSON.stringify({
+    type: "live_update",
+    symbol: symbol,
+    data: liveData,
+    ts: new Date().toISOString(),
+    source: liveData.source || liveData.data_source || "http_fallback"
+  });
+  clients.forEach((client) => {
+    if (client.readyState === 1) {
+      client.send(message);
+    }
+  });
+}
+
 async function sendLiveUpdates() {
-  for (const [symbol, clients] of subscriptions.entries()) {
-    if (clients.size > 0 && angelStream.shouldUseFallback(symbol)) {
-      const liveData = await fetchLiveData(symbol);
-      if (liveData) {
-        const message = JSON.stringify({
-          type: "live_update",
-          symbol: symbol,
-          data: liveData,
-          ts: new Date().toISOString(),
-          source: liveData.source || liveData.data_source || "http_fallback"
-        });
-        clients.forEach((client) => {
-          if (client.readyState === 1) {
-            client.send(message);
-          }
-        });
+  if (fallbackPollRunning) return;
+  fallbackPollRunning = true;
+  try {
+    const jobs = [];
+    for (const [symbol, clients] of subscriptions.entries()) {
+      if (clients.size > 0 && angelStream.shouldUseFallback(symbol)) {
+        jobs.push([symbol, clients]);
       }
     }
+    for (let i = 0; i < jobs.length; i += fallbackPollConcurrency) {
+      const batch = jobs.slice(i, i + fallbackPollConcurrency);
+      await Promise.allSettled(batch.map(([symbol, clients]) => sendFallbackUpdate(symbol, clients)));
+    }
+  } finally {
+    fallbackPollRunning = false;
   }
 }
 

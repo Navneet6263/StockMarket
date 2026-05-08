@@ -60,7 +60,12 @@ def enrich_signal(
     )
 
     # ── Final smart score ─────────────────────────────────────────────────────
-    chart_score = float(signal.get("move_quality") or signal.get("quality_score") or 50)
+    chart_score = max(
+        float(signal.get("move_quality") or signal.get("quality_score") or 50),
+        float(signal.get("chart_pattern_score") or 0),
+    )
+    if signal.get("live_pattern_ready"):
+        chart_score = min(chart_score + 6, 100)
     base_score = float(base.get("baseQualityScore") or 50)
     volume_score = _volume_score(signal, delivery)
     market_score = _market_score(market_context, sector)
@@ -268,6 +273,7 @@ def _is_hot_pick_candidate(signal: Dict, smart_score: int, buy_blocked: bool) ->
         or signal.get("chase_risk")
         or signal.get("overextended_fresh_entry")
         or signal.get("next_day_profit_booking_risk")
+        or (signal.get("pattern_late_entry_risk") and not signal.get("is_momentum_continuation"))
         or not signal.get("allow_buy_call", True)
     ):
         return False

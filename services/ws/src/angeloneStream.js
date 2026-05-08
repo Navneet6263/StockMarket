@@ -1,5 +1,6 @@
 const axios = require("axios");
 const crypto = require("crypto");
+const https = require("https");
 const os = require("os");
 const WebSocket = require("ws");
 
@@ -126,7 +127,10 @@ class AngelOneStream {
     this.totpKey = process.env.ANGELONE_TOTP_KEY || "";
     this.mode = Number(process.env.ANGELONE_WS_MODE || 1);
     this.maxTokens = Number(process.env.ANGELONE_WS_MAX_TOKENS || 200);
-    this.fallbackPollWhenStaleMs = Number(process.env.ANGELONE_WS_STALE_MS || 5000);
+    this.fallbackPollWhenStaleMs = Number(process.env.ANGELONE_WS_STALE_MS || 1500);
+    this.disableSslVerify = process.env.ANGELONE_DISABLE_SSL_VERIFY === "true"
+      || process.env.ANGELONE_TLS_REJECT_UNAUTHORIZED === "false";
+    this.httpsAgent = this.disableSslVerify ? new https.Agent({ rejectUnauthorized: false }) : undefined;
     this.session = null;
     this.ws = null;
     this.connected = false;
@@ -140,6 +144,9 @@ class AngelOneStream {
     this.subscribedTokens = new Set();
     this.latest = new Map();
     this.listeners = new Set();
+    if (this.disableSslVerify) {
+      console.warn("[AngelOneWS] SSL verification disabled by ANGELONE_DISABLE_SSL_VERIFY=true");
+    }
   }
 
   isConfigured() {
@@ -233,7 +240,7 @@ class AngelOneStream {
         password: this.password,
         totp: totp(this.totpKey),
       },
-      { headers: this.requestHeaders(), timeout: 10000 }
+      { headers: this.requestHeaders(), timeout: 10000, httpsAgent: this.httpsAgent }
     );
     if (!response.data?.status) {
       throw new Error(response.data?.message || "angelone_login_failed");
@@ -256,6 +263,7 @@ class AngelOneStream {
         "x-client-code": this.clientId,
         "x-feed-token": this.session.feedToken,
       },
+      rejectUnauthorized: !this.disableSslVerify,
     });
 
     this.ws.on("open", async () => {
@@ -368,7 +376,7 @@ class AngelOneStream {
   async loadInstruments() {
     if (this.instruments) return this.instruments;
     const url = process.env.ANGELONE_MASTER_URL || MASTER_URL;
-    const response = await axios.get(url, { timeout: 15000 });
+    const response = await axios.get(url, { timeout: 15000, httpsAgent: this.httpsAgent });
     this.instruments = Array.isArray(response.data) ? response.data : [];
     return this.instruments;
   }

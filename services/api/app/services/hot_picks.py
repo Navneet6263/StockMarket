@@ -161,6 +161,8 @@ def _has_late_entry_risk(signal: dict[str, Any]) -> bool:
 
 def _is_watch_only(signal: dict[str, Any]) -> bool:
     action = _action_value(signal)
+    if action in {"BUY_ONLY_ON_TRIGGER_HOLD", "BUY_ONLY_ON_RETEST_HOLD"} and signal.get("live_pattern_ready"):
+        return False
     return bool(
         signal.get("attention_only")
         or signal.get("is_pre_breakout")
@@ -233,7 +235,12 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
             "confirmationText": f"Only reconsider on pullback/retest or a strong hold above {trigger_text}. Risk below {fail_text}.",
         }
 
-    if entry["active"] or (action in {"BUY", "REENTRY_BUY"} and price and trigger and price >= trigger):
+    if entry["active"] or (
+        action in {"BUY", "REENTRY_BUY", "BUY_ONLY_ON_TRIGGER_HOLD", "BUY_ONLY_ON_RETEST_HOLD"}
+        and price
+        and trigger
+        and price >= trigger
+    ):
         return {
             "biasLabel": "Bullish trigger active",
             "entryStatus": "Active near trigger",
@@ -287,6 +294,8 @@ def _entry_zone(signal: dict[str, Any]) -> str:
 
 
 def _setup_type(signal: dict[str, Any]) -> str:
+    if signal.get("chart_pattern") and _safe_float(signal.get("chart_pattern_score")) >= 55:
+        return _display_label(signal.get("chart_pattern"), "chart pattern")
     if signal.get("setup_type"):
         return _display_label(signal.get("setup_type"), "momentum candidate")
     if signal.get("is_momentum_continuation"):
@@ -336,6 +345,7 @@ def _chart_features(signal: dict[str, Any]) -> dict[str, Any]:
     labels = set(signal.get("pattern_labels") or [])
     relative_volume = _safe_float(signal.get("relative_volume") or signal.get("volume_ratio"), 1.0)
     intraday_volume = _safe_float(signal.get("intraday_volume_ratio"), 1.0)
+    pattern_score = _safe_float(signal.get("chart_pattern_score"))
     rsi = _safe_float(signal.get("rsi"), 50.0)
     stop = _signal_fail_level(signal)
     price = _safe_float(signal.get("current_price") or signal.get("price"))
@@ -360,6 +370,9 @@ def _chart_features(signal: dict[str, Any]) -> dict[str, Any]:
         "bbSqueeze": bool(features.get("bb_squeeze")) or "bollinger_squeeze" in labels,
         "atrExpansion": features.get("atr_expansion"),
         "bbWidthRatio": features.get("bb_width_ratio"),
+        "patternScore": pattern_score,
+        "livePatternReady": bool(signal.get("live_pattern_ready")),
+        "latePatternRisk": bool(signal.get("pattern_late_entry_risk")),
     }
 
 
@@ -380,8 +393,16 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
     relative_strength = _safe_float(signal.get("benchmark_relative_strength"))
     catalyst = _catalyst(signal)
     chart = _chart_features(signal)
+    entry = _entry_context(signal)
 
     setup = 0.0
+    pattern_score = _safe_float(signal.get("chart_pattern_score"))
+    if signal.get("live_pattern_ready") and not chart["latePatternRisk"]:
+        setup += 8
+    elif pattern_score >= 75 and not chart["latePatternRisk"]:
+        setup += 6
+    elif pattern_score >= 60 and not chart["latePatternRisk"]:
+        setup += 3
     if chart["breakoutConfirmed"] or "breakdown" in tags:
         setup += 13
     if chart["nearBreakout"] or signal.get("is_pre_breakout"):
@@ -465,10 +486,17 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
         soft_reasons.append("weak_risk_reward")
     if chart["overextended"] and not signal.get("is_momentum_continuation"):
         soft_reasons.append("overextended")
+    if (
+        direction == "bullish"
+        and not signal.get("is_momentum_continuation")
+        and not signal.get("live_pattern_ready")
+        and (entry["missed"] or _has_late_entry_risk(signal) or chart["latePatternRisk"])
+    ):
+        rejection_reasons.append("late_entry_excluded")
     if score < 50:
         rejection_reasons.append("score_below_50")
 
-    clean_risk = bool(invalidation and (not risk_reward or risk_reward >= 1.0) and not chart["overextended"])
+    clean_risk = bool(invalidation and (not risk_reward or risk_reward >= 1.0) and not chart["overextended"] and not chart["latePatternRisk"])
     return {
         "score": score,
         "breakdown": breakdown,
@@ -520,8 +548,10 @@ def _prediction_wording(signal: dict[str, Any], score: float) -> str:
     trigger = _signal_trigger(signal)
     invalidation = _signal_fail_level(signal)
     entry = _entry_context(signal, trigger=trigger)
-    if direction == "bullish" and entry["missed"]:
-        prefix = "High score watch, trigger already crossed" if score >= 75 else "Watchlist setup, trigger already crossed"
+    if signal.get("live_pattern_ready"):
+        prefix = "Live pattern ready" if score >= 75 else "Trigger-ready pattern"
+    elif direction == "bullish" and entry["missed"]:
+        prefix = "Retest setup only" if score >= 75 else "Old trigger crossed"
     elif _has_late_entry_risk(signal):
         prefix = "High score watch, but late-entry risk" if score >= 75 else "Watchlist setup with late-entry risk"
     elif _is_watch_only(signal) and direction == "bullish":
@@ -533,7 +563,9 @@ def _prediction_wording(signal: dict[str, Any], score: float) -> str:
     else:
         prefix = "Momentum candidate"
 
-    if direction == "bullish" and entry["missed"]:
+    if signal.get("live_pattern_ready"):
+        action = "Entry only near trigger hold; avoid chase above the zone"
+    elif direction == "bullish" and entry["missed"]:
         action = f"Wait for retest near {entry['retest_zone']}"
     elif _has_late_entry_risk(signal):
         action = "Avoid chasing; wait for pullback or retest"
@@ -579,6 +611,13 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "chartPattern": _setup_type(signal),
         "patternLabels": signal.get("pattern_labels") or [],
         "patternReason": signal.get("pattern_reason") or signal.get("pre_breakout_reason") or signal.get("continuation_reason"),
+        "chartPatternScore": signal.get("chart_pattern_score"),
+        "chartPatternStage": signal.get("chart_pattern_stage"),
+        "patternTargetMethod": signal.get("pattern_target_method"),
+        "patternExpectedMovePct": signal.get("pattern_expected_move_pct"),
+        "patternMeasuredHeightPct": signal.get("pattern_measured_height_pct"),
+        "livePatternReady": signal.get("live_pattern_ready"),
+        "patternLateEntryRisk": signal.get("pattern_late_entry_risk"),
         "direction": direction,
         "confidence": score,
         "score": score,

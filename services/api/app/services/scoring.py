@@ -59,6 +59,13 @@ class ScoringEngine:
         return "3-5 days", 5
 
     def _pre_breakout_setup(self, snapshot: Dict, *, price: float, change_pct: float, gap_pct: float, atr_pct: float) -> Dict:
+        advanced = snapshot.get("advanced_chart_pattern") or {}
+        advanced_score = float(advanced.get("score") or 0)
+        advanced_trigger = self._safe(advanced, "trigger_price")
+        advanced_stop = self._safe(advanced, "invalidation_level")
+        advanced_target = self._safe(advanced, "target_1")
+        advanced_late = bool(advanced.get("late_entry_risk"))
+        advanced_stage = str(advanced.get("stage") or "")
         resistance = self._safe(snapshot, "resistance_20")
         support = self._safe(snapshot, "support_20")
         ema_20 = self._safe(snapshot, "ema_20")
@@ -76,7 +83,18 @@ class ScoringEngine:
         rsi_delta = self._safe(snapshot, "rsi_delta_5d")
         rs_delta = self._safe(snapshot, "relative_strength_delta_5d")
 
-        already_moved = abs(change_pct) >= 5.0 or abs(gap_pct) >= 3.0 or bool(snapshot.get("breakout_20"))
+        if advanced_trigger and advanced_score >= 55:
+            resistance = max(resistance, advanced_trigger / 1.002)
+        if advanced_stop:
+            support = max(support, advanced_stop)
+
+        already_moved = (
+            abs(change_pct) >= 5.0
+            or abs(gap_pct) >= 3.0
+            or bool(snapshot.get("breakout_20"))
+            or advanced_late
+            or advanced_stage == "LATE_MOVE"
+        )
         if already_moved or not price or not resistance or resistance <= price:
             return {
                 "is_pre_breakout": False,
@@ -127,8 +145,16 @@ class ScoringEngine:
         if rs_delta > 0:
             score += 1
             reasons.append("Relative strength vs benchmark is improving.")
+        if advanced_score >= 75 and advanced.get("direction") == "bullish":
+            score += 4
+            labels.extend(str(label) for label in advanced.get("labels", [])[:4])
+            reasons.insert(0, f"{advanced.get('pattern_name')} is forming near a clean trigger.")
+        elif advanced_score >= 60 and advanced.get("direction") == "bullish":
+            score += 2
+            labels.extend(str(label) for label in advanced.get("labels", [])[:3])
+            reasons.insert(0, f"{advanced.get('pattern_name')} adds chart-pattern confluence.")
 
-        if score < 4:
+        if score < 4 and advanced_score < 68:
             return {
                 "is_pre_breakout": False,
                 "pre_breakout_labels": list(dict.fromkeys(labels)),
@@ -139,8 +165,14 @@ class ScoringEngine:
         invalidation_candidates = [value for value in (support, ema_20, ema_50) if value and value < price]
         invalidation_level = max(invalidation_candidates) if invalidation_candidates else price * 0.965
         expected_move = max(1.5, min(7.5, atr_pct * 1.4 if atr_pct else tight_consolidation * 0.75))
+        if advanced_target and advanced_target > alert_price:
+            expected_move = max(expected_move, min(12.0, ((advanced_target - alert_price) / alert_price) * 100))
+        if advanced_stop and advanced_stop < price:
+            invalidation_level = max(invalidation_level, advanced_stop)
         action = "ALERT_ABOVE_LEVEL" if distance_to_resistance <= 1.5 else "WATCH"
         confidence = min(88, 48 + score * 4)
+        if advanced_score >= 60:
+            confidence = min(92, max(confidence, 52 + advanced_score * 0.42))
 
         return {
             "is_pre_breakout": True,
@@ -159,6 +191,8 @@ class ScoringEngine:
             "reason": "; ".join(reasons[:4]),
             "pre_breakout_timeframe": "1-5 sessions",
             "action": action,
+            "pre_breakout_pattern": advanced.get("pattern_name") if advanced_score >= 55 else None,
+            "pre_breakout_pattern_score": round(advanced_score, 1) if advanced_score else 0,
         }
 
     def _pattern_context(self, snapshot: Dict, *, direction: str, price: float) -> Dict:
@@ -177,6 +211,9 @@ class ScoringEngine:
         support = self._safe(snapshot, "support_20")
         resistance = self._safe(snapshot, "resistance_20")
         distance_to_support = self._safe(snapshot, "distance_to_support_pct", 99.0)
+        advanced = snapshot.get("advanced_chart_pattern") or {}
+        advanced_score = self._safe(advanced, "score")
+        advanced_trigger = self._safe(advanced, "trigger_price")
 
         if tight <= 5.5 and atr_expansion <= 1.05:
             labels.append("tight_consolidation")
@@ -205,8 +242,14 @@ class ScoringEngine:
         if return_20d >= 12 and tight <= 7:
             labels.append("flag_pennant_candidate")
             reasons.append("Strong prior move is consolidating in a flag/pennant style range.")
+        if advanced_score >= 50 and advanced.get("direction") == "bullish":
+            labels.extend(str(label).lower() for label in advanced.get("labels", []))
+            pattern_name = str(advanced.get("pattern_name") or "Chart pattern")
+            reasons.insert(0, f"{pattern_name} detected with {advanced_score:.0f}% pattern score.")
 
-        if "cup_handle_candidate" in labels:
+        if advanced_score >= 60 and advanced.get("pattern_name"):
+            setup_type = str(advanced.get("pattern_name"))
+        elif "cup_handle_candidate" in labels:
             setup_type = "Cup and handle candidate"
         elif "flag_pennant_candidate" in labels:
             setup_type = "Flag / pennant continuation"
@@ -221,10 +264,25 @@ class ScoringEngine:
 
         return {
             "pattern_labels": list(dict.fromkeys(labels)),
-            "pattern_score": len(set(labels)),
+            "pattern_score": max(len(set(labels)), int(advanced_score // 12) if advanced_score else 0),
             "setup_type": setup_type,
             "pattern_reason": "; ".join(reasons[:4]) or "Pattern evidence is limited.",
-            "entry_trigger": round((resistance or price) * 1.002, 2) if direction == "bullish" else round((support or price) * 0.998, 2),
+            "entry_trigger": round(advanced_trigger or ((resistance or price) * 1.002), 2) if direction == "bullish" else round((support or price) * 0.998, 2),
+            "chart_pattern": advanced.get("pattern_name") or setup_type,
+            "chart_pattern_family": advanced.get("pattern_family"),
+            "chart_pattern_score": round(advanced_score, 1) if advanced_score else 0,
+            "chart_pattern_stage": advanced.get("stage"),
+            "pattern_target_price": advanced.get("target_1"),
+            "pattern_target_2": advanced.get("target_2"),
+            "pattern_invalidation": advanced.get("invalidation_level"),
+            "pattern_risk_reward": advanced.get("risk_reward"),
+            "pattern_expected_move_pct": advanced.get("expected_move_pct"),
+            "pattern_measured_height_pct": advanced.get("measured_height_pct"),
+            "pattern_freshness_score": advanced.get("freshness_score"),
+            "pattern_late_entry_risk": advanced.get("late_entry_risk"),
+            "pattern_timeframe": advanced.get("timeframe"),
+            "pattern_target_method": advanced.get("target_method"),
+            "pattern_alternates": advanced.get("alternates", []),
         }
 
     def _momentum_continuation_setup(
@@ -378,6 +436,10 @@ class ScoringEngine:
         distance_to_resistance_pct = self._safe(snapshot, "distance_to_resistance_pct", 99.0)
         distance_to_support_pct = self._safe(snapshot, "distance_to_support_pct", 99.0)
         bb_width_ratio = self._safe(snapshot, "bb_width_ratio", 1.0)
+        advanced_pattern = snapshot.get("advanced_chart_pattern") or {}
+        advanced_pattern_score = self._safe(advanced_pattern, "score")
+        advanced_pattern_late = bool(advanced_pattern.get("late_entry_risk"))
+        advanced_pattern_stage = str(advanced_pattern.get("stage") or "")
 
         if snapshot.get("price_above_ema20") and snapshot.get("price_above_ema50"):
             add_bull(12, "trend", "Price is holding above the 20 and 50 EMA.", "trend_up")
@@ -462,6 +524,18 @@ class ScoringEngine:
                 add_bear(5, "volume", f"Delivery ratio is elevated at {delivery_spike:.2f}x normal on weakness.")
         elif not snapshot.get("delivery_available"):
             weaknesses.append("Delivery data is unavailable in the current feed.")
+
+        if advanced_pattern_score >= 55 and advanced_pattern.get("direction") == "bullish":
+            pattern_name = str(advanced_pattern.get("pattern_name") or "Chart pattern")
+            if advanced_pattern_late:
+                risk_factors.append(f"{pattern_name} trigger is already stretched; wait for a fresh base or retest.")
+                tags.extend(["pattern_late_entry", "avoid_late_entry"])
+            else:
+                pattern_points = 16 if advanced_pattern_score >= 82 else 12 if advanced_pattern_score >= 70 else 8
+                add_bull(pattern_points, "breakout", f"{pattern_name} is forming near a clean trigger.", "live_chart_pattern")
+                tags.extend(str(label).lower() for label in advanced_pattern.get("labels", [])[:5])
+                if advanced_pattern_stage in {"READY_TO_BREAK", "BREAKOUT_ACTIVE"}:
+                    add_bull(5, "volatility", "Pattern is close enough to trigger for live monitoring.", "live_trigger_ready")
 
         if atr_expansion >= 1.2 and abs(change_pct) >= 1:
             if bullish >= bearish:
@@ -567,6 +641,12 @@ class ScoringEngine:
         probability = 0.5 if direction == "neutral" else round(confidence / 100, 4)
         signal_summary = "; ".join(reasons[:3]) if reasons else "Confirmation is still weak."
         pattern_context = self._pattern_context(snapshot, direction=direction, price=price)
+        pattern_target = self._safe(advanced_pattern, "target_1")
+        pattern_target_2 = self._safe(advanced_pattern, "target_2")
+        pattern_stop = self._safe(advanced_pattern, "invalidation_level")
+        pattern_expected_move_pct = self._safe(advanced_pattern, "expected_move_pct")
+        if direction == "bullish" and pattern_expected_move_pct > 0:
+            expected_move_pct = max(expected_move_pct, pattern_expected_move_pct)
         
         # Determine actual entry trigger (use price if it has already broken out)
         entry_price = price
@@ -582,6 +662,8 @@ class ScoringEngine:
                 invalidation = entry_price - (atr_val * 2.5)
             if invalidation and invalidation >= entry_price:
                 invalidation = entry_price - atr_val
+            if pattern_stop and pattern_stop < entry_price:
+                invalidation = max(invalidation or 0, pattern_stop)
         elif direction == "bearish":
             if invalidation and invalidation > entry_price + (atr_val * 2.5):
                 invalidation = entry_price + (atr_val * 2.5)
@@ -593,11 +675,14 @@ class ScoringEngine:
         
         # Ensure minimum 1.5 Risk/Reward based on expected move
         base_target_distance = entry_price * (abs(expected_move_pct) / 100)
-        target_distance = max(base_target_distance, stop_distance * 1.5)
+        pattern_target_distance = 0.0
+        if direction == "bullish" and pattern_target > entry_price:
+            pattern_target_distance = pattern_target - entry_price
+        target_distance = max(base_target_distance, stop_distance * 1.5, pattern_target_distance)
         
         if direction == "bullish":
             target_price = entry_price + target_distance
-            extended_target_price = entry_price + (target_distance * 1.5)
+            extended_target_price = max(entry_price + (target_distance * 1.5), pattern_target_2 if pattern_target_2 > entry_price else 0)
             extended_target = entry_price + (target_distance * 2.0)
             trailing_stop = max(stop_loss or 0, self._safe(snapshot, "ema_20") or 0, self._safe(snapshot, "rolling_vwap") or 0) or stop_loss
         elif direction == "bearish":
@@ -696,7 +781,17 @@ class ScoringEngine:
             tags.extend(["momentum_continuation", "re_entry_setup"])
 
         entry_blocks_fresh_buy = direction == "bullish" and entry_timing.get("entry_quality") in {"poor", "avoid"}
-        if pre_breakout.get("is_pre_breakout") and not entry_blocks_fresh_buy:
+        live_pattern_ready = bool(
+            direction == "bullish"
+            and advanced_pattern_score >= 78
+            and not advanced_pattern_late
+            and advanced_pattern_stage in {"READY_TO_BREAK", "BREAKOUT_ACTIVE"}
+            and risk_reward >= 1.3
+        )
+        if live_pattern_ready and not entry_blocks_fresh_buy:
+            signal_stage = "LIVE_PATTERN_READY" if advanced_pattern_stage == "READY_TO_BREAK" else "CONFIRMED_BREAKOUT"
+            action = str(advanced_pattern.get("action") or "BUY_ONLY_ON_TRIGGER_HOLD")
+        elif pre_breakout.get("is_pre_breakout") and not entry_blocks_fresh_buy:
             signal_stage = "PATTERN_FORMING" if pre_breakout.get("pre_breakout_action") == "WATCH" else "ALERT_ABOVE_LEVEL"
             action = pre_breakout.get("pre_breakout_action", "WATCH")
         elif continuation.get("is_momentum_continuation") and not entry_blocks_fresh_buy:
@@ -785,18 +880,27 @@ class ScoringEngine:
             **chase,
             **pre_breakout,
             **continuation,
+            "action": action,
+            "setup_type": (
+                pattern_context["setup_type"]
+                if live_pattern_ready
+                else continuation.get("setup_type") or pre_breakout.get("setup_type") or pattern_context["setup_type"]
+            ),
             "setup_stage": (
                 str(entry_timing.get("setup_stage") or "AVOID_LATE_ENTRY")
                 if entry_blocks_fresh_buy
                 else "PRE_BREAKOUT"
-                if pre_breakout.get("is_pre_breakout")
+                if pre_breakout.get("is_pre_breakout") and not live_pattern_ready
                 else "MOMENTUM_CONTINUATION"
                 if continuation.get("is_momentum_continuation")
+                else "LIVE_PATTERN_READY"
+                if live_pattern_ready
                 else chase["setup_stage"]
             ),
             "trade_labels": list(
                 dict.fromkeys(
-                    (pre_breakout.get("pre_breakout_labels", []) if pre_breakout.get("is_pre_breakout") else [])
+                    (advanced_pattern.get("labels", []) if advanced_pattern_score >= 50 else [])
+                    + (pre_breakout.get("pre_breakout_labels", []) if pre_breakout.get("is_pre_breakout") else [])
                     + (continuation.get("continuation_labels", []) if continuation.get("is_momentum_continuation") else [])
                     + chase.get("trade_labels", [])
                     + entry_timing.get("trade_labels", [])
@@ -811,17 +915,22 @@ class ScoringEngine:
             "best_action": entry_timing.get("best_action"),
             "reentry_plan": entry_timing.get("reentry_plan"),
             "entry_timing_reasons": entry_timing.get("reasons", []),
-            "attention_only": (
-                bool(pre_breakout.get("is_pre_breakout"))
+            "attention_only": False if live_pattern_ready else (
+                (bool(pre_breakout.get("is_pre_breakout")) and not live_pattern_ready)
                 or bool(continuation.get("is_momentum_continuation"))
                 or chase["attention_only"]
                 or bool(entry_timing.get("attention_only"))
             ),
             "allow_buy_call": (
+                True
+                if live_pattern_ready and not entry_blocks_fresh_buy
+                else
                 False
-                if pre_breakout.get("is_pre_breakout") or entry_blocks_fresh_buy
+                if (pre_breakout.get("is_pre_breakout") and not live_pattern_ready) or entry_blocks_fresh_buy
                 else bool(chase["allow_buy_call"] and entry_timing.get("allow_buy_call", True))
             ),
+            "live_pattern_ready": live_pattern_ready,
+            "advanced_chart_pattern": advanced_pattern,
             "risk_reward": risk_reward,
             "timeframe_label": timeframe_label,
             "timeframe_days": timeframe_days,

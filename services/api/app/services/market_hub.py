@@ -24,6 +24,7 @@ from app.services.smart_layers import build_smart_scan_payload
 from app.services.setup_tracker import SetupTrackerService
 from app.services.nifty_context_analyzer import analyze_nifty_context, stock_nifty_alignment_score
 from app.services.breakout_radar import build_breakout_radar
+from app.services.chart_patterns import detect_chart_pattern_setup
 from app.services.telegram_market_alerts import get_telegram_market_alerts
 
 
@@ -358,6 +359,7 @@ class MarketHubService:
         live_frame = self.data.overlay_quote(frame, quote)
         feature_frame = self.indicators.build_feature_frame(live_frame, benchmark_frame)
         snapshot = self.indicators.build_snapshot(symbol, live_frame, feature_frame, intraday_frame)
+        snapshot["advanced_chart_pattern"] = detect_chart_pattern_setup(live_frame, feature_frame, intraday_frame)
         backtest = self.backtest.evaluate(symbol, frame, benchmark_frame) if with_backtest else {}
         signal = self.scoring.evaluate(symbol, snapshot, backtest if with_backtest else None)
         if with_backtest and self.settings.news_api_key:
@@ -593,6 +595,15 @@ class MarketHubService:
             win_rate = float(evidence.get("win_rate") or item.get("historical_context", {}).get("win_rate", 0) or 0)
             return sample_count >= 30 and win_rate >= 0.60
 
+        def is_live_pattern_ready(item: Dict) -> bool:
+            return bool(
+                item.get("live_pattern_ready")
+                and item.get("direction") == "bullish"
+                and not item.get("pattern_late_entry_risk")
+                and item.get("risk_reward", 0) >= 1.3
+                and item.get("allow_buy_call", True)
+            )
+
         top_ranked = self._unique_signals(sorted(
             [
                 item for item in results
@@ -602,11 +613,13 @@ class MarketHubService:
                 and not item.get("overextended_fresh_entry", False)
                 and item.get("setup_stage") not in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
                 and item.get("risk_reward", 0) >= 1.2
-                and is_confirmed_top_call(item)
-                and is_historically_validated(item)
+                and (is_confirmed_top_call(item) or is_live_pattern_ready(item))
+                and (is_historically_validated(item) or is_live_pattern_ready(item))
             ],
             key=lambda item: (
+                is_live_pattern_ready(item),
                 item["alert_level"] == "high_priority",
+                item.get("chart_pattern_score", 0),
                 item["move_quality"],
                 item["confidence"],
                 item["relative_volume"],
@@ -727,7 +740,8 @@ class MarketHubService:
         breakouts = self._unique_signals([
             item for item in results
             if ("breakout" in item["tags"] or "breakdown" in item["tags"]
-            or item.get("setup_stage") == "VALID_BREAKOUT")
+            or item.get("setup_stage") == "VALID_BREAKOUT"
+            or item.get("live_pattern_ready"))
             and not item.get("is_pre_breakout")
         ])
         breakout_candidates = self._fill_signal_bucket(

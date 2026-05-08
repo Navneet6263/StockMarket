@@ -20,6 +20,33 @@ ANGELONE_API_KEY    = os.getenv("ANGELONE_API_KEY", "")
 ANGELONE_CLIENT_ID  = os.getenv("ANGELONE_CLIENT_ID", "")
 ANGELONE_PASSWORD   = os.getenv("ANGELONE_PASSWORD", "")
 ANGELONE_TOTP_KEY   = os.getenv("ANGELONE_TOTP_KEY", "")   # for TOTP-based login
+ANGELONE_CA_BUNDLE = os.getenv("ANGELONE_CA_BUNDLE", "certifi").strip()
+ANGELONE_DISABLE_SSL_VERIFY = os.getenv("ANGELONE_DISABLE_SSL_VERIFY", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configure_tls() -> None:
+    if ANGELONE_DISABLE_SSL_VERIFY:
+        logger.warning("[BROKER] AngelOne SSL verification is disabled by ANGELONE_DISABLE_SSL_VERIFY=true")
+        return
+    if not ANGELONE_CA_BUNDLE:
+        return
+    if ANGELONE_CA_BUNDLE.lower() == "certifi":
+        try:
+            import certifi  # type: ignore
+            bundle = certifi.where()
+        except Exception as exc:
+            logger.warning("[BROKER] certifi CA bundle unavailable: %s", exc)
+            return
+    else:
+        bundle = ANGELONE_CA_BUNDLE
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", bundle)
+    os.environ.setdefault("SSL_CERT_FILE", bundle)
+
+
+def _requests_verify():
+    if ANGELONE_DISABLE_SSL_VERIFY:
+        return False
+    return os.getenv("REQUESTS_CA_BUNDLE") or True
 
 
 class BrokerAdapter(Protocol):
@@ -51,10 +78,11 @@ class AngelOneAdapter:
             logger.info("[BROKER] AngelOne credentials not set — adapter inactive")
             return
         try:
+            _configure_tls()
             from SmartApi import SmartConnect  # type: ignore
             import pyotp                        # type: ignore
 
-            self._api = SmartConnect(api_key=ANGELONE_API_KEY)
+            self._api = SmartConnect(api_key=ANGELONE_API_KEY, disable_ssl=ANGELONE_DISABLE_SSL_VERIFY)
             totp = pyotp.TOTP(ANGELONE_TOTP_KEY).now() if ANGELONE_TOTP_KEY else ""
             data = self._api.generateSession(ANGELONE_CLIENT_ID, ANGELONE_PASSWORD, totp)
             if data.get("status"):
@@ -79,6 +107,7 @@ class AngelOneAdapter:
             resp = requests.get(
                 "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json",
                 timeout=10,
+                verify=_requests_verify(),
             )
             self._instrument_master = resp.json()
         except Exception as exc:
