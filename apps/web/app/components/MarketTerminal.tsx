@@ -35,6 +35,28 @@ function isClientStale(value?: string) {
   return Date.now() - new Date(value).getTime() > STALE_AFTER_MS;
 }
 
+function hasDashboardItems(payload: HotPicksResponse | null) {
+  if (!payload) return false;
+  return Boolean(
+    payload.hotPicks?.length ||
+    payload.watchlist?.length ||
+    payload.momentumRadar?.length ||
+    payload.catalystRadar?.length ||
+    payload.baseFormationRadar?.length ||
+    payload.strictOptions?.radar?.length ||
+    (payload as any).smartHotPicks?.length
+  );
+}
+
+function shouldKeepPreviousDashboard(next: HotPicksResponse, previous: HotPicksResponse | null, forceRefresh: boolean) {
+  if (forceRefresh || !hasDashboardItems(previous) || hasDashboardItems(next)) return false;
+  return Boolean(
+    next.isStale ||
+    next.warnings?.length ||
+    ["empty_fallback", "tracked_fallback", "refresh_in_progress", "refresh_failed_stale"].includes(next.cacheStatus || "")
+  );
+}
+
 function StatCard({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
   return (
     <div className="dashboard-stat">
@@ -125,8 +147,9 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
         {pick.entryQuality ? <div><span>Entry Quality</span><strong>{humanize(pick.entryQuality)}</strong></div> : null}
         {pick.sellerPressure ? <div><span>Seller Pressure</span><strong>{humanize(pick.sellerPressure)}</strong></div> : null}
         {pick.profitBookingRisk ? <div><span>Profit Booking</span><strong>{humanize(pick.profitBookingRisk)}</strong></div> : null}
-        <div><span>Entry</span><strong>{pick.entryZone}</strong></div>
+        <div><span>{pick.entryLabel || "Entry"}</span><strong>{pick.entryZone}</strong></div>
         <div><span>Trigger</span><strong>{pick.entryTrigger || "-"}</strong></div>
+        {pick.entryDistancePct != null ? <div><span>From Trigger</span><strong>{fmtPct(pick.entryDistancePct, 2)}</strong></div> : null}
         <div><span>Target Zone</span><strong>{pick.targetZone || pick.target}</strong></div>
         <div><span>Stoploss</span><strong>{pick.stoploss}</strong></div>
         <div><span>Invalidation</span><strong>{pick.invalidation}</strong></div>
@@ -346,8 +369,13 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
   const [detailError, setDetailError] = useState("");
   const detailRequestRef = useRef(0);
   const hasLoadedHotPicksRef = useRef(false);
+  const hotPicksRef = useRef<HotPicksResponse | null>(null);
 
   const stale = hotPicks?.isStale || isClientStale(hotPicks?.lastUpdated);
+
+  useEffect(() => {
+    hotPicksRef.current = hotPicks;
+  }, [hotPicks]);
 
   const loadHotPicks = useCallback(async (forceRefresh = false) => {
     if (forceRefresh) setRefreshing(true);
@@ -356,7 +384,12 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
       setError("");
       const response = await fetch(`${API_URL}/api/market/hot-picks?force_refresh=${forceRefresh ? "true" : "false"}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`hot_picks_${response.status}`);
-      setHotPicks((await response.json()) as HotPicksResponse);
+      const next = (await response.json()) as HotPicksResponse;
+      if (shouldKeepPreviousDashboard(next, hotPicksRef.current, forceRefresh)) {
+        setError("Live scan is still warming up; keeping the last valid dashboard on screen.");
+        return;
+      }
+      setHotPicks(next);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "hot_picks_error");
     } finally {

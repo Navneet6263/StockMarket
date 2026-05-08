@@ -23,7 +23,7 @@ class MarketDataService:
         self.provider_name = self.broker.__class__.__name__.replace("Adapter", "").lower()
         self.use_broker_history = os.getenv("USE_BROKER_HISTORY", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.history_cache: TTLCache[pd.DataFrame] = TTLCache(settings.history_cache_ttl_sec)
-        self.quote_cache: TTLCache[Dict] = TTLCache(max(20, settings.detail_cache_ttl_sec // 2))
+        self.quote_cache: TTLCache[Dict] = TTLCache(max(5, settings.quote_cache_ttl_sec))
         self.symbol_map = {
             "NIFTY": "^NSEI",
             "NIFTY50": "^NSEI",
@@ -77,7 +77,7 @@ class MarketDataService:
             if not frame.empty:
                 normalized = self._normalize_frame(frame)
                 if not normalized.empty:
-                    self.history_cache.set(cache_key, normalized)
+                    self.history_cache.set(cache_key, normalized, ttl_seconds=self._history_ttl(interval))
                     return normalized.copy()
 
         # Fallback: yfinance
@@ -95,7 +95,7 @@ class MarketDataService:
             return pd.DataFrame()
         frame = self._normalize_frame(history)
         if not frame.empty:
-            self.history_cache.set(cache_key, frame)
+            self.history_cache.set(cache_key, frame, ttl_seconds=self._history_ttl(interval))
         return frame.copy()
 
     def fetch_batch_history(
@@ -173,7 +173,7 @@ class MarketDataService:
                 if normalized.empty:
                     logger.info("skipped no-data symbol=%s period=%s interval=%s", clean, period, interval)
                     continue
-                self.history_cache.set(f"{resolved}:{period}:{interval}", normalized)
+                self.history_cache.set(f"{resolved}:{period}:{interval}", normalized, ttl_seconds=self._history_ttl(interval))
                 results[clean] = normalized.copy()
 
         return results
@@ -245,6 +245,9 @@ class MarketDataService:
         }
         self.quote_cache.set(cache_key, snapshot)
         return dict(snapshot)
+
+    def _history_ttl(self, interval: str) -> int:
+        return self.settings.intraday_cache_ttl_sec if interval and interval != "1d" else self.settings.history_cache_ttl_sec
 
     def overlay_quote(self, frame: pd.DataFrame, quote: Dict | None) -> pd.DataFrame:
         if frame.empty or not quote:

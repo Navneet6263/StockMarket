@@ -958,6 +958,22 @@ class MarketHubService:
             raise RuntimeError("No valid symbols were scanned.")
 
         top_symbols = self._top_symbols(preliminary, self.settings.intraday_symbol_limit)
+        live_quotes: dict[str, Dict] = {}
+        if top_symbols:
+            def fetch_live_quote(symbol: str) -> tuple[str, Dict] | None:
+                try:
+                    return symbol, self.data.fetch_live_snapshot(symbol)
+                except Exception:
+                    logger.warning("live quote fetch failed during scan symbol=%s", symbol, exc_info=True)
+                    return None
+
+            with ThreadPoolExecutor(max_workers=max(1, min(8, len(top_symbols)))) as executor:
+                futures = [executor.submit(fetch_live_quote, symbol) for symbol in top_symbols]
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result is not None:
+                        symbol, quote = result
+                        live_quotes[symbol] = quote
         try:
             intraday_frames = self.data.fetch_batch_history(top_symbols, period="5d", interval="15m", chunk_size=10)
         except Exception:
@@ -974,7 +990,7 @@ class MarketHubService:
                     symbol,
                     frame,
                     benchmark_frame,
-                    discovery.get("symbol_meta", {}).get(symbol),
+                    live_quotes.get(symbol) or discovery.get("symbol_meta", {}).get(symbol),
                     intraday_frames.get(symbol),
                     with_backtest=True,
                 ) | {"discovered_by": discovery.get("symbol_meta", {}).get(symbol, {}).get("tags", [])}

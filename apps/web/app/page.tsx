@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { API_URL, humanize, fmt, fmtPct } from "./lib/market";
 
 const TABS = [
@@ -14,6 +14,12 @@ const TABS = [
   { id: "fast-movers", label: "💨 Fast Movers", api: "/api/market/fast-movers" },
   { id: "avoid", label: "🚫 Avoid", api: "/api/market/avoid" },
 ];
+
+function priceText(value: any) {
+  if (typeof value === "string" && value.trim()) return value.replace(/INR/g, "₹");
+  const formatted = fmt(value);
+  return formatted === "-" ? "-" : `₹${formatted}`;
+}
 
 function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => void }) {
   if (item.entryRule && item.instrumentRule) {
@@ -45,12 +51,17 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
   const action = item.action ?? item.effectiveAction ?? item.display_action ?? item.recommended_action ?? "WATCH";
   const actionClass = action === "BUY" || action === "REENTRY_BUY" ? "buy" : action === "SELL" ? "sell" : "watch";
   const direction = item.direction || "neutral";
+  const chartPattern = item.chartPattern ?? item.setupType ?? item.setup_type ?? item.raw?.setup_type;
+  const patternLabels = item.patternLabels ?? item.pattern_labels ?? item.raw?.pattern_labels ?? [];
+  const entryLabel = item.entryLabel ?? item.entry_label ?? (item.entryMissed || item.entry_missed ? "Retest" : "Entry");
+  const entryValue = item.entryZone ?? item.entry_zone_text ?? item.entry_trigger ?? item.entryTrigger ?? item.breakoutTrigger ?? price;
   return (
     <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer" }}>
       <div className="stock-card-top">
         <h3>{item.symbol}</h3>
         <span className={`badge ${direction}`}>{humanize(direction)}</span>
       </div>
+      {chartPattern ? <div className="stock-reason" style={{ marginTop: 4 }}>{humanize(chartPattern)}</div> : null}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <span className="stock-price">₹{fmt(price)}</span>
         <span className={`stock-change ${change >= 0 ? "up" : "down"}`}>{fmtPct(change)}</span>
@@ -63,6 +74,7 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         {item.entry_quality ? <span className="tag">{humanize(item.entry_quality)} entry</span> : null}
         {item.seller_pressure ? <span className="tag">{humanize(item.seller_pressure)} sellers</span> : null}
         {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking</span> : null}
+        {patternLabels.slice(0, 2).map((label: string) => <span key={label} className="tag">{humanize(label)}</span>)}
       </div>
       <p className="stock-reason">
         {item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || ""}
@@ -71,9 +83,9 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         <p className="stock-reason" style={{ color: "var(--orange)" }}>⚠️ {item.chase_warnings[0]}</p>
       ) : null}
       <div className="stock-targets">
-        <div><span>Entry</span><strong>₹{fmt(item.entry_trigger ?? item.entryTrigger ?? item.breakoutTrigger ?? price)}</strong></div>
-        <div><span>Target</span><strong>₹{fmt(item.target_1 ?? item.target_price ?? item.target ?? item.keyResistance)}</strong></div>
-        <div><span>Stop</span><strong>₹{fmt(item.stop_loss ?? item.stoploss ?? item.invalidation ?? item.invalidationLevel)}</strong></div>
+        <div><span>{entryLabel}</span><strong>{priceText(entryValue)}</strong></div>
+        <div><span>Target</span><strong>{priceText(item.target_1 ?? item.target_price ?? item.target ?? item.keyResistance)}</strong></div>
+        <div><span>Stop</span><strong>{priceText(item.stop_loss ?? item.stoploss ?? item.invalidation ?? item.invalidationLevel)}</strong></div>
       </div>
     </div>
   );
@@ -156,29 +168,50 @@ function extractItems(tab: string, data: any): any[] {
 
 export default function Page() {
   const [tab, setTab] = useState("dashboard");
-  const [data, setData] = useState<any>(null);
+  const [dataByTab, setDataByTab] = useState<Record<string, any>>({});
   const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+  const activeTabRef = useRef(tab);
+
+  useEffect(() => {
+    activeTabRef.current = tab;
+  }, [tab]);
 
   const load = useCallback(async (tabId: string, force = false) => {
-    setLoading(true);
+    const isCurrentTab = activeTabRef.current === tabId;
+    if (isCurrentTab) setLoading(true);
     const tabConfig = TABS.find(t => t.id === tabId) || TABS[0];
     try {
       const r = await fetch(`${API_URL}${tabConfig.api}?force_refresh=${force}`, { cache: "no-store" });
       if (r.ok) {
         const json = await r.json();
-        setData(json);
+        setDataByTab(prev => {
+          const previous = prev[tabId];
+          const previousItems = extractItems(tabId, previous);
+          const incomingItems = extractItems(tabId, json);
+          const transientEmpty =
+            !force &&
+            previousItems.length > 0 &&
+            incomingItems.length === 0 &&
+            (json?.isStale || json?.warning || ["empty_fallback", "refresh_in_progress", "tracked_fallback"].includes(json?.cacheStatus || json?.cache_status));
+          if (transientEmpty) return prev;
+          return { ...prev, [tabId]: json };
+        });
         if (tabId === "dashboard") setSummary(json);
       }
     } catch {}
-    setLoading(false);
+    if (activeTabRef.current === tabId) setLoading(false);
   }, []);
 
-  useEffect(() => { load(tab); }, [tab, load]);
-  useEffect(() => { load("dashboard"); const i = setInterval(() => load(tab), 60000); return () => clearInterval(i); }, []);
+  useEffect(() => {
+    load(tab);
+    const interval = setInterval(() => load(tab), 60000);
+    return () => clearInterval(interval);
+  }, [tab, load]);
 
+  const data = dataByTab[tab] || null;
   const items = extractItems(tab, data);
   const mood = summary?.marketMood || data?.marketMood || "loading";
   const stats = summary?.summary || data?.summary || {};

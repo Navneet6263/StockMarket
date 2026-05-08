@@ -74,6 +74,10 @@ export default function StockDetailPanel({
   const evidenceUnavailable = signal.direction !== "neutral" && evidenceCount === 0;
   const evidenceLimited = signal.direction !== "neutral" && evidenceCount > 0 && evidenceCount < 8;
   const latestTracked = trackedHistory?.setups?.[0];
+  const patternEvidence = String(signal.pattern_reason || "")
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
 
   return (
     <section className="terminal-card detail-panel">
@@ -97,6 +101,7 @@ export default function StockDetailPanel({
         <Stat label="Bias" value={humanize(signal.direction)} tone={toneForDirection(signal.direction)} />
         <Stat label="Confidence" value={`${fmt(signal.confidence, 0)}%`} />
         <Stat label="Risk" value={humanize(signal.risk_level)} tone={toneForRisk(signal.risk_level)} />
+        <Stat label="Chart Pattern" value={humanize(signal.setup_type || signal.setup_label)} />
         <Stat label="Expected Move" value={`${(signal.expected_move_pct ?? 0) > 0 ? "+" : ""}${fmt(signal.expected_move_pct, 2)}%`} tone={toneForDirection(signal.direction)} />
         <Stat label="Timeframe" value={signal.timeframe_label} />
         <Stat label="Invalidation" value={signal.invalidation ? `INR ${fmt(signal.invalidation)}` : "Monitor support"} tone={toneForRisk(signal.risk_level)} />
@@ -107,6 +112,7 @@ export default function StockDetailPanel({
           <LiveChart symbol={detail.symbol} candles={detail.chart} prediction={signal} quote={detail.quote} />
         </div>
         <div className="detail-aside">
+          <BulletPanel title="Chart Pattern Evidence" items={patternEvidence.length ? patternEvidence : signal.pattern_labels || []} />
           <BulletPanel title="Why It Is Flagged" items={detail.explanation.why_it_is_flagged || detail.signals.reasons} />
           <BulletPanel title="What Is Strong" items={detail.explanation.what_is_strong || []} />
           <BulletPanel title="What Is Weak" items={detail.explanation.what_is_weak || detail.signals.weaknesses} />

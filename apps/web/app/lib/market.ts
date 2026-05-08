@@ -246,6 +246,9 @@ export type HotPick = {
   symbol: string;
   currentPrice?: string;
   setupType: "breakout" | "pullback" | "reversal" | "momentum continuation" | "breakdown" | string;
+  chartPattern?: string;
+  patternLabels?: string[];
+  patternReason?: string;
   direction: "bullish" | "bearish" | "neutral";
   confidence: number;
   score?: number;
@@ -271,6 +274,10 @@ export type HotPick = {
   };
   entryZone: string;
   entryTrigger?: string;
+  entryLabel?: string;
+  entryDistancePct?: number | null;
+  entryMissed?: boolean;
+  retestZone?: string;
   target: string;
   targetZone?: string;
   stoploss: string;

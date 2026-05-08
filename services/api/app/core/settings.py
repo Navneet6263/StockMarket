@@ -44,6 +44,8 @@ class Settings:
     yahoo_timeout_sec: int = int(os.getenv("YAHOO_TIMEOUT_SEC", "8"))
     yahoo_batch_chunk_size: int = int(os.getenv("YAHOO_BATCH_CHUNK_SIZE", "30"))
     scanner_max_workers: int = int(os.getenv("SCANNER_MAX_WORKERS", "8"))
+    quote_cache_ttl_sec: int = int(os.getenv("QUOTE_CACHE_TTL_SEC", "10"))
+    intraday_cache_ttl_sec: int = int(os.getenv("INTRADAY_CACHE_TTL_SEC", "45"))
     detail_cache_ttl_sec: int = int(os.getenv("DETAIL_CACHE_TTL_SEC", "90"))
     backtest_cache_ttl_sec: int = int(os.getenv("BACKTEST_CACHE_TTL_SEC", "900"))
     history_cache_ttl_sec: int = int(os.getenv("HISTORY_CACHE_TTL_SEC", "180"))

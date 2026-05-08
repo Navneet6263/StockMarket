@@ -75,6 +75,50 @@ def _signal_fail_level(signal: dict[str, Any]) -> float:
     )
 
 
+def _entry_context(signal: dict[str, Any], *, trigger: float | None = None) -> dict[str, Any]:
+    direction = _direction(signal)
+    price = _safe_float(signal.get("current_price") or signal.get("price"))
+    trigger = _safe_float(trigger) or _signal_trigger(signal)
+    if not price or not trigger or direction not in {"bullish", "bearish"}:
+        return {
+            "price": price,
+            "trigger": trigger,
+            "distance_pct": None,
+            "near": False,
+            "active": False,
+            "missed": False,
+            "entry_label": "Entry",
+            "retest_zone": "-",
+        }
+
+    if direction == "bullish":
+        distance_pct = ((price - trigger) / trigger) * 100
+    else:
+        distance_pct = ((trigger - price) / trigger) * 100
+
+    active = 0 <= distance_pct <= 0.8
+    near = -1.5 <= distance_pct <= 0.8
+    missed = distance_pct > 0.8
+
+    zone = signal.get("re_entry_zone") or {}
+    low = _safe_float(zone.get("low"))
+    high = _safe_float(zone.get("high"))
+    if not low or not high:
+        low = trigger * 0.995
+        high = trigger * 1.006
+
+    return {
+        "price": price,
+        "trigger": trigger,
+        "distance_pct": round(distance_pct, 2),
+        "near": near,
+        "active": active,
+        "missed": missed,
+        "entry_label": "Retest" if missed else "Entry",
+        "retest_zone": _fmt_zone(low, high),
+    }
+
+
 def _action_value(signal: dict[str, Any]) -> str:
     return str(
         signal.get("effectiveAction")
@@ -130,7 +174,8 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
     trigger = _safe_float(trigger) or _signal_trigger(signal)
     fail = _safe_float(fail) or _signal_fail_level(signal)
     action = _action_value(signal)
-    distance_pct = ((trigger - price) / price) * 100 if price and trigger else None
+    entry = _entry_context(signal, trigger=trigger)
+    distance_pct = entry["distance_pct"]
 
     trigger_text = _fmt_price(trigger)
     fail_text = _fmt_price(fail)
@@ -158,6 +203,19 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
             "confirmationText": "Wait for price to break the range before deciding up or down.",
         }
 
+    if entry["missed"]:
+        distance_text = f"{distance_pct:.2f}%" if distance_pct is not None else "above trigger"
+        return {
+            "biasLabel": "Bullish trigger already crossed",
+            "entryStatus": "Wait for retest",
+            "tradeDecision": (
+                f"Trigger was {trigger_text}, but price is already {distance_text} beyond it. "
+                f"Do not treat the old trigger as a fresh entry; wait near {entry['retest_zone']} "
+                "or for a fresh 5/15-min base."
+            )[:260],
+            "confirmationText": f"Fresh entry only after retest/hold near {entry['retest_zone']}. Risk below {fail_text}.",
+        }
+
     if _has_late_entry_risk(signal):
         seller_pressure = _display_label(signal.get("seller_pressure"), "elevated")
         profit_risk = _display_label(signal.get("profit_booking_risk"), "elevated")
@@ -175,16 +233,16 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
             "confirmationText": f"Only reconsider on pullback/retest or a strong hold above {trigger_text}. Risk below {fail_text}.",
         }
 
-    if action in {"BUY", "REENTRY_BUY"} or (price and trigger and price >= trigger):
+    if entry["active"] or (action in {"BUY", "REENTRY_BUY"} and price and trigger and price >= trigger):
         return {
             "biasLabel": "Bullish trigger active",
-            "entryStatus": "Ready above trigger",
-            "tradeDecision": f"Trigger active. Entry only if price sustains above {trigger_text}; risk below {fail_text}.",
+            "entryStatus": "Active near trigger",
+            "tradeDecision": f"Trigger active near {trigger_text}. Entry only if price sustains with volume; risk below {fail_text}.",
             "confirmationText": f"Breakout/re-entry is active above {trigger_text}. Failed below {fail_text}.",
         }
 
     if trigger:
-        if distance_pct is not None and 0 <= distance_pct <= 1.0:
+        if distance_pct is not None and -1.0 <= distance_pct < 0:
             return {
                 "biasLabel": "Bullish near trigger",
                 "entryStatus": "Alert above trigger",
@@ -214,6 +272,9 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
 
 
 def _entry_zone(signal: dict[str, Any]) -> str:
+    entry = _entry_context(signal)
+    if entry["missed"]:
+        return f"Retest {entry['retest_zone']}"
     zone = signal.get("entry_zone") or {}
     low = _safe_float(zone.get("low"))
     high = _safe_float(zone.get("high"))
@@ -420,11 +481,48 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _is_fresh_hot_pick(item: dict[str, Any]) -> bool:
+    raw = item.get("raw") or {}
+    if item.get("direction") != "bullish":
+        return False
+    if item.get("rejectionReasons"):
+        return False
+    if _has_late_entry_risk(raw):
+        return False
+    if raw.get("attention_only") or raw.get("allow_buy_call") is False:
+        return False
+
+    risk_reward = _safe_float(item.get("risk_reward"))
+    if risk_reward and risk_reward < 1.2:
+        return False
+
+    score = _safe_float(item.get("score"))
+    if score < 72:
+        return False
+
+    trigger = _signal_trigger(raw)
+    entry = _entry_context(raw, trigger=trigger)
+    if entry["missed"]:
+        return False
+    entry_quality = str(raw.get("entry_quality") or item.get("entryQuality") or "").lower()
+    action = _action_value(raw)
+    ready_action = action in {"BUY", "REENTRY_BUY", "BUY_ONLY_ON_TRIGGER_HOLD", "BUY_ONLY_ON_RETEST_HOLD"}
+
+    return bool(
+        (ready_action and entry["near"])
+        or (entry["active"] and item.get("cleanRiskSetup"))
+        or (entry["near"] and item.get("cleanRiskSetup") and entry_quality in {"good", "watch", ""})
+    )
+
+
 def _prediction_wording(signal: dict[str, Any], score: float) -> str:
     direction = _direction(signal)
     trigger = _signal_trigger(signal)
     invalidation = _signal_fail_level(signal)
-    if _has_late_entry_risk(signal):
+    entry = _entry_context(signal, trigger=trigger)
+    if direction == "bullish" and entry["missed"]:
+        prefix = "High score watch, trigger already crossed" if score >= 75 else "Watchlist setup, trigger already crossed"
+    elif _has_late_entry_risk(signal):
         prefix = "High score watch, but late-entry risk" if score >= 75 else "Watchlist setup with late-entry risk"
     elif _is_watch_only(signal) and direction == "bullish":
         prefix = "Pre-breakout watch setup" if score >= 60 else "Early bullish watch setup"
@@ -435,7 +533,9 @@ def _prediction_wording(signal: dict[str, Any], score: float) -> str:
     else:
         prefix = "Momentum candidate"
 
-    if _has_late_entry_risk(signal):
+    if direction == "bullish" and entry["missed"]:
+        action = f"Wait for retest near {entry['retest_zone']}"
+    elif _has_late_entry_risk(signal):
         action = "Avoid chasing; wait for pullback or retest"
     elif _is_watch_only(signal) and direction == "bullish":
         action = "No buy until trigger confirms"
@@ -455,6 +555,7 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
     direction = _direction(signal)
     trigger = _signal_trigger(signal)
     stop = _signal_fail_level(signal)
+    entry = _entry_context(signal, trigger=trigger)
     guidance = _guidance(signal, trigger=trigger, fail=stop)
     reason_parts = [
         _prediction_wording(signal, score),
@@ -475,12 +576,19 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "relative_volume": round(_safe_float(signal.get("relative_volume") or signal.get("volume_ratio"), 1.0), 2),
         "risk_reward": _safe_float(signal.get("risk_reward")),
         "setupType": _setup_type(signal),
+        "chartPattern": _setup_type(signal),
+        "patternLabels": signal.get("pattern_labels") or [],
+        "patternReason": signal.get("pattern_reason") or signal.get("pre_breakout_reason") or signal.get("continuation_reason"),
         "direction": direction,
         "confidence": score,
         "score": score,
         "scoreBreakdown": scored["breakdown"],
         "entryZone": _entry_zone(signal),
         "entryTrigger": _fmt_price(trigger),
+        "entryLabel": entry["entry_label"],
+        "entryDistancePct": entry["distance_pct"],
+        "entryMissed": entry["missed"],
+        "retestZone": entry["retest_zone"],
         "target": _fmt_price(target),
         "targetZone": _fmt_price(target),
         "stoploss": _fmt_price(stop),
@@ -502,6 +610,17 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "reentryPlan": signal.get("reentry_plan"),
         "chart": chart,
         "cleanRiskSetup": scored["cleanRiskSetup"],
+        "entry_quality": signal.get("entry_quality"),
+        "entry_timing": signal.get("entry_timing"),
+        "seller_pressure": signal.get("seller_pressure"),
+        "seller_pressure_score": signal.get("seller_pressure_score"),
+        "profit_booking_risk": signal.get("profit_booking_risk"),
+        "best_action": signal.get("best_action"),
+        "reentry_plan": signal.get("reentry_plan"),
+        "allow_buy_call": signal.get("allow_buy_call"),
+        "attention_only": signal.get("attention_only"),
+        "action": signal.get("action"),
+        "recommended_action": signal.get("recommended_action"),
         "raw": signal,
         "rejectionReasons": scored["rejectionReasons"],
         "softReasons": scored["softReasons"],
@@ -731,9 +850,24 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
 
     rejected = [item for item in mapped if item["rejectionReasons"]]
     eligible = [item for item in mapped if not item["rejectionReasons"]]
-    hot = [item for item in eligible if item["score"] >= 80][:8]  # Restored strict 80+ score requirement
+    hot = [item for item in eligible if _is_fresh_hot_pick(item)][:8]
     hot_symbols = {item["symbol"] for item in hot}
-    watchlist = [item for item in eligible if 60 <= item["score"] < 80 and item["symbol"] not in hot_symbols][:16]
+
+    def watch_sort_key(item: dict[str, Any]) -> tuple[int, int, float, float]:
+        distance = item.get("entryDistancePct")
+        near_or_early = distance is not None and -3.0 <= float(distance) <= 0.8
+        return (
+            1 if near_or_early else 0,
+            0 if item.get("entryMissed") else 1,
+            _safe_float(item.get("score")),
+            _safe_float(item.get("relative_volume")),
+        )
+
+    watchlist = sorted(
+        [item for item in eligible if item["score"] >= 60 and item["symbol"] not in hot_symbols],
+        key=watch_sort_key,
+        reverse=True,
+    )[:16]
     used = hot_symbols | {item["symbol"] for item in watchlist}
     momentum = [
         item for item in eligible
@@ -829,6 +963,7 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
             "catalystRadar": len(catalyst_radar),
             "baseFormation": len(base_items),
             "rejected": len(rejected),
+            "lateEntryExcludedFromHotPicks": len([item for item in eligible if item["score"] >= 72 and _has_late_entry_risk(item.get("raw") or {})]),
         },
         "rejectedCountsByReason": dict(reason_counts),
         "top10NearMissCandidates": near_miss,
