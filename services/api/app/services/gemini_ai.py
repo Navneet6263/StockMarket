@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 ENABLE_GEMINI_AI = os.getenv("ENABLE_GEMINI_AI", "true").lower() == "true"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT_SEC", "15"))
 GEMINI_CACHE_TTL = int(os.getenv("GEMINI_CACHE_TTL_SEC", "600"))  # 10 min
 
