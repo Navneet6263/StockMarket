@@ -22,6 +22,7 @@ from app.routers import (
     tracker_router,
 )
 from app.routers.live import router as live_router
+from app.routers.ai import router as ai_router
 
 
 DEFAULT_CORS_ORIGINS = (
@@ -49,6 +50,7 @@ fastapi_app.include_router(evaluation_router)
 fastapi_app.include_router(tracker_router)
 fastapi_app.include_router(legacy_router)
 fastapi_app.include_router(live_router)
+fastapi_app.include_router(ai_router)
 
 
 @fastapi_app.on_event("startup")
