@@ -46,6 +46,7 @@ class ActiveTradeTracker:
         vol_ma = df['Volume'].rolling(20).mean().iloc[-1]
         vol_ratio = latest['Volume'] / vol_ma if vol_ma > 0 else 1.0
         rsi = self._calculate_rsi(df['Close'], 14).iloc[-1]
+        atr = self._calculate_atr(df, 14)
         
         support = prediction.get('support', spot_price * 0.98)
         resistance = prediction.get('resistance', spot_price * 1.02)
@@ -57,7 +58,8 @@ class ActiveTradeTracker:
         # AI Feedback
         ai_feedback = self._generate_ai_feedback(
             option_type, pnl_pct, spot_price, strike, support, resistance,
-            vol_ratio, rsi, mtf_sync, breadth, buying_price, current_option_price
+            vol_ratio, rsi, mtf_sync, breadth, buying_price, current_option_price,
+            atr
         )
         
         # Store trade
@@ -131,7 +133,7 @@ class ActiveTradeTracker:
                              spot: float, strike: float, support: float, 
                              resistance: float, vol_ratio: float, rsi: float,
                              mtf_sync: str, breadth: str, entry_price: float,
-                             current_price: float) -> Dict:
+                             current_price: float, atr: float) -> Dict:
         """
         Generate AI-powered feedback for active trade
         """
@@ -141,7 +143,7 @@ class ActiveTradeTracker:
             return {
                 'rating': 'EXCELLENT_ENTRY',
                 'status': 'HOLD',
-                'logic': f"🔥 Entry ekdam perfect hai! Your buying price ₹{entry_price:.0f} is now ₹{current_price:.0f}. Volume support kar raha hai ({vol_ratio:.1f}x). Keep trailing SL to ₹{current_price * 0.85:.0f}.",
+                'logic': f"🔥 Entry ekdam perfect hai! Your buying price ₹{entry_price:.0f} is now ₹{current_price:.0f}. Volume support kar raha hai ({vol_ratio:.1f}x). Keep trailing SL based on ATR to ₹{max(entry_price, current_price - atr):.0f}.",
                 'risk_meter': 'LOW',
                 'action': 'TRAIL_SL',
                 'emoji': '🔥',
@@ -267,6 +269,15 @@ class ActiveTradeTracker:
         rs = gain / (loss + 0.0001)
         return 100 - (100 / (1 + rs))
     
+    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Calculate Average True Range (ATR) for dynamic stop loss calculation"""
+        high_low = df['High'] - df['Low']
+        high_close = np.abs(df['High'] - df['Close'].shift())
+        low_close = np.abs(df['Low'] - df['Close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = np.max(ranges, axis=1)
+        return true_range.rolling(period).mean().iloc[-1]
+
     def get_all_active_trades(self) -> List[Dict]:
         """Get all active trades"""
         return list(self.active_trades.values())

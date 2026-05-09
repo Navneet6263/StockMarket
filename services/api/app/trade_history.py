@@ -14,7 +14,8 @@ class TradeHistory:
             try:
                 with open(self.history_file, 'r') as f:
                     return json.load(f)
-            except:
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                print(f"Warning: Could not load trade history - {e}")
                 return []
         return []
     
