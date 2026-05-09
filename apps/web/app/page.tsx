@@ -97,10 +97,24 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         {patternLabels.slice(0, 2).map((label: string) => <span key={label} className="tag">{humanize(label)}</span>)}
       </div>
       <p className="stock-reason">
-        {item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || ""}
+        {item.aiReason || item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || ""}
       </p>
-      {item.chase_warnings?.length ? (
+      {item.newsHeadlines?.length ? (
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+          📰 {item.newsHeadlines[0]}
+        </div>
+      ) : null}
+      {item.aiWarnings?.length ? (
+        <p className="stock-reason" style={{ color: "var(--orange)" }}>⚠️ {item.aiWarnings[0]}</p>
+      ) : item.chase_warnings?.length ? (
         <p className="stock-reason" style={{ color: "var(--orange)" }}>⚠️ {item.chase_warnings[0]}</p>
+      ) : null}
+      {item.newsSentiment && item.newsSentiment !== "unknown" ? (
+        <div className="stock-meta" style={{ marginTop: 4 }}>
+          <span className={`tag ${item.newsSentiment === "bullish" ? "buy" : item.newsSentiment === "bearish" ? "sell" : "watch"}`}>News: {item.newsSentiment}</span>
+          {item.insiderSignal && item.insiderSignal !== "unknown" && item.insiderSignal !== "neutral" ? <span className="tag">{item.insiderSignal === "insider_buying" ? "🟢 Insider Buy" : "🔴 Insider Sell"}</span> : null}
+          {item.analystConsensus && item.analystConsensus !== "unknown" ? <span className="tag">Analyst: {item.analystConsensus}</span> : null}
+        </div>
       ) : null}
       <div className="stock-targets">
         <div><span>{entryLabel}</span><strong>{priceText(entryValue)}</strong></div>
