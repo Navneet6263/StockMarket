@@ -33,6 +33,7 @@ GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.15"))
 GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
 
 _cache: Dict[str, tuple[float, Dict]] = {}
+_last_success_by_symbol: Dict[str, tuple[float, Dict]] = {}
 _cache_lock = threading.Lock()
 
 
@@ -47,6 +48,24 @@ def _cached(key: str) -> Dict | None:
 def _set_cache(key: str, data: Dict):
     with _cache_lock:
         _cache[key] = (time.time(), data)
+
+
+def _set_last_success(symbol: str, data: Dict):
+    with _cache_lock:
+        _last_success_by_symbol[symbol.upper()] = (time.time(), dict(data))
+
+
+def _stale_success(symbol: str, reason: str) -> Dict | None:
+    with _cache_lock:
+        entry = _last_success_by_symbol.get(symbol.upper())
+    if not entry:
+        return None
+    age_sec = int(time.time() - entry[0])
+    data = dict(entry[1])
+    data["aiStale"] = True
+    data["aiStatus"] = f"stale_after_{reason}"
+    data["aiStaleAgeSec"] = age_sec
+    return data
 
 
 def analyze_stock_with_ai(
@@ -73,7 +92,8 @@ def analyze_stock_with_ai(
         prompt = _build_prompt(symbol, technical, news, earnings, insider, recommendations, market_context)
         response = _call_gemini(prompt)
         if not response or not response.get("text"):
-            return _unavailable("gemini_api_failed")
+            reason = (response or {}).get("errorReason", "gemini_api_failed")
+            return _stale_success(symbol, reason) or _unavailable(reason)
 
         result = _parse_response(response["text"], symbol)
         result["aiModel"] = GEMINI_MODEL
@@ -82,11 +102,12 @@ def analyze_stock_with_ai(
         if response.get("finishReason") == "MAX_TOKENS":
             logger.warning("[GEMINI] response truncated symbol=%s usage=%s", symbol, result["aiTokenUsage"])
         _set_cache(cache_key, result)
+        _set_last_success(symbol, result)
         return result
 
     except Exception as exc:
         logger.warning("[GEMINI] analyze failed symbol=%s: %s", symbol, exc)
-        return _unavailable(f"error: {exc}")
+        return _stale_success(symbol, "error") or _unavailable(f"error: {exc}")
 
 
 def _cache_key(
@@ -101,13 +122,12 @@ def _cache_key(
     """Cache by the facts Gemini sees, not just by symbol."""
     fingerprint = {
         "symbol": symbol.upper(),
-        "price": technical.get("current_price") or technical.get("price"),
         "direction": technical.get("direction"),
-        "confidence": technical.get("confidence"),
+        "confidenceBucket": int(float(technical.get("confidence") or 0) // 5) * 5,
         "setup": technical.get("setup_label") or technical.get("setup_type"),
-        "trigger": technical.get("entry_trigger") or technical.get("safe_entry_price"),
-        "target": technical.get("target_1") or technical.get("target_price"),
-        "stop": technical.get("stop_loss") or technical.get("invalidation"),
+        "trigger": _rounded_level(technical.get("entry_trigger") or technical.get("safe_entry_price")),
+        "target": _rounded_level(technical.get("target_1") or technical.get("target_price")),
+        "stop": _rounded_level(technical.get("stop_loss") or technical.get("invalidation")),
         "news": news.get("newsSentiment"),
         "earningsNear": earnings.get("earningsNear"),
         "insider": insider.get("signal"),
@@ -116,6 +136,13 @@ def _cache_key(
     }
     digest = hashlib.sha1(json.dumps(fingerprint, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
     return f"gemini:{symbol.upper()}:{digest}"
+
+
+def _rounded_level(value: Any) -> float | None:
+    try:
+        return round(float(value), 1)
+    except (TypeError, ValueError):
+        return None
 
 
 def _build_prompt(
@@ -208,7 +235,7 @@ def _call_gemini(prompt: str) -> Dict[str, Any] | None:
         resp = requests.post(url, json=payload, timeout=GEMINI_TIMEOUT)
         if resp.status_code != 200:
             logger.warning("[GEMINI] API returned %d: %s", resp.status_code, resp.text[:200])
-            return None
+            return {"text": "", "errorReason": f"gemini_http_{resp.status_code}"}
         data = resp.json()
         candidates = data.get("candidates", [])
         if candidates:
@@ -236,6 +263,8 @@ def _parse_response(text: str, symbol: str) -> Dict:
         "aiTimeframe": "3-5 days",
         "aiNewsImpact": "unknown",
         "aiTradePlan": "",
+        "aiStale": False,
+        "aiStatus": "active",
         "rawResponse": text,
         "available": True,
     }
@@ -322,6 +351,24 @@ def _redact_api_key(message: str) -> str:
     return message.replace(GEMINI_API_KEY, "<redacted>")
 
 
+def gemini_runtime_status() -> Dict[str, Any]:
+    with _cache_lock:
+        cache_size = len(_cache)
+        last_success_count = len(_last_success_by_symbol)
+    return {
+        "enabled": ENABLE_GEMINI_AI,
+        "apiKeyConfigured": bool(GEMINI_API_KEY),
+        "model": GEMINI_MODEL,
+        "timeoutSec": GEMINI_TIMEOUT,
+        "cacheTtlSec": GEMINI_CACHE_TTL,
+        "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
+        "temperature": GEMINI_TEMPERATURE,
+        "thinkingBudget": GEMINI_THINKING_BUDGET,
+        "cacheSize": cache_size,
+        "lastSuccessCount": last_success_count,
+    }
+
+
 def _unavailable(reason: str) -> Dict:
     return {
         "aiConviction": None,
@@ -334,6 +381,8 @@ def _unavailable(reason: str) -> Dict:
         "aiModel": GEMINI_MODEL,
         "aiFinishReason": None,
         "aiTokenUsage": {},
+        "aiStale": False,
+        "aiStatus": reason,
         "rawResponse": None,
         "available": False,
         "reason": reason,

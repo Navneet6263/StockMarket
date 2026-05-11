@@ -9,6 +9,7 @@ from app.services.strict_options import build_strict_options_response
 
 try:
     from app.services.ai_intelligence import get_ai_analysis
+    from app.services.gemini_ai import gemini_runtime_status
     AI_AVAILABLE = True
 except ImportError:
     AI_AVAILABLE = False
@@ -464,6 +465,7 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
     trigger = _signal_trigger(signal)
     stop = _signal_fail_level(signal)
     guidance = _guidance(signal, trigger=trigger, fail=stop)
+    demand_supply = signal.get("demand_supply") or {}
     reason_parts = [
         _prediction_wording(signal, score),
         signal.get("pattern_reason") or signal.get("pre_breakout_reason") or signal.get("continuation_reason") or signal.get("signal_summary"),
@@ -513,6 +515,13 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "reentryPlan": signal.get("reentry_plan"),
         "chart": chart,
         "cleanRiskSetup": scored["cleanRiskSetup"],
+        "demandSupply": demand_supply,
+        "demandStatus": demand_supply.get("status") or signal.get("demand_status"),
+        "demandScore": demand_supply.get("demandScore") or signal.get("demand_score"),
+        "supplyScore": demand_supply.get("supplyScore") or signal.get("supply_score"),
+        "trapRisk": demand_supply.get("trapRisk") or signal.get("trap_risk"),
+        "trapRiskScore": demand_supply.get("trapRiskScore") or signal.get("trap_risk_score"),
+        "smartMoneyRead": demand_supply.get("smartMoneyRead"),
         "raw": signal,
         "rejectionReasons": scored["rejectionReasons"],
         "softReasons": scored["softReasons"],
@@ -776,6 +785,10 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
                     pick["aiAction"] = ai["finalAction"]
                     pick["aiAvailable"] = bool(ai_analysis.get("available"))
                     pick["aiStatus"] = "active" if ai_analysis.get("available") else ai_analysis.get("reason", "unavailable")
+                    if ai_analysis.get("aiStale"):
+                        pick["aiStatus"] = ai_analysis.get("aiStatus", "stale")
+                    pick["aiStale"] = bool(ai_analysis.get("aiStale"))
+                    pick["aiStaleAgeSec"] = ai_analysis.get("aiStaleAgeSec")
                     pick["aiConviction"] = ai_analysis.get("aiConviction")
                     pick["geminiAction"] = ai_analysis.get("aiAction")
                     pick["aiReason"] = ai_analysis.get("aiReason", "")
@@ -901,6 +914,7 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         "rejectedCountsByReason": dict(reason_counts),
         "top10NearMissCandidates": near_miss,
     }
+    ai_diagnostics = gemini_runtime_status() if AI_AVAILABLE else {"enabled": False, "reason": "ai_module_import_failed"}
     return {
         "marketMood": market_mood,
         "lastUpdated": last_updated,
@@ -930,6 +944,7 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
             "nearMissCandidates": near_miss,
         },
         "debug": debug,
+        "aiDiagnostics": ai_diagnostics,
         "marketExplanation": scan.get("macro_context", {}).get("summary") or "Market explanation unavailable from current data.",
         "sectorStrength": scan.get("market_discovery", {}).get("bucket_counts", {}),
         "performance": performance,

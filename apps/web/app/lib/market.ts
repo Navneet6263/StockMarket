@@ -30,6 +30,19 @@ export type BacktestResult = {
   }>;
 };
 
+export type DemandSupply = {
+  status?: string;
+  demandScore?: number;
+  supplyScore?: number;
+  trapRiskScore?: number;
+  trapRisk?: string;
+  smartMoneyRead?: string;
+  evidence?: string[];
+  trapReasons?: string[];
+  blockFreshEntry?: boolean;
+  confirmationRule?: string;
+};
+
 export type MarketSignal = {
   symbol: string;
   company_name?: string;
@@ -65,6 +78,12 @@ export type MarketSignal = {
   seller_pressure?: "low" | "medium" | "high" | "very_high" | string;
   seller_pressure_score?: number;
   profit_booking_risk?: "low" | "medium" | "high" | "very_high" | string;
+  demand_supply?: DemandSupply;
+  demand_status?: string;
+  demand_score?: number;
+  supply_score?: number;
+  trap_risk?: string;
+  trap_risk_score?: number;
   best_action?: string;
   reentry_plan?: string;
   entry_timing_reasons?: string[];
@@ -318,11 +337,20 @@ export type HotPick = {
   aiModel?: string;
   aiFinishReason?: string;
   aiTokenUsage?: Record<string, number>;
+  aiStale?: boolean;
+  aiStaleAgeSec?: number;
   newsHeadlines?: string[];
   newsSentiment?: "bullish" | "bearish" | "neutral" | "unknown" | string;
   insiderSignal?: string;
   analystConsensus?: string;
   aiWarnings?: string[];
+  demandSupply?: DemandSupply;
+  demandStatus?: string;
+  demandScore?: number;
+  supplyScore?: number;
+  trapRisk?: string;
+  trapRiskScore?: number;
+  smartMoneyRead?: string;
   rejectionReasons?: string[];
   softReasons?: string[];
   raw?: MarketSignal;
@@ -458,6 +486,19 @@ export type HotPicksResponse = {
     averageReturn?: number | null;
     maxLoss?: number | null;
     message?: string | null;
+  };
+  aiDiagnostics?: {
+    enabled?: boolean;
+    apiKeyConfigured?: boolean;
+    model?: string;
+    timeoutSec?: number;
+    cacheTtlSec?: number;
+    maxOutputTokens?: number;
+    temperature?: number;
+    thinkingBudget?: number;
+    cacheSize?: number;
+    lastSuccessCount?: number;
+    reason?: string;
   };
   warnings: string[];
 };

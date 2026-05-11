@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg: #f8fafc;
   --sidebar: #ffffff;
   --card: #ffffff;
@@ -52,6 +52,7 @@ body { font-family: var(--font-sans), system-ui, sans-serif; background: var(--b
 .ai-kicker { font-size: 10px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 800; }
 .ai-plan { font-size: 12px; color: var(--text); line-height: 1.45; }
 .ai-risk-list { display: grid; gap: 4px; font-size: 12px; color: var(--orange); line-height: 1.4; }
+.demand-panel { background: #f8fafc; border: 1px dashed var(--border); border-radius: 8px; padding: 9px 10px; display: grid; gap: 6px; }
 .stock-targets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 12px; }
 .stock-targets div { background: #f8fafc; border-radius: 6px; padding: 8px; text-align: center; }
 .stock-targets span { color: var(--muted); display: block; font-size: 10px; text-transform: uppercase; }

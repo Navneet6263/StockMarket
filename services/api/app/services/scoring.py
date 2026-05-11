@@ -1,10 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Dict, List
 
 import numpy as np
 
 from app.services.chase_risk import classify_chase_risk
+from app.services.demand_supply import analyze_demand_supply
 from app.services.entry_timing import analyze_entry_timing
 from app.services.lifecycle import build_lifecycle_advice
 
@@ -752,6 +753,17 @@ class ScoringEngine:
             risk_factors.append(chase["chase_risk_reason"])
             tags.extend(["avoid_late_entry", "overextended"])
         entry_timing = analyze_entry_timing(snapshot, direction=direction)
+        demand_supply = analyze_demand_supply(snapshot, direction=direction)
+        if demand_supply.get("blockFreshEntry"):
+            tags.extend(["bull_trap_risk", "avoid_late_entry", "supply_pressure"])
+            risk_factors.append(demand_supply.get("smartMoneyRead", "Trap risk is elevated."))
+            risk_factors.extend(demand_supply.get("trapReasons", [])[:2])
+        elif demand_supply.get("status") in {"demand_absorption", "early_demand"}:
+            tags.extend(["demand_absorption", "accumulation_watch"])
+            reasons.append(demand_supply.get("smartMoneyRead", "Demand evidence is improving."))
+        elif demand_supply.get("status") == "supply_pressure":
+            tags.extend(["supply_pressure", "seller_pressure"])
+            risk_factors.append(demand_supply.get("smartMoneyRead", "Supply pressure is elevated."))
         if direction == "bullish" and entry_timing.get("profit_booking_risk") in {"high", "very_high"}:
             tags.extend(["profit_booking_zone", "seller_pressure", "avoid_late_entry"])
             risk_factors.extend(entry_timing.get("reasons", [])[:2])
@@ -780,7 +792,13 @@ class ScoringEngine:
         if continuation.get("is_momentum_continuation"):
             tags.extend(["momentum_continuation", "re_entry_setup"])
 
-        entry_blocks_fresh_buy = direction == "bullish" and entry_timing.get("entry_quality") in {"poor", "avoid"}
+        entry_blocks_fresh_buy = (
+            direction == "bullish"
+            and (
+                entry_timing.get("entry_quality") in {"poor", "avoid"}
+                or bool(demand_supply.get("blockFreshEntry"))
+            )
+        )
         live_pattern_ready = bool(
             direction == "bullish"
             and advanced_pattern_score >= 78
@@ -915,6 +933,12 @@ class ScoringEngine:
             "best_action": entry_timing.get("best_action"),
             "reentry_plan": entry_timing.get("reentry_plan"),
             "entry_timing_reasons": entry_timing.get("reasons", []),
+            "demand_supply": demand_supply,
+            "demand_status": demand_supply.get("status"),
+            "demand_score": demand_supply.get("demandScore"),
+            "supply_score": demand_supply.get("supplyScore"),
+            "trap_risk": demand_supply.get("trapRisk"),
+            "trap_risk_score": demand_supply.get("trapRiskScore"),
             "attention_only": False if live_pattern_ready else (
                 (bool(pre_breakout.get("is_pre_breakout")) and not live_pattern_ready)
                 or bool(continuation.get("is_momentum_continuation"))

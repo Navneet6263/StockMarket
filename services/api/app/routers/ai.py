@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from app.core.dependencies import get_market_hub
 from app.services.ai_intelligence import get_ai_analysis
 from app.services.finnhub_data import get_stock_intelligence
+from app.services.gemini_ai import gemini_runtime_status
 from app.services.market_hub import MarketHubService
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -27,6 +28,12 @@ async def ai_analyze(symbol: str, hub: MarketHubService = Depends(get_market_hub
     except Exception as exc:
         logger.exception("AI analyze failed symbol=%s", symbol)
         return {"error": str(exc), "symbol": symbol}
+
+
+@router.get("/status")
+async def ai_status():
+    """Safe AI runtime status for production diagnostics. Does not expose API keys."""
+    return {"gemini": gemini_runtime_status()}
 
 
 @router.get("/news/{symbol}")

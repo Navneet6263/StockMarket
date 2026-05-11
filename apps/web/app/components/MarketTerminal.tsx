@@ -142,6 +142,10 @@ function ScoreBreakdown({ pick }: { pick: HotPick }) {
 
 function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compact?: boolean; onSelect: (symbol: string) => void }) {
   const hasAi = Boolean(pick.aiAvailable && (pick.aiReason || pick.aiTradePlan || pick.aiScore || pick.aiConviction));
+  const aiStatus = pick.aiStatus || (pick.aiAvailable === false ? "unavailable" : "");
+  const demand = pick.demandSupply || {};
+  const demandStatus = pick.demandStatus || demand.status;
+  const trapRisk = pick.trapRisk || demand.trapRisk;
   return (
     <article className={`hot-pick-card ${compact ? "is-compact" : ""}`}>
       <div className="hot-card-top">
@@ -159,6 +163,7 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
 
       <p className="pick-reason">{pick.aiReason || pick.reason}</p>
       {hasAi && pick.aiTradePlan ? <div className={`decision-strip ${pick.direction}`}>{pick.aiTradePlan}</div> : null}
+      {!hasAi && aiStatus ? <div className="micro-copy">Gemini: {humanize(aiStatus)}</div> : null}
       {pick.tradeDecision ? <div className={`decision-strip ${pick.direction}`}>{pick.tradeDecision}</div> : null}
 
       <div className="trade-plan-grid">
@@ -177,7 +182,11 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
         <div><span>Stoploss</span><strong>{pick.stoploss}</strong></div>
         <div><span>Invalidation</span><strong>{pick.invalidation}</strong></div>
         <div><span>Catalyst</span><strong>{humanize(pick.catalystStatus || "unknown")}</strong></div>
+        {(demandStatus || pick.smartMoneyRead) ? <div><span>Demand/Supply</span><strong>{humanize(demandStatus || "neutral")}</strong></div> : null}
+        {trapRisk ? <div><span>Trap Risk</span><strong>{humanize(trapRisk)}</strong></div> : null}
       </div>
+
+      {pick.smartMoneyRead ? <div className="risk-copy">{pick.smartMoneyRead}</div> : null}
 
       {!compact ? <ScoreBreakdown pick={pick} /> : null}
 

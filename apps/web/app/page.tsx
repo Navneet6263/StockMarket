@@ -48,6 +48,14 @@ function aiActionClass(action: any) {
   return "watch";
 }
 
+function demandTone(status: any, trapRisk: any) {
+  const trap = String(trapRisk || "").toLowerCase();
+  const text = String(status || "").toLowerCase();
+  if (trap === "high" || trap === "very_high" || text.includes("trap") || text.includes("supply")) return "sell";
+  if (text.includes("demand") || text.includes("accumulation")) return "buy";
+  return "watch";
+}
+
 function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => void }) {
   if (item.entryRule && item.instrumentRule) {
     return (
@@ -88,6 +96,14 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
   const aiActionLabel = item.geminiAction || item.aiAction;
   const aiScore = item.aiScore ?? item.aiConviction;
   const hasAi = Boolean(item.aiAvailable && (aiReason || aiTradePlan || aiScore));
+  const hasAiStatus = Boolean(item.aiStatus || item.aiAvailable === false);
+  const demand = item.demandSupply || item.demand_supply || item.raw?.demand_supply || {};
+  const demandStatus = item.demandStatus || item.demand_status || demand.status;
+  const demandScore = item.demandScore ?? item.demand_score ?? demand.demandScore;
+  const supplyScore = item.supplyScore ?? item.supply_score ?? demand.supplyScore;
+  const trapRisk = item.trapRisk || item.trap_risk || demand.trapRisk;
+  const trapRiskScore = item.trapRiskScore ?? item.trap_risk_score ?? demand.trapRiskScore;
+  const smartMoneyRead = item.smartMoneyRead || demand.smartMoneyRead;
   const fallbackReason = item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || "";
   return (
     <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer" }}>
@@ -129,8 +145,26 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
           ) : null}
         </div>
       ) : (
-        <p className="stock-reason">{fallbackReason}</p>
+        <>
+          <p className="stock-reason">{fallbackReason}</p>
+          {hasAiStatus ? (
+            <div className="stock-meta">
+              <span className="tag watch">Gemini: {humanize(item.aiStatus || "unavailable")}</span>
+            </div>
+          ) : null}
+        </>
       )}
+      {(demandStatus || smartMoneyRead) ? (
+        <div className="demand-panel">
+          <div className="stock-meta">
+            {demandStatus ? <span className={`tag ${demandTone(demandStatus, trapRisk)}`}>{humanize(demandStatus)}</span> : null}
+            {demandScore != null ? <span className="tag">Demand {fmt(demandScore, 0)}</span> : null}
+            {supplyScore != null ? <span className="tag">Supply {fmt(supplyScore, 0)}</span> : null}
+            {trapRisk ? <span className={`tag ${demandTone(demandStatus, trapRisk)}`}>Trap {humanize(trapRisk)} {trapRiskScore != null ? fmt(trapRiskScore, 0) : ""}</span> : null}
+          </div>
+          {smartMoneyRead ? <p className="stock-reason">{smartMoneyRead}</p> : null}
+        </div>
+      ) : null}
       {item.newsHeadlines?.length ? (
         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
           📰 {item.newsHeadlines[0]}
