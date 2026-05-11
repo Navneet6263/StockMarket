@@ -1,14 +1,23 @@
-"""Gemini AI Reasoning Layer — combines technicals + news + fundamentals into smart analysis.
+"""Gemini AI reasoning layer.
+
+Combines scanner technicals, news, earnings, insider, analyst, and market
+context into a compact structured verdict. Gemini enriches the scanner output;
+the scanner remains the source of truth for prices, triggers, targets, and
+stops.
+
 Feature flag: ENABLE_GEMINI_AI=true
 Requires: GEMINI_API_KEY in .env
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
+import re
 import threading
 import time
-from typing import Dict
+from typing import Any, Dict
 
 import requests
 
@@ -18,7 +27,10 @@ ENABLE_GEMINI_AI = os.getenv("ENABLE_GEMINI_AI", "true").lower() == "true"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT_SEC", "15"))
-GEMINI_CACHE_TTL = int(os.getenv("GEMINI_CACHE_TTL_SEC", "600"))  # 10 min
+GEMINI_CACHE_TTL = int(os.getenv("GEMINI_CACHE_TTL_SEC", "600"))
+GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "512"))
+GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.15"))
+GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
 
 _cache: Dict[str, tuple[float, Dict]] = {}
 _cache_lock = threading.Lock()
@@ -47,10 +59,9 @@ def analyze_stock_with_ai(
     market_context: Dict = None,
 ) -> Dict:
     """
-    Send all stock data to Gemini AI for reasoning.
-    Returns structured analysis with conviction score, explanation, and action.
+    Send scanner facts to Gemini and return a structured enrichment verdict.
     """
-    cache_key = f"gemini:{symbol}"
+    cache_key = _cache_key(symbol, technical, news, earnings, insider, recommendations, market_context)
     cached = _cached(cache_key)
     if cached:
         return cached
@@ -61,16 +72,50 @@ def analyze_stock_with_ai(
     try:
         prompt = _build_prompt(symbol, technical, news, earnings, insider, recommendations, market_context)
         response = _call_gemini(prompt)
-        if not response:
+        if not response or not response.get("text"):
             return _unavailable("gemini_api_failed")
 
-        result = _parse_response(response, symbol)
+        result = _parse_response(response["text"], symbol)
+        result["aiModel"] = GEMINI_MODEL
+        result["aiFinishReason"] = response.get("finishReason")
+        result["aiTokenUsage"] = _token_usage(response.get("usageMetadata"))
+        if response.get("finishReason") == "MAX_TOKENS":
+            logger.warning("[GEMINI] response truncated symbol=%s usage=%s", symbol, result["aiTokenUsage"])
         _set_cache(cache_key, result)
         return result
 
     except Exception as exc:
         logger.warning("[GEMINI] analyze failed symbol=%s: %s", symbol, exc)
         return _unavailable(f"error: {exc}")
+
+
+def _cache_key(
+    symbol: str,
+    technical: Dict,
+    news: Dict,
+    earnings: Dict,
+    insider: Dict,
+    recommendations: Dict,
+    market_context: Dict | None,
+) -> str:
+    """Cache by the facts Gemini sees, not just by symbol."""
+    fingerprint = {
+        "symbol": symbol.upper(),
+        "price": technical.get("current_price") or technical.get("price"),
+        "direction": technical.get("direction"),
+        "confidence": technical.get("confidence"),
+        "setup": technical.get("setup_label") or technical.get("setup_type"),
+        "trigger": technical.get("entry_trigger") or technical.get("safe_entry_price"),
+        "target": technical.get("target_1") or technical.get("target_price"),
+        "stop": technical.get("stop_loss") or technical.get("invalidation"),
+        "news": news.get("newsSentiment"),
+        "earningsNear": earnings.get("earningsNear"),
+        "insider": insider.get("signal"),
+        "analyst": recommendations.get("consensus"),
+        "market": (market_context or {}).get("marketMood"),
+    }
+    digest = hashlib.sha1(json.dumps(fingerprint, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    return f"gemini:{symbol.upper()}:{digest}"
 
 
 def _build_prompt(
@@ -82,9 +127,7 @@ def _build_prompt(
     recommendations: Dict,
     market_context: Dict = None,
 ) -> str:
-    """Build a structured prompt for Gemini."""
-
-    # Technical summary
+    """Build a compact structured prompt for Gemini."""
     direction = technical.get("direction", "neutral")
     confidence = technical.get("confidence", 0)
     rsi = technical.get("rsi", 50)
@@ -96,84 +139,69 @@ def _build_prompt(
     target = technical.get("target_1") or technical.get("target_price", 0)
     stop = technical.get("stop_loss") or technical.get("invalidation", 0)
     pattern = technical.get("chart_pattern") or technical.get("setup_type", "")
-    reasons = technical.get("reasons", [])[:3]
+    reasons = [str(reason)[:140] for reason in (technical.get("reasons") or [])[:3]]
 
-    # News summary
     news_sentiment = news.get("newsSentiment", "unknown")
-    headlines = [h.get("title", "") for h in news.get("headlines", [])[:3]]
+    headlines = [str(h.get("title", ""))[:120] for h in (news.get("headlines") or [])[:2]]
 
-    # Earnings
-    earnings_near = earnings.get("earningsNear", False)
-    recent_beat = earnings.get("recentBeat")
+    input_data = {
+        "symbol": symbol.upper(),
+        "technical": {
+            "direction": direction,
+            "setup": setup,
+            "pattern": pattern,
+            "confidence": confidence,
+            "rsi": rsi,
+            "relativeVolume": volume_ratio,
+            "changePct": change_pct,
+            "riskReward": rr,
+            "entry": entry,
+            "target": target,
+            "stop": stop,
+            "scannerAction": technical.get("action") or technical.get("recommended_action") or "WATCH",
+            "reasons": reasons,
+        },
+        "context": {
+            "newsSentiment": news_sentiment,
+            "headlines": headlines,
+            "earningsNear": earnings.get("earningsNear", False),
+            "recentBeat": earnings.get("recentBeat"),
+            "insiderSignal": insider.get("signal", "unknown"),
+            "analystConsensus": recommendations.get("consensus", "unknown"),
+            "buyPct": recommendations.get("buyPct", 0),
+            "marketMood": (market_context or {}).get("marketMood", "unknown"),
+        },
+    }
 
-    # Insider
-    insider_signal = insider.get("signal", "unknown")
-
-    # Analyst
-    consensus = recommendations.get("consensus", "unknown")
-    buy_pct = recommendations.get("buyPct", 0)
-
-    # Market
-    market_mood = (market_context or {}).get("marketMood", "unknown")
-
-    prompt = f"""You are a senior Indian stock market analyst. Analyze this stock and give a clear recommendation.
-
-STOCK: {symbol}
-
-TECHNICAL ANALYSIS:
-- Direction: {direction}
-- Setup: {setup}
-- Pattern: {pattern}
-- Confidence: {confidence}%
-- RSI: {rsi}
-- Volume ratio: {volume_ratio}x
-- Today's change: {change_pct}%
-- Risk/Reward: 1:{rr}
-- Entry: ₹{entry} | Target: ₹{target} | Stop: ₹{stop}
-- Reasons: {'; '.join(reasons)}
-
-NEWS SENTIMENT: {news_sentiment}
-Headlines: {'; '.join(headlines) if headlines else 'No recent news'}
-
-EARNINGS: {'Near (within 7 days)' if earnings_near else 'Not near'}
-Recent result: {'Beat estimates' if recent_beat else 'Missed' if recent_beat is False else 'Unknown'}
-
-INSIDER ACTIVITY: {insider_signal}
-
-ANALYST CONSENSUS: {consensus} ({buy_pct}% buy)
-
-MARKET MOOD (Nifty): {market_mood}
-
-INSTRUCTIONS:
-1. Give a CONVICTION SCORE (0-100). Above 75 = strong buy candidate.
-2. Give ACTION: BUY / WATCH / AVOID / WAIT_FOR_PULLBACK
-3. Give a 2-3 line REASON explaining why.
-4. List 1-2 RISKS.
-5. Give TIMEFRAME: intraday / 2-3 days / 1 week / 2 weeks
-6. If news is negative or earnings are near, warn about it.
-7. If market mood is bearish, be cautious about fresh buys.
-
-FORMAT your response EXACTLY like this:
-CONVICTION: [number]
-ACTION: [action]
-REASON: [explanation]
-RISKS: [risk1] | [risk2]
-TIMEFRAME: [timeframe]
-NEWS_IMPACT: [positive/negative/neutral/unknown]
-"""
-    return prompt
+    return (
+        "Act as a senior Indian equity swing-trading analyst. Use only the supplied JSON; "
+        "do not invent news or fundamentals. Keep output short and practical for a trading dashboard. "
+        "Respect scanner levels; do not create new entry/target/stop prices. "
+        "If marketMood is bearish, avoid aggressive fresh-buy wording unless evidence is very strong. "
+        "Return valid compact JSON only with keys: "
+        "conviction integer 0-100, action one of BUY/WATCH/AVOID/WAIT_FOR_PULLBACK, "
+        "reason max 260 chars, risks array of 1-2 strings max 100 chars each, "
+        "timeframe one of intraday/2-3 days/1 week/2 weeks, "
+        "newsImpact positive/negative/neutral/unknown, tradePlan max 180 chars.\n"
+        f"DATA={json.dumps(input_data, separators=(',', ':'), ensure_ascii=True)}"
+    )
 
 
-def _call_gemini(prompt: str) -> str | None:
-    """Call Gemini API and return text response."""
+def _call_gemini(prompt: str) -> Dict[str, Any] | None:
+    """Call Gemini API and return text plus small diagnostics."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+
+    generation_config: Dict[str, Any] = {
+        "temperature": GEMINI_TEMPERATURE,
+        "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
+        "responseMimeType": "application/json",
+    }
+    if "2.5" in GEMINI_MODEL:
+        generation_config["thinkingConfig"] = {"thinkingBudget": GEMINI_THINKING_BUDGET}
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 300,
-        },
+        "generationConfig": generation_config,
     }
 
     try:
@@ -184,17 +212,21 @@ def _call_gemini(prompt: str) -> str | None:
         data = resp.json()
         candidates = data.get("candidates", [])
         if candidates:
-            parts = candidates[0].get("content", {}).get("parts", [])
+            candidate = candidates[0]
+            parts = candidate.get("content", {}).get("parts", [])
             if parts:
-                return parts[0].get("text", "")
+                return {
+                    "text": parts[0].get("text", ""),
+                    "finishReason": candidate.get("finishReason"),
+                    "usageMetadata": data.get("usageMetadata"),
+                }
     except Exception as exc:
-        logger.warning("[GEMINI] API call failed: %s", exc)
+        logger.warning("[GEMINI] API call failed: %s", _redact_api_key(str(exc)))
     return None
 
 
 def _parse_response(text: str, symbol: str) -> Dict:
-    """Parse Gemini's structured response into a dict."""
-    lines = text.strip().split("\n")
+    """Parse Gemini's JSON response, with legacy line-format fallback."""
     result = {
         "symbol": symbol,
         "aiConviction": 50,
@@ -203,30 +235,91 @@ def _parse_response(text: str, symbol: str) -> Dict:
         "aiRisks": [],
         "aiTimeframe": "3-5 days",
         "aiNewsImpact": "unknown",
+        "aiTradePlan": "",
         "rawResponse": text,
         "available": True,
     }
 
-    for line in lines:
+    parsed = _json_from_response(text)
+    if isinstance(parsed, dict):
+        result["aiConviction"] = _bounded_int(parsed.get("conviction"), 50)
+        result["aiAction"] = _normalize_action(parsed.get("action"))
+        result["aiReason"] = str(parsed.get("reason") or "").strip()[:500]
+        result["aiRisks"] = _normalize_risks(parsed.get("risks"))
+        result["aiTimeframe"] = str(parsed.get("timeframe") or "3-5 days").strip()
+        result["aiNewsImpact"] = str(parsed.get("newsImpact") or "unknown").strip().lower()
+        result["aiTradePlan"] = str(parsed.get("tradePlan") or "").strip()[:260]
+        return result
+
+    for line in text.strip().split("\n"):
         line = line.strip()
-        if line.startswith("CONVICTION:"):
-            try:
-                result["aiConviction"] = int(line.split(":", 1)[1].strip().split()[0])
-            except (ValueError, IndexError):
-                pass
-        elif line.startswith("ACTION:"):
-            result["aiAction"] = line.split(":", 1)[1].strip().upper()
-        elif line.startswith("REASON:"):
+        upper = line.upper()
+        if upper.startswith("CONVICTION:"):
+            result["aiConviction"] = _bounded_int(line.split(":", 1)[1].strip().split()[0], 50)
+        elif upper.startswith("ACTION:"):
+            result["aiAction"] = _normalize_action(line.split(":", 1)[1].strip())
+        elif upper.startswith("REASON:"):
             result["aiReason"] = line.split(":", 1)[1].strip()
-        elif line.startswith("RISKS:"):
-            risks = line.split(":", 1)[1].strip()
-            result["aiRisks"] = [r.strip() for r in risks.split("|") if r.strip()]
-        elif line.startswith("TIMEFRAME:"):
+        elif upper.startswith("RISKS:"):
+            result["aiRisks"] = _normalize_risks(line.split(":", 1)[1].strip())
+        elif upper.startswith("TIMEFRAME:"):
             result["aiTimeframe"] = line.split(":", 1)[1].strip()
-        elif line.startswith("NEWS_IMPACT:"):
+        elif upper.startswith("NEWS_IMPACT:"):
             result["aiNewsImpact"] = line.split(":", 1)[1].strip().lower()
+        elif upper.startswith("TRADE_PLAN:"):
+            result["aiTradePlan"] = line.split(":", 1)[1].strip()
 
     return result
+
+
+def _json_from_response(text: str) -> Dict[str, Any] | None:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            return None
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+
+
+def _bounded_int(value: Any, default: int) -> int:
+    try:
+        return max(0, min(100, int(float(value))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_action(value: Any) -> str:
+    action = str(value or "WATCH").strip().upper()
+    allowed = {"BUY", "WATCH", "AVOID", "WAIT_FOR_PULLBACK"}
+    return action if action in allowed else "WATCH"
+
+
+def _normalize_risks(value: Any) -> list[str]:
+    if isinstance(value, list):
+        risks = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        risks = [risk.strip() for risk in str(value or "").split("|") if risk.strip()]
+    return risks[:2]
+
+
+def _token_usage(metadata: Any) -> Dict[str, int]:
+    if not isinstance(metadata, dict):
+        return {}
+    keys = ("promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount", "totalTokenCount")
+    return {key: int(metadata[key]) for key in keys if isinstance(metadata.get(key), int)}
+
+
+def _redact_api_key(message: str) -> str:
+    if not GEMINI_API_KEY:
+        return message
+    return message.replace(GEMINI_API_KEY, "<redacted>")
 
 
 def _unavailable(reason: str) -> Dict:
@@ -237,6 +330,10 @@ def _unavailable(reason: str) -> Dict:
         "aiRisks": [],
         "aiTimeframe": None,
         "aiNewsImpact": None,
+        "aiTradePlan": None,
+        "aiModel": GEMINI_MODEL,
+        "aiFinishReason": None,
+        "aiTokenUsage": {},
         "rawResponse": None,
         "available": False,
         "reason": reason,

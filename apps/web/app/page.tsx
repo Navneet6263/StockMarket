@@ -41,6 +41,13 @@ function overlayLiveTick(item: any, tick: any) {
   };
 }
 
+function aiActionClass(action: any) {
+  const text = String(action || "").toUpperCase();
+  if (text.includes("BUY")) return "buy";
+  if (text.includes("AVOID") || text.includes("SELL")) return "sell";
+  return "watch";
+}
+
 function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => void }) {
   if (item.entryRule && item.instrumentRule) {
     return (
@@ -75,6 +82,13 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
   const patternLabels = item.patternLabels ?? item.pattern_labels ?? item.raw?.pattern_labels ?? [];
   const entryLabel = item.entryLabel ?? item.entry_label ?? (item.entryMissed || item.entry_missed ? "Retest" : "Entry");
   const entryValue = item.entryZone ?? item.entry_zone_text ?? item.entry_trigger ?? item.entryTrigger ?? item.breakoutTrigger ?? price;
+  const aiReason = item.aiReason || "";
+  const aiTradePlan = item.aiTradePlan || "";
+  const aiRisks = item.aiRisks || [];
+  const aiActionLabel = item.geminiAction || item.aiAction;
+  const aiScore = item.aiScore ?? item.aiConviction;
+  const hasAi = Boolean(item.aiAvailable && (aiReason || aiTradePlan || aiScore));
+  const fallbackReason = item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || "";
   return (
     <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer" }}>
       <div className="stock-card-top">
@@ -96,9 +110,27 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking</span> : null}
         {patternLabels.slice(0, 2).map((label: string) => <span key={label} className="tag">{humanize(label)}</span>)}
       </div>
-      <p className="stock-reason">
-        {item.aiReason || item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || ""}
-      </p>
+      {hasAi ? (
+        <div className="ai-insight">
+          <div className="ai-insight-top">
+            <span className="ai-kicker">Gemini analysis</span>
+            <div className="stock-meta">
+              {aiActionLabel ? <span className={`tag ${aiActionClass(aiActionLabel)}`}>{humanize(aiActionLabel)}</span> : null}
+              {aiScore ? <span className="tag">AI {fmt(aiScore, 0)}%</span> : null}
+              {item.aiTimeframe ? <span className="tag">{item.aiTimeframe}</span> : null}
+            </div>
+          </div>
+          {aiReason ? <p className="stock-reason">{aiReason}</p> : null}
+          {aiTradePlan ? <p className="ai-plan">{aiTradePlan}</p> : null}
+          {aiRisks.length ? (
+            <div className="ai-risk-list">
+              {aiRisks.slice(0, 2).map((risk: string, index: number) => <span key={`${item.symbol}-ai-risk-${index}`}>{risk}</span>)}
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className="stock-reason">{fallbackReason}</p>
+      )}
       {item.newsHeadlines?.length ? (
         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
           📰 {item.newsHeadlines[0]}

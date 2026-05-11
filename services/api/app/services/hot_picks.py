@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +15,7 @@ except ImportError:
 
 
 DISCLAIMER = "This is not financial advice. Use this only for research and paper trading."
+AI_ENRICH_LIMIT = int(os.getenv("AI_ENRICH_LIMIT", "6"))
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -764,16 +766,26 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
 
     # Enrich top hot picks with AI analysis (Finnhub + Gemini)
     if AI_AVAILABLE:
-        for pick in hot[:5]:  # Only top 5 to avoid rate limits
+        for pick in hot[:AI_ENRICH_LIMIT]:
             try:
                 raw_signal = pick.get("raw") or {}
                 ai = get_ai_analysis(pick["symbol"], raw_signal)
                 if ai.get("finalScore"):
+                    ai_analysis = ai.get("aiAnalysis") or {}
                     pick["aiScore"] = ai["finalScore"]
                     pick["aiAction"] = ai["finalAction"]
-                    pick["aiReason"] = (ai.get("aiAnalysis") or {}).get("aiReason", "")
-                    pick["aiRisks"] = (ai.get("aiAnalysis") or {}).get("aiRisks", [])
-                    pick["aiTimeframe"] = (ai.get("aiAnalysis") or {}).get("aiTimeframe", "")
+                    pick["aiAvailable"] = bool(ai_analysis.get("available"))
+                    pick["aiStatus"] = "active" if ai_analysis.get("available") else ai_analysis.get("reason", "unavailable")
+                    pick["aiConviction"] = ai_analysis.get("aiConviction")
+                    pick["geminiAction"] = ai_analysis.get("aiAction")
+                    pick["aiReason"] = ai_analysis.get("aiReason", "")
+                    pick["aiTradePlan"] = ai_analysis.get("aiTradePlan", "")
+                    pick["aiRisks"] = ai_analysis.get("aiRisks", [])
+                    pick["aiTimeframe"] = ai_analysis.get("aiTimeframe", "")
+                    pick["aiNewsImpact"] = ai_analysis.get("aiNewsImpact", "unknown")
+                    pick["aiModel"] = ai_analysis.get("aiModel")
+                    pick["aiTokenUsage"] = ai_analysis.get("aiTokenUsage", {})
+                    pick["aiFinishReason"] = ai_analysis.get("aiFinishReason")
                     pick["newsHeadlines"] = [h.get("title", "") for h in (ai.get("newsData") or {}).get("headlines", [])[:3]]
                     pick["newsSentiment"] = (ai.get("newsData") or {}).get("newsSentiment", "unknown")
                     pick["insiderSignal"] = (ai.get("insiderData") or {}).get("signal", "unknown")

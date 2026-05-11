@@ -47,6 +47,11 @@ body { font-family: var(--font-sans), system-ui, sans-serif; background: var(--b
 .tag.sell { background: #fee2e2; color: var(--red); }
 .tag.watch { background: #fef3c7; color: var(--orange); }
 .stock-reason { font-size: 13px; color: var(--muted); line-height: 1.5; }
+.ai-insight { border-left: 3px solid var(--accent); background: #f8fafc; border-radius: 8px; padding: 10px 12px; display: grid; gap: 7px; }
+.ai-insight-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ai-kicker { font-size: 10px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 800; }
+.ai-plan { font-size: 12px; color: var(--text); line-height: 1.45; }
+.ai-risk-list { display: grid; gap: 4px; font-size: 12px; color: var(--orange); line-height: 1.4; }
 .stock-targets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 12px; }
 .stock-targets div { background: #f8fafc; border-radius: 6px; padding: 8px; text-align: center; }
 .stock-targets span { color: var(--muted); display: block; font-size: 10px; text-transform: uppercase; }

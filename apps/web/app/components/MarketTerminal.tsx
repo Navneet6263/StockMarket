@@ -141,6 +141,7 @@ function ScoreBreakdown({ pick }: { pick: HotPick }) {
 }
 
 function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compact?: boolean; onSelect: (symbol: string) => void }) {
+  const hasAi = Boolean(pick.aiAvailable && (pick.aiReason || pick.aiTradePlan || pick.aiScore || pick.aiConviction));
   return (
     <article className={`hot-pick-card ${compact ? "is-compact" : ""}`}>
       <div className="hot-card-top">
@@ -156,12 +157,14 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
         </div>
       </div>
 
-      <p className="pick-reason">{pick.reason}</p>
+      <p className="pick-reason">{pick.aiReason || pick.reason}</p>
+      {hasAi && pick.aiTradePlan ? <div className={`decision-strip ${pick.direction}`}>{pick.aiTradePlan}</div> : null}
       {pick.tradeDecision ? <div className={`decision-strip ${pick.direction}`}>{pick.tradeDecision}</div> : null}
 
       <div className="trade-plan-grid">
         <div><span>Price</span><strong>{pick.currentPrice || "-"}</strong></div>
         <div><span>Score</span><strong>{pick.score != null ? fmt(pick.score, 0) : fmt(pick.confidence, 0)}</strong></div>
+        {hasAi ? <div><span>AI</span><strong>{fmt(pick.aiScore ?? pick.aiConviction, 0)} / {humanize(pick.geminiAction || pick.aiAction)}</strong></div> : null}
         <div><span>Bias</span><strong>{pick.biasLabel || humanize(pick.direction)}</strong></div>
         <div><span>Status</span><strong>{pick.entryStatus || "Watch"}</strong></div>
         {pick.entryQuality ? <div><span>Entry Quality</span><strong>{humanize(pick.entryQuality)}</strong></div> : null}
