@@ -61,3 +61,16 @@ async def ai_insider(symbol: str):
 async def ai_full_intelligence(symbol: str):
     """All Finnhub data combined (news + earnings + insider + recommendations)."""
     return await asyncio.to_thread(get_stock_intelligence, symbol)
+
+
+@router.get("/nifty-options")
+async def nifty_options_signal(hub: MarketHubService = Depends(get_market_hub)):
+    """Nifty CE/PE signal based on Nifty's own chart pattern — breakout/breakdown detection."""
+    from app.services.nifty_options import analyze_nifty_for_options
+    try:
+        nifty_frame = await asyncio.to_thread(hub.data.fetch_history, "NIFTY", "6mo", "1d")
+        result = analyze_nifty_for_options(nifty_frame)
+        return result
+    except Exception as exc:
+        logger.exception("nifty options analysis failed")
+        return {"signal": "NO_TRADE", "error": str(exc)}
