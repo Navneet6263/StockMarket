@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import get_market_hub
+from app.options_analyzer import OptionsAnalyzer
 from app.services.hot_picks import build_hot_picks_response
 from app.services.market_hub import MarketHubService
 
@@ -284,3 +285,34 @@ async def market_breakout_radar(
             "breakout_radar_count": payload.get("summary", {}).get("breakout_radar_count", 0),
         },
     }
+
+
+@router.get("/market/traps")
+async def market_traps(
+    force_refresh: bool = False,
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    """Institutional trap signals (bull traps, sell traps, etc.)"""
+    payload = await scan_market_with_timeout(hub, force_refresh)
+    return {
+        "generated_at": payload["generated_at"],
+        "trap_signals": payload.get("trap_signals", []),
+        "count": len(payload.get("trap_signals", [])),
+        "summary": {
+            "trap_signals_count": payload.get("summary", {}).get("trap_signals_count", 0),
+        },
+    }
+
+
+@router.get("/market/options-analysis")
+async def market_options_analysis(
+    symbol: str = Query("NIFTY"),
+):
+    """Option chain analysis for a given symbol (mostly used for indices like NIFTY/BANKNIFTY)"""
+    try:
+        analyzer = OptionsAnalyzer()
+        data = await asyncio.to_thread(analyzer.get_nifty_options_chain, symbol)
+        return analyzer.analyze_options_data(data)
+    except Exception as e:
+        logger.exception("Failed to analyze options for %s", symbol)
+        return {"error": str(e), "symbol": symbol}

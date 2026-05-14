@@ -773,6 +773,17 @@ class MarketHubService:
         surfaced.update(item["symbol"] for item in pre_breakout_setups)
         surfaced.update(item["symbol"] for item in momentum_continuation)
 
+        trap_signals = self._unique_signals(sorted(
+            [
+                item for item in results
+                if item.get("trap_risk") in {"high", "medium"} or item.get("institutional_selling")
+            ],
+            key=lambda item: item.get("confidence", 0),
+            reverse=True,
+        ))[:15]
+        surfaced.update(item["symbol"] for item in trap_signals)
+
+
         mover_ranked = [
             {
                 "symbol": meta["symbol"],
@@ -881,6 +892,7 @@ class MarketHubService:
             "avoid_late_entry": avoid_late_entry,
             "candidates": candidates_bucket,
             "avoid_risky": avoid_risky_bucket,
+            "trap_signals": trap_signals,
             "summary": {
                 "high_priority": len([item for item in results if item["alert_level"] == "high_priority"]),
                 "watchlist": len([item for item in results if item["alert_level"] == "watchlist"]),
@@ -905,6 +917,7 @@ class MarketHubService:
                 "avoid_late_entry_count": len(avoid_late_entry),
                 "candidates_count": len(candidates_bucket),
                 "avoid_count": len(avoid_risky_bucket),
+                "trap_signals_count": len(trap_signals),
                 "breakout_radar_count": len(breakout_radar_picks),
                 "nifty_bias": nifty_context.get("nifty_bias", "neutral"),
                 "nifty_regime": nifty_context.get("nifty_regime", "unknown"),

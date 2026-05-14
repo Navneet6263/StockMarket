@@ -28,8 +28,8 @@ class Settings:
     benchmark_symbol: str = os.getenv("BENCHMARK_SYMBOL", "NIFTY")
     scan_history_period: str = os.getenv("SCAN_HISTORY_PERIOD", "1y")
     detail_history_period: str = os.getenv("DETAIL_HISTORY_PERIOD", "6mo")
-    universe_size: int = int(os.getenv("UNIVERSE_SIZE", "1500"))
-    scan_symbol_limit: int = int(os.getenv("SCAN_SYMBOL_LIMIT", "1500"))
+    universe_size: int = int(os.getenv("UNIVERSE_SIZE", "3000"))
+    scan_symbol_limit: int = int(os.getenv("SCAN_SYMBOL_LIMIT", "3000"))
     intraday_symbol_limit: int = int(os.getenv("SCAN_INTRADAY_LIMIT", "36"))
     min_history_bars: int = int(os.getenv("MIN_HISTORY_BARS", "120"))
     min_price: float = float(os.getenv("MIN_PRICE", "10"))
@@ -58,7 +58,7 @@ class Settings:
     tracked_promotion_move_quality_min: int = int(os.getenv("TRACK_PROMOTION_MOVE_QUALITY_MIN", "58"))
     tracked_review_limit: int = int(os.getenv("TRACK_REVIEW_LIMIT", "10"))
     custom_universe: tuple[str, ...] = _csv_env("UNIVERSE_SYMBOLS")
-    universe_groups: tuple[str, ...] = _csv_env("UNIVERSE_GROUPS") or ("NIFTY_500", "FNO")
+    universe_groups: tuple[str, ...] = _csv_env("UNIVERSE_GROUPS") or ("ALL_NSE",)
     invalid_symbols: tuple[str, ...] = _csv_env("INVALID_SYMBOLS") or ("GMRINFRA", "TATAMOTORS")
 
 

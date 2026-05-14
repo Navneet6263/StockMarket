@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Dict, List
 
@@ -8,6 +8,7 @@ from app.services.chase_risk import classify_chase_risk
 from app.services.demand_supply import analyze_demand_supply
 from app.services.entry_timing import analyze_entry_timing
 from app.services.lifecycle import build_lifecycle_advice
+from app.services.trap_detector import full_trap_analysis
 
 
 class ScoringEngine:
@@ -376,6 +377,25 @@ class ScoringEngine:
             "setup_type": "Momentum Continuation / Re-Entry",
             "trailing_stop": round(max(invalidation_level, ema_20 or 0, rolling_vwap or 0), 2),
         }
+
+    def _build_trap_fields(self, snapshot: Dict, direction: str) -> Dict:
+        """Runs the full trap analysis and extracts relevant fields."""
+        try:
+            trap_data = full_trap_analysis(snapshot)
+            return {
+                "trap_risk": trap_data.get("trap_risk"),
+                "safe_to_enter": trap_data.get("safe_to_enter", True),
+                "entry_advice": trap_data.get("entry_advice"),
+                "trap_warnings": trap_data.get("trap_warnings", []),
+                "institutional_buying": trap_data.get("institutional", {}).get("is_institutional_buying", False),
+                "institutional_selling": trap_data.get("institutional", {}).get("is_institutional_selling", False),
+            }
+        except Exception as e:
+            return {
+                "trap_risk": "unknown", 
+                "safe_to_enter": True, 
+                "trap_warnings": [f"Trap detection failed: {e}"]
+            }
 
     def evaluate(
         self,
@@ -1003,4 +1023,5 @@ class ScoringEngine:
             "bullish_score": round(bullish, 1),
             "bearish_score": round(bearish, 1),
             "historical_context": historical,
+            **self._build_trap_fields(snapshot, direction),
         }
