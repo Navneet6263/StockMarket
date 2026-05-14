@@ -5,13 +5,12 @@ import { API_URL, humanize, fmt, fmtPct } from "./lib/market";
 const TABS = [
   { id: "dashboard", label: "🏠 Dashboard", api: "/api/market/hot-picks" },
   { id: "hot-picks", label: "🔥 Hot Picks", api: "/api/market/hot-picks" },
-  { id: "strict-options", label: "Strict Options", api: "/api/market/hot-picks" },
+  { id: "traps", label: "🪤 Traps & Risks", api: "/api/market/traps" },
+  { id: "options", label: "📈 Options Chain", api: "/api/market/options-analysis" },
   { id: "watchlist", label: "👁 Watchlist", api: "/api/market/candidates" },
   { id: "base-radar", label: "📊 Base Formation", api: "/api/market/pre-breakout" },
   { id: "momentum", label: "⚡ Momentum", api: "/api/market/fast-movers" },
   { id: "breakouts", label: "🚀 Breakouts", api: "/api/scanner/breakouts" },
-  { id: "bearish", label: "🔻 Bearish Risk", api: "/api/scanner/bearish-risk" },
-  { id: "fast-movers", label: "💨 Fast Movers", api: "/api/market/fast-movers" },
   { id: "avoid", label: "🚫 Avoid", api: "/api/market/avoid" },
 ];
 
@@ -105,11 +104,25 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
   const trapRiskScore = item.trapRiskScore ?? item.trap_risk_score ?? demand.trapRiskScore;
   const smartMoneyRead = item.smartMoneyRead || demand.smartMoneyRead;
   const fallbackReason = item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || "";
+  const isHighTrap = trapRisk === "high" || item.trap_risk === "high" || item.bull_trap?.bull_trap_detected || (item.trap_warnings && item.trap_warnings.length > 0);
+
   return (
-    <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer" }}>
+    <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: isHighTrap ? "var(--red)" : "var(--border)" }}>
+      {isHighTrap ? (
+        <div className="trap-alert">
+          <div className="trap-kicker">🚨 AVOID - INSTITUTIONAL TRAP</div>
+          <div className="trap-desc">
+            {item.bull_trap?.bull_trap_detected ? "Fake Breakout Detected. Price broke resistance but failed to sustain." : 
+             item.trap_warnings?.[0] || "High institutional selling pressure detected."}
+          </div>
+          <div className="stock-meta" style={{ marginTop: 4 }}>
+            <span className="tag sell" style={{ fontSize: 13, padding: '6px 12px' }}>🔴 DO NOT BUY / SELL TURANT</span>
+          </div>
+        </div>
+      ) : null}
       <div className="stock-card-top">
         <h3>{item.symbol}</h3>
-        <span className={`badge ${direction}`}>{humanize(direction)}</span>
+        <span className={`badge ${isHighTrap ? 'bearish' : direction}`}>{isHighTrap ? 'AVOID' : humanize(direction)}</span>
       </div>
       {chartPattern ? <div className="stock-reason" style={{ marginTop: 4 }}>{humanize(chartPattern)}</div> : null}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -165,6 +178,11 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
           {smartMoneyRead ? <p className="stock-reason">{smartMoneyRead}</p> : null}
         </div>
       ) : null}
+      
+      {item.bull_trap && item.bull_trap.bull_trap_detected && !isHighTrap ? (
+        <p className="stock-reason" style={{ color: "var(--red)", fontWeight: "bold" }}>⚠️ Bull Trap Warning</p>
+      ) : null}
+
       {item.newsHeadlines?.length ? (
         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
           📰 {item.newsHeadlines[0]}
@@ -253,15 +271,80 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
   );
 }
 
+function OptionsDashboard({ data }: { data: any }) {
+  if (!data) return <div className="empty-msg">No options data available.</div>;
+  if (data.error) return <div className="empty-msg">Error: {data.error}</div>;
+
+  const { symbol, spot_price, pcr, max_pain, call_oi, put_oi, atm_strike, support, resistance, signal, records } = data;
+  
+  return (
+    <div className="options-dashboard">
+      <div className="stats-row">
+        <div className="stat-card"><span>Spot Price ({symbol})</span><strong>₹{fmt(spot_price)}</strong></div>
+        <div className="stat-card"><span>PCR</span><strong style={{ color: pcr >= 1 ? "var(--green)" : "var(--red)" }}>{pcr?.toFixed(2)}</strong></div>
+        <div className="stat-card"><span>Max Pain</span><strong>{max_pain}</strong></div>
+        <div className="stat-card"><span>Options Signal</span><strong style={{ color: signal?.direction === "bullish" ? "var(--green)" : signal?.direction === "bearish" ? "var(--red)" : "var(--orange)" }}>{humanize(signal?.direction)}</strong></div>
+      </div>
+      
+      <div className="demand-panel">
+        <h3 style={{ fontSize: 16, color: '#fff', marginBottom: 8 }}>Key Levels (OI Built-up)</h3>
+        <div style={{ display: "flex", gap: 24 }}>
+          <div>
+            <span style={{ color: "var(--green)", fontSize: 12 }}>MAJOR SUPPORT (Put OI)</span>
+            <strong style={{ display: 'block', fontSize: 20, color: '#fff' }}>{support?.level}</strong>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{fmt(support?.oi)} contracts</span>
+          </div>
+          <div>
+            <span style={{ color: "var(--red)", fontSize: 12 }}>MAJOR RESISTANCE (Call OI)</span>
+            <strong style={{ display: 'block', fontSize: 20, color: '#fff' }}>{resistance?.level}</strong>
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{fmt(resistance?.oi)} contracts</span>
+          </div>
+        </div>
+        {signal?.reason && <p className="stock-reason" style={{ marginTop: 8 }}>{signal.reason}</p>}
+      </div>
+      
+      {records && (
+        <div className="detail-panel" style={{ marginTop: 16 }}>
+          <h3>Option Chain (Near ATM)</h3>
+          <div style={{ marginTop: 16 }}>
+            <div className="options-strike-row" style={{ color: "var(--muted)", borderBottom: "1px solid var(--border)", fontWeight: "bold" }}>
+              <div className="options-put">PUT OI (Support)</div>
+              <div className="options-strike">STRIKE</div>
+              <div className="options-call">CALL OI (Resistance)</div>
+            </div>
+            {records.filter((r: any) => Math.abs(r.strikePrice - spot_price) < spot_price * 0.03).map((r: any) => {
+              const maxOi = Math.max(...records.map((x: any) => Math.max(x.pe_oi || 0, x.ce_oi || 0)));
+              const peWidth = ((r.pe_oi || 0) / maxOi) * 100;
+              const ceWidth = ((r.ce_oi || 0) / maxOi) * 100;
+              return (
+                <div key={r.strikePrice} className={`options-strike-row ${r.strikePrice === atm_strike ? 'atm' : ''}`}>
+                  <div className="options-put">
+                    <div>{fmt(r.pe_oi)}</div>
+                    <div className="oi-bar put" style={{ width: `${peWidth}%`, marginLeft: 'auto' }}></div>
+                  </div>
+                  <div className="options-strike">{r.strikePrice}</div>
+                  <div className="options-call">
+                    <div>{fmt(r.ce_oi)}</div>
+                    <div className="oi-bar call" style={{ width: `${ceWidth}%` }}></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
   if (tab === "dashboard" || tab === "hot-picks") return data.hotPicks || data.top_opportunities || [];
-  if (tab === "strict-options") return data.strictOptions?.radar || [];
+  if (tab === "traps") return data.trap_signals || [];
   if (tab === "watchlist") return data.candidates || [];
   if (tab === "base-radar") return data.pre_breakout_setups || data.pattern_forming_setups || [];
   if (tab === "momentum" || tab === "fast-movers") return data.fast_movers || data.results || [];
   if (tab === "breakouts") return data.results || [];
-  if (tab === "bearish") return data.results || [];
   if (tab === "avoid") return data.avoid_risky || [];
   return [];
 }
@@ -380,7 +463,9 @@ export default function Page() {
           </div>
         </div>
 
-        {selectedSymbol ? (
+        {tab === "options" ? (
+          <OptionsDashboard data={data} />
+        ) : selectedSymbol ? (
           <StockDetail symbol={selectedSymbol} onClose={() => setSelectedSymbol(null)} />
         ) : (
           <>
