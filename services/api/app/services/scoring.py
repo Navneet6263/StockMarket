@@ -176,6 +176,13 @@ class ScoringEngine:
         if advanced_score >= 60:
             confidence = min(92, max(confidence, 52 + advanced_score * 0.42))
 
+        if distance_to_resistance <= 1.5 and (tight_consolidation <= 3.5 or bool(snapshot.get("volume_dryup")) or score >= 5):
+            timeframe = "Tomorrow / Anytime"
+        elif distance_to_resistance <= 3.0 and score >= 3:
+            timeframe = "1-2 days"
+        else:
+            timeframe = "3-5 days"
+
         return {
             "is_pre_breakout": True,
             "pre_breakout_labels": list(dict.fromkeys(labels)),
@@ -191,7 +198,7 @@ class ScoringEngine:
             "expected_move": round(expected_move, 2),
             "pre_breakout_reason": "; ".join(reasons[:4]),
             "reason": "; ".join(reasons[:4]),
-            "pre_breakout_timeframe": "1-5 sessions",
+            "pre_breakout_timeframe": timeframe,
             "action": action,
             "pre_breakout_pattern": advanced.get("pattern_name") if advanced_score >= 55 else None,
             "pre_breakout_pattern_score": round(advanced_score, 1) if advanced_score else 0,
@@ -273,17 +280,24 @@ class ScoringEngine:
         else:
             setup_type = "Trend setup" if direction != "neutral" else "No clear pattern"
 
+        if "support_bounce" in labels and direction == "bullish":
+            entry_trigger = round(price or support, 2)
+            target = round((resistance or price * 1.05) * 0.99, 2)
+        else:
+            entry_trigger = round(advanced_trigger or ((resistance or price) * 1.002), 2) if direction == "bullish" else round((support or price) * 0.998, 2)
+            target = advanced.get("target_1")
+
         return {
             "pattern_labels": list(dict.fromkeys(labels)),
             "pattern_score": max(len(set(labels)), int(advanced_score // 12) if advanced_score else 0),
             "setup_type": setup_type,
             "pattern_reason": "; ".join(reasons[:4]) or "Pattern evidence is limited.",
-            "entry_trigger": round(advanced_trigger or ((resistance or price) * 1.002), 2) if direction == "bullish" else round((support or price) * 0.998, 2),
+            "entry_trigger": entry_trigger,
             "chart_pattern": advanced.get("pattern_name") or setup_type,
             "chart_pattern_family": advanced.get("pattern_family"),
             "chart_pattern_score": round(advanced_score, 1) if advanced_score else 0,
             "chart_pattern_stage": advanced.get("stage"),
-            "pattern_target_price": advanced.get("target_1"),
+            "pattern_target_price": target,
             "pattern_target_2": advanced.get("target_2"),
             "pattern_invalidation": advanced.get("invalidation_level"),
             "pattern_risk_reward": advanced.get("risk_reward"),
@@ -843,6 +857,9 @@ class ScoringEngine:
         if live_pattern_ready and not entry_blocks_fresh_buy:
             signal_stage = "LIVE_PATTERN_READY" if advanced_pattern_stage == "READY_TO_BREAK" else "CONFIRMED_BREAKOUT"
             action = str(advanced_pattern.get("action") or "BUY_ONLY_ON_TRIGGER_HOLD")
+        elif "support_bounce" in tags and not entry_blocks_fresh_buy and direction == "bullish":
+            signal_stage = "SUPPORT_BOUNCE"
+            action = "BUY"
         elif pre_breakout.get("is_pre_breakout") and not entry_blocks_fresh_buy:
             signal_stage = "PATTERN_FORMING" if pre_breakout.get("pre_breakout_action") == "WATCH" else "ALERT_ABOVE_LEVEL"
             action = pre_breakout.get("pre_breakout_action", "WATCH")
@@ -868,9 +885,12 @@ class ScoringEngine:
         historical_win_rate = float(historical.get("win_rate", 0) or 0)
         historically_validated = historical_sample_count >= 30 and historical_win_rate >= 0.60
         if action in {"BUY", "SELL", "REENTRY_BUY"} and not historically_validated:
-            action = "WATCH"
-            if signal_stage == "CONFIRMED_BREAKOUT":
-                signal_stage = "ALERT_ABOVE_LEVEL"
+            if confidence >= 72 or pattern_context["pattern_score"] >= 3 or "parabolic_momentum" in tags:
+                risk_factors.append("No historical backtest, but technical conviction is strong enough to override.")
+            else:
+                action = "WATCH"
+                if signal_stage == "CONFIRMED_BREAKOUT":
+                    signal_stage = "ALERT_ABOVE_LEVEL"
             if continuation.get("continuation_action") == "REENTRY_BUY":
                 continuation["continuation_action"] = "ALERT"
                 continuation["action"] = "ALERT"

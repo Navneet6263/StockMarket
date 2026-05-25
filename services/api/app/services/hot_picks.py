@@ -832,6 +832,12 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         and item["catalystReason"] != "No fresh catalyst found"
     ][:12]
 
+    pbs_items = [
+        item for item in eligible
+        if item.get("raw", {}).get("signal_stage") == "SUPPORT_BOUNCE"
+        or item.get("setupType", "").lower() == "support bounce"
+    ][:12]
+
     base_items = []
     excluded_for_base = used | {item["symbol"] for item in catalyst_radar}
     for signal in _all_signals(scan):
@@ -936,6 +942,7 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         "watchlist": watchlist,
         "momentumRadar": momentum,
         "catalystRadar": catalyst_radar,
+        "pbsRadar": pbs_items,
         "baseFormationRadar": base_items[:12],
         "strictOptions": strict_options,
         "rejectionSummary": {

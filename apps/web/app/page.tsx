@@ -6,6 +6,7 @@ import TradingChart from "./components/TradingChart";
 const TABS = [
   { id: "dashboard", label: "Dashboard", api: "/api/market/hot-picks" },
   { id: "hot-picks", label: "Hot Picks", api: "/api/market/hot-picks" },
+  { id: "pbs", label: "Profit Booking (PBS)", api: "/api/market/hot-picks" },
   { id: "watchlist", label: "Watchlist", api: "/api/market/hot-picks" },
   { id: "base-radar", label: "Base Formation", api: "/api/market/hot-picks" },
   { id: "momentum", label: "Momentum", api: "/api/market/hot-picks" },
@@ -103,6 +104,7 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
   const trapRiskScore = item.trapRiskScore ?? item.trap_risk_score ?? demand.trapRiskScore;
   const smartMoneyRead = item.smartMoneyRead || demand.smartMoneyRead;
   const fallbackReason = item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || "";
+  const timeHorizon = item.timeHorizon || item.pre_breakout_timeframe || item.timeframe || item.raw?.pre_breakout_timeframe || "";
   const isHighTrap = trapRisk === "high" || item.trap_risk === "high" || item.bull_trap?.bull_trap_detected || (item.trap_warnings && item.trap_warnings.length > 0);
 
   return (
@@ -136,6 +138,7 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         {item.entry_quality ? <span className="tag">{humanize(item.entry_quality)} entry</span> : null}
         {item.seller_pressure ? <span className="tag">{humanize(item.seller_pressure)} sellers</span> : null}
         {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking</span> : null}
+        {timeHorizon ? <span className="tag" style={{ color: "var(--yellow)", fontWeight: "bold" }}>⏳ Runs in: {timeHorizon}</span> : null}
         {patternLabels.slice(0, 2).map((label: string) => <span key={label} className="tag">{humanize(label)}</span>)}
       </div>
       {hasAi ? (
@@ -353,6 +356,7 @@ function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
   if (tab === "dashboard" || tab === "hot-picks") return data.hotPicks || data.top_opportunities || [];
   if (tab === "traps") return data.trap_signals || [];
+  if (tab === "pbs") return data.pbsRadar || [];
   if (tab === "watchlist") return data.watchlist || data.candidates || [];
   if (tab === "base-radar") return data.baseFormationRadar || data.pre_breakout_setups || data.pattern_forming_setups || [];
   if (tab === "momentum" || tab === "fast-movers") return data.momentumRadar || data.fast_movers || data.results || [];

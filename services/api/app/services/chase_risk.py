@@ -57,12 +57,14 @@ def classify_chase_risk(signal: dict[str, Any]) -> dict[str, Any]:
         labels.append("PROFIT_BOOKING_RISK")
         reason = "High chance of profit booking tomorrow. Use trailing stop if already holding."
 
-    valid_after_move = False
-    if valid_after_move:
+    # Allow momentum breakouts to pass if volume is strong and it holds VWAP
+    valid_after_move = bool(strong_volume and above_vwap and not exhaustion_risk)
+    if valid_after_move and hard_chase_risk:
         labels.append("VALID_BREAKOUT")
         action = "VALID_BREAKOUT"
         attention_only = False
         allow_buy_call = True
+        hard_chase_risk = False  # Override the block
         reason = "Strong move is still valid because VWAP holds, volume remains strong, and risk/reward is acceptable."
     elif hard_chase_risk:
         labels.append("AVOID_LATE_ENTRY")
