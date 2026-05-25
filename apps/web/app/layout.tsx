@@ -10,10 +10,14 @@ export const metadata: Metadata = {
   description: "Smart stock scanner with AI-powered picks",
 };
 
+import AuthOverlay from "./components/AuthOverlay";
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body className={inter.variable}>{children}</body>
+      <body className={inter.variable}>
+        <AuthOverlay>{children}</AuthOverlay>
+      </body>
     </html>
   );
 }
