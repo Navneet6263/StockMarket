@@ -58,18 +58,21 @@ export default function TradingChart({ symbol, data, prediction }: TradingChartP
 
     // Sort data chronologically before mapping
     const sortedData = [...chartData].sort((a, b) => {
-      const timeA = new Date(a.date || a.timestamp).getTime();
-      const timeB = new Date(b.date || b.timestamp).getTime();
+      const timeA = a.time ? a.time * 1000 : new Date(a.date || a.timestamp).getTime();
+      const timeB = b.time ? b.time * 1000 : new Date(b.date || b.timestamp).getTime();
       return timeA - timeB;
     });
 
-    const formattedData = sortedData.map((d: any) => ({
-      time: (new Date(d.date || d.timestamp).getTime() / 1000) as Time,
-      open: Number(d.open),
-      high: Number(d.high),
-      low: Number(d.low),
-      close: Number(d.close),
-    }));
+    const formattedData = sortedData.map((d: any) => {
+      const timestamp = d.time ? d.time : (new Date(d.date || d.timestamp).getTime() / 1000);
+      return {
+        time: timestamp as Time,
+        open: Number(d.open),
+        high: Number(d.high),
+        low: Number(d.low),
+        close: Number(d.close),
+      };
+    });
     
     candlestickSeries.setData(formattedData);
 

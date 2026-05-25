@@ -4,15 +4,13 @@ import { API_URL, humanize, fmt, fmtPct } from "./lib/market";
 import TradingChart from "./components/TradingChart";
 
 const TABS = [
-  { id: "dashboard", label: "🏠 Dashboard", api: "/api/market/hot-picks" },
-  { id: "hot-picks", label: "🔥 Hot Picks", api: "/api/market/hot-picks" },
-  { id: "traps", label: "🪤 Traps & Risks", api: "/api/market/traps" },
-  { id: "options", label: "📈 Options Chain", api: "/api/market/options-analysis" },
-  { id: "watchlist", label: "👁 Watchlist", api: "/api/market/candidates" },
-  { id: "base-radar", label: "📊 Base Formation", api: "/api/market/pre-breakout" },
-  { id: "momentum", label: "⚡ Momentum", api: "/api/market/fast-movers" },
-  { id: "breakouts", label: "🚀 Breakouts", api: "/api/scanner/breakouts" },
-  { id: "avoid", label: "🚫 Avoid", api: "/api/market/avoid" },
+  { id: "dashboard", label: "Dashboard", api: "/api/market/hot-picks" },
+  { id: "hot-picks", label: "Hot Picks", api: "/api/market/hot-picks" },
+  { id: "watchlist", label: "Watchlist", api: "/api/market/hot-picks" },
+  { id: "base-radar", label: "Base Formation", api: "/api/market/hot-picks" },
+  { id: "momentum", label: "Momentum", api: "/api/market/hot-picks" },
+  { id: "traps", label: "Traps & Risks", api: "/api/market/traps" },
+  { id: "options", label: "Options Chain", api: "/api/market/options-analysis" },
 ];
 
 function priceText(value: any) {
@@ -355,9 +353,9 @@ function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
   if (tab === "dashboard" || tab === "hot-picks") return data.hotPicks || data.top_opportunities || [];
   if (tab === "traps") return data.trap_signals || [];
-  if (tab === "watchlist") return data.candidates || [];
-  if (tab === "base-radar") return data.pre_breakout_setups || data.pattern_forming_setups || [];
-  if (tab === "momentum" || tab === "fast-movers") return data.fast_movers || data.results || [];
+  if (tab === "watchlist") return data.watchlist || data.candidates || [];
+  if (tab === "base-radar") return data.baseFormationRadar || data.pre_breakout_setups || data.pattern_forming_setups || [];
+  if (tab === "momentum" || tab === "fast-movers") return data.momentumRadar || data.fast_movers || data.results || [];
   if (tab === "breakouts") return data.results || [];
   if (tab === "avoid") return data.avoid_risky || [];
   return [];

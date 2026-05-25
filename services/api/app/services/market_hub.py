@@ -364,6 +364,64 @@ class MarketHubService:
         snapshot["advanced_chart_pattern"] = detect_chart_pattern_setup(live_frame, feature_frame, intraday_frame)
         backtest = self.backtest.evaluate(symbol, frame, benchmark_frame) if with_backtest else {}
         signal = self.scoring.evaluate(symbol, snapshot, backtest if with_backtest else None)
+        
+        # --- GTF Strategy Integration ---
+        try:
+            zone_df = live_frame.copy()
+            zone_df.columns = [c.lower() for c in zone_df.columns]
+            gtf_zones = self.zone_detector.detect_zones(zone_df, max_lookback=200)
+            demand_zones = [z for z in gtf_zones if z["type"] == "demand"]
+            current_price = float(quote.get("price") if quote else live_frame["Close"].iloc[-1])
+            
+            in_demand = False
+            forming_demand = False
+            best_zone = None
+            strongest_demand = 0
+            
+            for z in demand_zones:
+                # Is price inside the zone?
+                if z["distal"] <= current_price <= z["proximal"]:
+                    in_demand = True
+                    if z["strength"] > strongest_demand:
+                        strongest_demand = z["strength"]
+                        best_zone = z
+                # Is price forming a base just above the zone?
+                elif z["proximal"] < current_price <= z["proximal"] * 1.05:
+                    forming_demand = True
+                    if z["strength"] > strongest_demand:
+                        strongest_demand = z["strength"]
+                        best_zone = z
+
+            if best_zone:
+                signal["demand_supply"] = {
+                    "status": "In Demand Zone" if in_demand else "Forming Demand",
+                    "demandScore": strongest_demand * 10,
+                    "proximal": best_zone["proximal"],
+                    "distal": best_zone["distal"],
+                    "trapRisk": "low",
+                    "smartMoneyRead": "GTF: Institutional Pending Orders Present",
+                    "zone_pattern": best_zone.get("pattern")
+                }
+                # GTF Execution Buffer Rules
+                signal["entry_trigger"] = round(best_zone["proximal"] * 1.002, 2)
+                atr_buffer = best_zone["distal"] * 0.005 # Default 0.5% buffer for SL liquidity hunt protection
+                signal["invalidation"] = round(best_zone["distal"] - atr_buffer, 2)
+                signal["setup_stage"] = "RETEST_ENTRY"
+                
+                # Tag it so it hits the correct UI tabs
+                tags = set(signal.get("tags", []))
+                if in_demand:
+                    tags.add("support_respect")
+                    signal["confidence"] = min(100, signal.get("confidence", 50) + 15)
+                if forming_demand:
+                    tags.add("base_building")
+                    tags.add("accumulation")
+                    signal["is_pre_breakout"] = True
+                signal["tags"] = list(tags)
+        except Exception as e:
+            logger.warning("GTF zone detection failed in scanner for %s: %s", symbol, e)
+        # --- End GTF Integration ---
+
         if with_backtest and self.settings.news_api_key:
             signal["catalyst_summary"] = self._catalyst_summary(symbol)
         if quote:
