@@ -62,16 +62,14 @@ def fetch_all_nse_symbols() -> tuple[str, ...]:
     Returns 2500+ symbols. Falls back to expanded list if fetch fails.
     """
     import os
-    provider = os.getenv("BROKER_PROVIDER", "yfinance").lower()
-    if provider != "angelone":
-        return _EXPANDED_FALLBACK
     try:
         import requests
-        import certifi
+        import urllib3
+        urllib3.disable_warnings() # Disable verify=False warnings
         resp = requests.get(
             "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json",
             timeout=30,
-            verify=certifi.where(),
+            verify=False,
         )
         if resp.status_code != 200:
             return _EXPANDED_FALLBACK
@@ -88,8 +86,9 @@ def fetch_all_nse_symbols() -> tuple[str, ...]:
                 if clean and len(clean) <= 20:
                     symbols.append(clean)
         unique = tuple(dict.fromkeys(symbols))
-        return unique if len(unique) > 200 else _EXPANDED_FALLBACK
-    except Exception:
+        return unique if len(unique) > 1000 else _EXPANDED_FALLBACK
+    except Exception as e:
+        print(f"Failed to fetch NSE universe: {e}")
         return _EXPANDED_FALLBACK
 
 

@@ -241,9 +241,18 @@ class ScoringEngine:
         if return_60d > 8 and -8 <= return_20d <= 8 and tight <= 7:
             labels.append("cup_handle_candidate")
             reasons.append("Prior uptrend is pausing in a handle-like base.")
-        if return_20d >= 12 and tight <= 7:
+            
+        if return_20d >= 40:
+            labels.append("parabolic_momentum")
+            if tight <= 12:
+                labels.append("high_tight_flag")
+                reasons.append("Explosive >40% move consolidating tightly (High Tight Flag).")
+            else:
+                reasons.append("Massive momentum >40% in a month. Monitor for base.")
+        elif return_20d >= 12 and tight <= 7:
             labels.append("flag_pennant_candidate")
             reasons.append("Strong prior move is consolidating in a flag/pennant style range.")
+            
         if advanced_score >= 50 and advanced.get("direction") == "bullish":
             labels.extend(str(label).lower() for label in advanced.get("labels", []))
             pattern_name = str(advanced.get("pattern_name") or "Chart pattern")
@@ -485,6 +494,11 @@ class ScoringEngine:
         elif 68 < rsi <= 76:
             add_bull(5, "momentum", f"RSI is bullish at {rsi:.1f}, but getting stretched.", "momentum")
             risk_factors.append("Momentum is stretched and more vulnerable to rejection.")
+        elif rsi > 76 and return_20d >= 40:
+            add_bull(10, "momentum", f"RSI is extreme at {rsi:.1f} in an explosive parabolic run.", "parabolic_momentum")
+        elif rsi > 76:
+            add_bear(4, "momentum", f"RSI is extremely overbought at {rsi:.1f}.", "overbought")
+            risk_factors.append("Extremely overbought. High risk of mean reversion.")
         elif 32 <= rsi <= 45:
             add_bear(8, "momentum", f"RSI is soft at {rsi:.1f} and still favors sellers.", "momentum")
         elif rsi < 24:
