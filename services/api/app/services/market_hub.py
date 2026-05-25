@@ -26,6 +26,7 @@ from app.services.nifty_context_analyzer import analyze_nifty_context, stock_nif
 from app.services.breakout_radar import build_breakout_radar
 from app.services.chart_patterns import detect_chart_pattern_setup
 from app.services.telegram_market_alerts import get_telegram_market_alerts
+from app.services.zone_detector import ZoneDetector
 
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class MarketHubService:
         self.backtest = BacktestService(settings, self.indicators, self.scoring)
         self.narrative = NarrativeService()
         self.tracker = SetupTrackerService(settings, self.data)
+        self.zone_detector = ZoneDetector()
         self.scan_cache: TTLCache[Dict] = TTLCache(settings.scan_cache_ttl_sec)
         self.detail_cache: TTLCache[Dict] = TTLCache(settings.detail_cache_ttl_sec)
         self.scan_refresh_lock = threading.Lock()
@@ -1195,11 +1197,17 @@ class MarketHubService:
         history = self.data.fetch_history(symbol, period=period)
         if history.empty:
             raise ValueError(f"No history found for {symbol.upper()}")
+            
+        zone_df = history.copy()
+        zone_df.columns = [c.lower() for c in zone_df.columns]
+        active_zones = self.zone_detector.detect_zones(zone_df, max_lookback=200)
+            
         return {
             "symbol": self.data.clean_symbol(symbol),
             "period": period,
             "data": self.data.serialize_candles(history, limit=None),
             "count": len(history),
+            "active_zones": active_zones,
         }
 
     def get_live_payload(self, symbol: str) -> Dict:

@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_URL, humanize, fmt, fmtPct } from "./lib/market";
+import TradingChart from "./components/TradingChart";
 
 const TABS = [
   { id: "dashboard", label: "🏠 Dashboard", api: "/api/market/hot-picks" },
@@ -211,12 +212,20 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
 
 function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void }) {
   const [detail, setDetail] = useState<any>(null);
+  const [chartData, setChartData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_URL}/api/stocks/${symbol}`, { cache: "no-store" })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { setDetail(d); setLoading(false); })
+    Promise.all([
+      fetch(`${API_URL}/api/stocks/${symbol}`, { cache: "no-store" }).then(r => r.ok ? r.json() : null),
+      fetch(`${API_URL}/api/stocks/${symbol}/history?period=3mo`, { cache: "no-store" }).then(r => r.ok ? r.json() : null)
+    ])
+      .then(([d, c]) => { 
+        setDetail(d); 
+        if (c) setChartData(c);
+        setLoading(false); 
+      })
       .catch(() => setLoading(false));
   }, [symbol]);
 
@@ -246,6 +255,11 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
         <div><span>Target 1</span><strong>₹{fmt(s.target_1 ?? s.target_price)}</strong></div>
         <div><span>Stop Loss</span><strong>₹{fmt(s.stop_loss ?? s.invalidation)}</strong></div>
       </div>
+      
+      {chartData ? (
+        <TradingChart symbol={symbol} data={chartData} prediction={s} />
+      ) : null}
+
       {s.reasons?.length ? (
         <div style={{ marginTop: 12 }}>
           <strong>Why:</strong>

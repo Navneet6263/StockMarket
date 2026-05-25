@@ -10,12 +10,14 @@ import yfinance as yf
 
 from app.market_intelligence import MarketIntelligenceService
 from app.market_universe import MarketUniverseService
+from app.services.zone_detector import ZoneDetector
 
 
 class OpportunityFinder:
     def __init__(self):
         self.market_intelligence = MarketIntelligenceService()
         self.market_universe = MarketUniverseService()
+        self.zone_detector = ZoneDetector()
         self.scan_cache: Dict[str, tuple[datetime, Dict]] = {}
         self.profile_cache: Dict[str, tuple[datetime, Dict]] = {}
         self.scan_ttl = timedelta(minutes=20)
@@ -39,7 +41,7 @@ class OpportunityFinder:
     def _chunk(self, values: List[str], size: int) -> List[List[str]]:
         return [values[index : index + size] for index in range(0, len(values), size)]
 
-    def _download_universe(self, symbols: List[str], period: str = "1y") -> Dict[str, pd.DataFrame]:
+    def _download_universe(self, symbols: List[str], period: str = "1y", interval: str = "1d") -> Dict[str, pd.DataFrame]:
         results: Dict[str, pd.DataFrame] = {}
         clean_symbols = list(dict.fromkeys([symbol.upper() for symbol in symbols]))
 
@@ -50,6 +52,7 @@ class OpportunityFinder:
                 data = yf.download(
                     tickers=joined,
                     period=period,
+                    interval=interval,
                     group_by="ticker",
                     auto_adjust=False,
                     progress=False,
@@ -88,11 +91,11 @@ class OpportunityFinder:
         rs = gain / (loss + 0.0001)
         return 100 - (100 / (1 + rs))
 
-    def _technical_snapshot(self, symbol: str, frame: pd.DataFrame) -> Optional[Dict]:
-        close = frame["Close"].astype(float)
-        high = frame["High"].astype(float)
-        low = frame["Low"].astype(float)
-        volume = frame["Volume"].astype(float)
+    def _technical_snapshot(self, symbol: str, frame_daily: pd.DataFrame, frame_weekly: pd.DataFrame, frame_monthly: pd.DataFrame) -> Optional[Dict]:
+        close = frame_daily["Close"].astype(float)
+        high = frame_daily["High"].astype(float)
+        low = frame_daily["Low"].astype(float)
+        volume = frame_daily["Volume"].astype(float)
 
         if len(close) < 80:
             return None
@@ -122,12 +125,95 @@ class OpportunityFinder:
         elif price < sma20 < sma50 and return_20d < 0:
             direction = "down"
 
+        # Multi-timeframe Zone Detection
+        def _get_zones(df, lookback):
+            z_df = df.copy()
+            z_df.columns = [c.lower() for c in z_df.columns]
+            # Call new apply_lotl_merging (we will implement this in zone_detector)
+            zones = self.zone_detector.detect_zones(z_df, max_lookback=lookback)
+            if hasattr(self.zone_detector, "apply_lotl_merging"):
+                zones = self.zone_detector.apply_lotl_merging(zones)
+            return zones
+
+        monthly_zones = _get_zones(frame_monthly, 60)
+        weekly_zones = _get_zones(frame_weekly, 100)
+        daily_zones = _get_zones(frame_daily, 60)
+        
+        # GTF Trend Logic (Weekly)
+        # Downtrend to Uptrend = price breaks 2 consecutive supply zones.
+        # Uptrend to Downtrend = price breaks 2 consecutive demand zones.
+        # For simplicity, if price is above the last weekly supply zone, we are bullish.
+        weekly_supply = [z for z in weekly_zones if z["type"] == "supply"]
+        is_uptrend = False
+        if weekly_supply:
+            # If current price is > proximal of nearest weekly supply, it means we breached it
+            # GTF rule says 2 breaches needed, but we'll approximate with 1 major weekly breach or 
+            # if we are just simply above the last known weekly supply
+            nearest_supply = sorted(weekly_supply, key=lambda x: x["proximal"])[0]
+            if price > nearest_supply["proximal"]:
+                is_uptrend = True
+        
+        direction = "up" if is_uptrend else "neutral"
+
+        # GTF Execution Logic (Daily)
+        demand_zones = [z for z in daily_zones if z["type"] == "demand"]
+        in_demand_zone = False
+        strongest_demand_strength = 0
+        best_zone = None
+        
+        for z in demand_zones:
+            if z["distal"] <= price <= z["proximal"]:
+                in_demand_zone = True
+                if z["strength"] > strongest_demand_strength:
+                    strongest_demand_strength = z["strength"]
+                    best_zone = z
+                    
+        suggested_entry = None
+        suggested_stop_loss = None
+        if best_zone:
+            # Entry Buffer: slightly above proximal line
+            suggested_entry = best_zone["proximal"] * 1.002
+            # Stop Loss Buffer: slightly below distal line (using ATR if available, else 0.5%)
+            atr_buffer = best_zone["distal"] * 0.005 # Default 0.5% buffer
+            suggested_stop_loss = best_zone["distal"] - atr_buffer
+                
+        # Monthly Location Logic (Curve Concept)
+        monthly_demand = [z for z in monthly_zones if z["type"] == "demand"]
+        in_monthly_demand = False
+        for z in monthly_demand:
+            if z["distal"] <= price <= z["proximal"]:
+                in_monthly_demand = True
+                
+        # Curve Calculation (5 segments of Monthly Range)
+        monthly_curve = "equilibrium"
+        if not frame_monthly.empty:
+            m_high = frame_monthly["High"].max()
+            m_low = frame_monthly["Low"].min()
+            m_range = m_high - m_low
+            if m_range > 0:
+                pos = (price - m_low) / m_range
+                if pos <= 0.2:
+                    monthly_curve = "very_low"
+                elif pos <= 0.4:
+                    monthly_curve = "low"
+                elif pos <= 0.6:
+                    monthly_curve = "equilibrium"
+                elif pos <= 0.8:
+                    monthly_curve = "high"
+                else:
+                    monthly_curve = "very_high"
+
+        # GTF Trade Score (0-7 scale approximation)
+        trade_score = strongest_demand_strength
+        if in_monthly_demand or monthly_curve == "very_low":
+            trade_score += 2 # Krishna support or Very Low Curve bonus
+        if is_uptrend:
+            trade_score += 1 # Trend alignment bonus
+            
         composite_score = (
             max(return_20d, 0) * 0.5
-            + max(return_60d, 0) * 0.3
-            + max(volume_ratio - 1, 0) * 22
-            + (8 if breakout else 0)
-            - max(-drawdown_from_high, 0) * 0.15
+            + max(volume_ratio - 1, 0) * 20
+            + (trade_score * 50 if in_demand_zone else 0)  # GTF rules supreme
         )
 
         return {
@@ -147,6 +233,16 @@ class OpportunityFinder:
             "drawdown_from_high_pct": round(drawdown_from_high, 2),
             "direction": direction,
             "composite_score": round(composite_score, 2),
+            "in_demand_zone": in_demand_zone,
+            "demand_strength": trade_score,
+            "in_monthly_demand": in_monthly_demand,
+            "monthly_curve": monthly_curve,
+            "suggested_entry": round(suggested_entry, 2) if suggested_entry else None,
+            "suggested_stop_loss": round(suggested_stop_loss, 2) if suggested_stop_loss else None,
+            "active_zones": daily_zones,
+            "weekly_zones": weekly_zones,
+            "monthly_zones": monthly_zones,
+            "trade_score": trade_score,
         }
 
     def _numeric(self, payload: Dict, key: str) -> Optional[float]:
@@ -478,6 +574,12 @@ class OpportunityFinder:
             "rsi": technical["rsi"],
             "breakout_20d": technical["breakout_20d"],
             "breakdown_20d": technical["breakdown_20d"],
+            "in_demand_zone": technical.get("in_demand_zone", False),
+            "demand_strength": technical.get("demand_strength", 0),
+            "active_zones": technical.get("active_zones", []),
+            "monthly_curve": technical.get("monthly_curve", "unknown"),
+            "suggested_entry": technical.get("suggested_entry"),
+            "suggested_stop_loss": technical.get("suggested_stop_loss"),
             "brief": brief,
             "caution": caution,
             "strengths": business_model.get("strengths", []),
@@ -501,10 +603,19 @@ class OpportunityFinder:
         discovery = self.market_universe.discover_market(force_refresh=force_refresh)
         discovery_meta = discovery.get("symbol_meta", {})
         universe = discovery.get("opportunity_symbols", discovery.get("symbols", []))
-        downloads = self._download_universe(universe, period="1y")
+        downloads_daily = self._download_universe(universe, period="1y", interval="1d")
+        downloads_weekly = self._download_universe(universe, period="5y", interval="1wk")
+        downloads_monthly = self._download_universe(universe, period="10y", interval="1mo")
+        
         technicals = []
-        for symbol, frame in downloads.items():
-            snapshot = self._technical_snapshot(symbol, frame)
+        for symbol, frame_daily in downloads_daily.items():
+            frame_weekly = downloads_weekly.get(symbol)
+            frame_monthly = downloads_monthly.get(symbol)
+            
+            if frame_weekly is None or frame_monthly is None:
+                continue
+                
+            snapshot = self._technical_snapshot(symbol, frame_daily, frame_weekly, frame_monthly)
             if snapshot:
                 technicals.append(snapshot)
 
@@ -534,13 +645,9 @@ class OpportunityFinder:
             [
                 item
                 for item in technicals
-                if item["direction"] == "up"
-                and (
-                    item["breakout_20d"]
-                    or item["return_20d_pct"] >= 2
-                    or item["return_60d_pct"] >= 6
-                    or item["symbol"] in breakout_symbols
-                )
+                if item["in_demand_zone"]  # Force GTF strategy: ONLY trade in demand zones!
+                and item["above_sma50"]    # Must have moving average support
+                and item["direction"] != "down"
             ],
             key=lambda item: item["composite_score"],
             reverse=True,
