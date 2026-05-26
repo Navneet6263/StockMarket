@@ -218,16 +218,48 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
   
   useEffect(() => {
     setLoading(true);
+    let isMounted = true;
     Promise.all([
       fetch(`${API_URL}/api/stocks/${symbol}`, { cache: "no-store" }).then(r => r.ok ? r.json() : null),
       fetch(`${API_URL}/api/stocks/${symbol}/history?period=3mo`, { cache: "no-store" }).then(r => r.ok ? r.json() : null)
     ])
       .then(([d, c]) => { 
+        if (!isMounted) return;
         setDetail(d); 
         if (c) setChartData(c);
         setLoading(false); 
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        if (isMounted) setLoading(false);
+      });
+
+    // Auto-refresh live price every 15 seconds
+    const interval = setInterval(() => {
+      fetch(`${API_URL}/api/stocks/${symbol}/live`, { cache: "no-store" })
+        .then(r => r.ok ? r.json() : null)
+        .then(liveData => {
+          if (!isMounted || !liveData) return;
+          setDetail((prev: any) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              quote: {
+                ...prev.quote,
+                price: liveData.price,
+                change: liveData.change,
+                change_percent: liveData.change_percent,
+                timestamp: liveData.timestamp,
+              },
+            };
+          });
+        })
+        .catch(() => {});
+    }, 15000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [symbol]);
 
   if (loading) return <div className="detail-panel">Loading {symbol}...</div>;
@@ -252,13 +284,13 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
         <div className="stat-card"><span>Seller Pressure</span><strong>{humanize(s.seller_pressure || "unknown")}</strong></div>
       </div>
       <div className="stock-targets" style={{ marginTop: 12 }}>
-        <div><span>Entry</span><strong>₹{fmt(s.entry_trigger ?? s.current_price)}</strong></div>
+        <div><span>Entry</span><strong>₹{fmt(s.entry_price ?? s.entry_trigger ?? s.current_price)}</strong></div>
         <div><span>Target 1</span><strong>₹{fmt(s.target_1 ?? s.target_price)}</strong></div>
         <div><span>Stop Loss</span><strong>₹{fmt(s.stop_loss ?? s.invalidation)}</strong></div>
       </div>
       
       {chartData ? (
-        <TradingChart symbol={symbol} data={chartData} prediction={s} />
+        <TradingChart symbol={symbol} data={chartData} prediction={s} liveQuote={q} />
       ) : null}
 
       {s.reasons?.length ? (

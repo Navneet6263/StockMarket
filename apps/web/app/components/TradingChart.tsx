@@ -7,11 +7,14 @@ interface TradingChartProps {
   symbol: string;
   data: any; // Now contains { data: [], active_zones: [] }
   prediction?: any;
+  liveQuote?: any;
 }
 
-export default function TradingChart({ symbol, data, prediction }: TradingChartProps) {
+export default function TradingChart({ symbol, data, prediction, liveQuote }: TradingChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<any>(null);
+  const seriesRef = useRef<any>(null);
+  const lastCandleTimeRef = useRef<any>(null);
 
   useEffect(() => {
     const chartData = data?.data || [];
@@ -55,6 +58,7 @@ export default function TradingChart({ symbol, data, prediction }: TradingChartP
       wickUpColor: "#10b981",
       wickDownColor: "#ef4444",
     });
+    seriesRef.current = candlestickSeries;
 
     // Sort data chronologically before mapping
     const sortedData = [...chartData].sort((a, b) => {
@@ -80,6 +84,7 @@ export default function TradingChart({ symbol, data, prediction }: TradingChartP
     if (prediction && formattedData.length > 0) {
       const markers: SeriesMarker<any>[] = [];
       const lastCandle = formattedData[formattedData.length - 1];
+      lastCandleTimeRef.current = lastCandle.time;
 
       // Bull Trap Marker
       if (prediction.trap_risk === "high" || prediction.bull_trap?.bull_trap_detected) {
@@ -90,7 +95,7 @@ export default function TradingChart({ symbol, data, prediction }: TradingChartP
           shape: "arrowDown",
           text: "🚨 BULL TRAP",
         });
-      } else if (prediction.direction === "bullish" && prediction.confidence >= 70) {
+      } else if (prediction.direction === "bullish" && (prediction.action === "BUY" || prediction.action === "REENTRY_BUY" || prediction.action === "VALID_BREAKOUT")) {
         markers.push({
           time: lastCandle.time,
           position: "belowBar",
@@ -114,9 +119,10 @@ export default function TradingChart({ symbol, data, prediction }: TradingChartP
     }
 
     // Add Support/Resistance lines if available
-    if (prediction?.entry_trigger) {
+    const entryLinePrice = prediction?.entry_price || prediction?.entry_trigger;
+    if (entryLinePrice) {
       candlestickSeries.createPriceLine({
-        price: prediction.entry_trigger,
+        price: entryLinePrice,
         color: "#3b82f6",
         lineWidth: 2,
         lineStyle: 2,
@@ -179,6 +185,27 @@ export default function TradingChart({ symbol, data, prediction }: TradingChartP
       chart.remove();
     };
   }, [data, prediction]);
+
+  // Update live price without re-rendering the whole chart
+  useEffect(() => {
+    if (seriesRef.current && liveQuote && lastCandleTimeRef.current) {
+      const currentData = seriesRef.current.data();
+      if (currentData && currentData.length > 0) {
+        const last = currentData[currentData.length - 1];
+        // If it's the same time period, update the close and high/low
+        if (last.time === lastCandleTimeRef.current) {
+          const newPrice = Number(liveQuote.price);
+          seriesRef.current.update({
+            time: last.time,
+            open: last.open,
+            high: Math.max(last.high, newPrice),
+            low: Math.min(last.low, newPrice),
+            close: newPrice,
+          });
+        }
+      }
+    }
+  }, [liveQuote]);
 
   return (
     <div 
