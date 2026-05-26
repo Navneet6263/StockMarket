@@ -5,6 +5,7 @@ import TradingChart from "./components/TradingChart";
 
 const TABS = [
   { id: "dashboard", label: "Dashboard", api: "/api/market/hot-picks" },
+  { id: "live-action", label: "🔴 Live Action", api: "/api/market/hot-picks" },
   { id: "hot-picks", label: "Hot Picks", api: "/api/market/hot-picks" },
   { id: "pbs", label: "Profit Booking (PBS)", api: "/api/market/hot-picks" },
   { id: "watchlist", label: "Watchlist", api: "/api/market/hot-picks" },
@@ -387,6 +388,7 @@ function OptionsDashboard({ data }: { data: any }) {
 function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
   if (tab === "dashboard" || tab === "hot-picks") return data.hotPicks || data.top_opportunities || [];
+  if (tab === "live-action") return data.liveAction || [];
   if (tab === "traps") return data.trap_signals || [];
   if (tab === "pbs") return data.pbsRadar || [];
   if (tab === "watchlist") return data.watchlist || data.candidates || [];

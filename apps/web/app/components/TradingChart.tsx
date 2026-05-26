@@ -119,7 +119,7 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
     }
 
     // Add Support/Resistance lines if available
-    const entryLinePrice = prediction?.entry_price || prediction?.entry_trigger;
+    const entryLinePrice = prediction?.safe_entry_price || prediction?.entry_price || prediction?.entry_trigger;
     if (entryLinePrice) {
       candlestickSeries.createPriceLine({
         price: entryLinePrice,
@@ -130,9 +130,10 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
         title: "Entry",
       });
     }
-    if (prediction?.target_1 || prediction?.target_price) {
+    const targetPrice = prediction?.new_target || prediction?.target_1 || prediction?.target_price;
+    if (targetPrice) {
       candlestickSeries.createPriceLine({
-        price: prediction.target_1 || prediction.target_price,
+        price: targetPrice,
         color: "#10b981",
         lineWidth: 2,
         lineStyle: 2,
@@ -140,9 +141,11 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
         title: "Target 1",
       });
     }
-    if (prediction?.stop_loss || prediction?.invalidation) {
+    
+    const stopLossPrice = prediction?.invalidation_level || prediction?.invalidation || prediction?.stop_loss;
+    if (stopLossPrice) {
       candlestickSeries.createPriceLine({
-        price: prediction.stop_loss || prediction.invalidation,
+        price: stopLossPrice,
         color: "#ef4444",
         lineWidth: 2,
         lineStyle: 2,
