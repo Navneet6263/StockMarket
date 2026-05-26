@@ -857,7 +857,7 @@ class ScoringEngine:
         if live_pattern_ready and not entry_blocks_fresh_buy:
             signal_stage = "LIVE_PATTERN_READY" if advanced_pattern_stage == "READY_TO_BREAK" else "CONFIRMED_BREAKOUT"
             action = str(advanced_pattern.get("action") or "BUY_ONLY_ON_TRIGGER_HOLD")
-        elif "support_bounce" in tags and not entry_blocks_fresh_buy and direction == "bullish":
+        elif "support_bounce" in pattern_context.get("pattern_labels", []) and not entry_blocks_fresh_buy and direction == "bullish":
             signal_stage = "SUPPORT_BOUNCE"
             action = "BUY"
         elif pre_breakout.get("is_pre_breakout") and not entry_blocks_fresh_buy:
