@@ -410,9 +410,11 @@ class MarketHubService:
                 }
                 # GTF Execution Buffer Rules
                 signal["entry_trigger"] = round(best_zone["proximal"] * 1.002, 2)
+                signal["safe_entry_price"] = signal["entry_trigger"]
                 atr_buffer = best_zone["distal"] * 0.005 # Default 0.5% buffer for SL liquidity hunt protection
                 signal["invalidation"] = round(best_zone["distal"] - atr_buffer, 2)
                 signal["setup_stage"] = "RETEST_ENTRY"
+
                 
                 # Tag it so it hits the correct UI tabs
                 tags = set(signal.get("tags", []))
@@ -906,6 +908,26 @@ class MarketHubService:
         # ── Nifty Context (Financial Expert Level Index Analysis) ─────────────
         nifty_context = self._get_nifty_context()
 
+        # ── Extract Zero-Latency Live Triggers for the Entire Universe ────────
+        all_entry_levels = []
+        for item in results:
+            entry = float(item.get("safe_entry_price") or item.get("entry_trigger") or item.get("breakoutTrigger") or 0)
+            if entry > 0:
+                all_entry_levels.append({
+                    "symbol": item.get("symbol"),
+                    "entry_trigger": entry,
+                    "safe_entry_price": item.get("safe_entry_price"),
+                    "stop_loss": item.get("invalidation_level") or item.get("stop_loss"),
+                    "target_1": item.get("target_1") or item.get("new_target"),
+                    "direction": item.get("direction", "bullish"),
+                    "setup_type": item.get("setup_type") or item.get("setup_label", ""),
+                    "confidence": item.get("confidence") or 0,
+                    "risk_reward": item.get("risk_reward") or 0,
+                    "current_price": item.get("current_price"),
+                    "pre_breakout_timeframe": item.get("pre_breakout_timeframe") or item.get("time_horizon"),
+                })
+
+
         # Enrich each signal with Nifty alignment score
         for item in results:
             try:
@@ -989,6 +1011,7 @@ class MarketHubService:
                 "nifty_regime": nifty_context.get("nifty_regime", "unknown"),
                 "market_score": nifty_context.get("market_score", 50),
             },
+            "all_entry_levels": all_entry_levels,
         }
 
     def _refresh_scan_market(self, force_refresh: bool = False) -> Dict:

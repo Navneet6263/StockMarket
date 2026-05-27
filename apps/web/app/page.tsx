@@ -123,7 +123,10 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         </div>
       ) : null}
       <div className="stock-card-top">
-        <h3>{item.symbol}</h3>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <h3>{item.symbol}</h3>
+          {item.label && <span className="tag" style={{ background: "var(--red, #ef4444)", color: "#fff", fontWeight: "bold" }}>{item.label}</span>}
+        </div>
         <span className={`badge ${isHighTrap ? 'bearish' : direction}`}>{isHighTrap ? 'AVOID' : humanize(direction)}</span>
       </div>
       {chartPattern ? <div className="stock-reason" style={{ marginTop: 4 }}>{humanize(chartPattern)}</div> : null}

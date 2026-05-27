@@ -366,7 +366,7 @@ class ScoringEngine:
         invalidation_level = max(support_candidates) if support_candidates else price * 0.94
         consolidation_high = resistance if resistance and resistance > price else price * (1 + max(0.8, atr_pct * 0.35) / 100)
         alert_price = consolidation_high * 1.002
-        safe_entry_price = alert_price if continuation_type == "consolidation" else max(price, (ema_20 or rolling_vwap or price) * 1.006)
+        safe_entry_price = alert_price if continuation_type == "consolidation" else round((ema_20 or rolling_vwap or price * 0.98) * 1.006, 2)
         stop_distance = max(safe_entry_price - invalidation_level, 0)
         target_pct = max(2.0, min(8.0, atr_pct * 1.6 if atr_pct else 3.0))
         new_target = safe_entry_price * (1 + target_pct / 100)

@@ -32,11 +32,15 @@ async def start_feed(symbols: list[str] | None = None):
     """Start WebSocket live feed for given symbols (or top 50 from universe)."""
     svc = get_angelone_live()
     if not symbols:
-        from app.services.market_hub import MarketHubService
-        from app.core.dependencies import get_market_hub
-        hub = get_market_hub()
-        discovery = await asyncio.to_thread(hub.universe.discover_market)
-        symbols = (discovery.get("scan_symbols") or discovery.get("symbols") or [])[:50]
+        from app.services.entry_monitor import get_entry_monitor
+        monitor = get_entry_monitor()
+        symbols = monitor.get_watched_symbols()
+        if not symbols:
+            from app.services.market_hub import MarketHubService
+            from app.core.dependencies import get_market_hub
+            hub = get_market_hub()
+            discovery = await asyncio.to_thread(hub.universe.discover_market)
+            symbols = (discovery.get("scan_symbols") or discovery.get("symbols") or [])[:50]
     svc.start_feed(symbols)
     return {"started": True, "symbols_count": len(symbols), "status": svc.get_status()}
 

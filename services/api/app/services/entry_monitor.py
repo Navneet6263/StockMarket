@@ -114,13 +114,17 @@ class EntryMonitor:
         with self._lock:
             return len(self._watched)
 
+    def get_watched_symbols(self) -> List[str]:
+        with self._lock:
+            return list(self._watched.keys())
+
     # ── Internal ───────────────────────────────────────────────────────────────
 
     def _register_watchlist(self, scan_payload: Dict) -> None:
         """Build watch-list from every item in the scan results."""
         # Flatten all results from the scan payload
         all_results: List[Dict] = []
-        for key in ("results", "top_opportunities", "pre_breakout_setups",
+        for key in ("all_entry_levels", "results", "top_opportunities", "pre_breakout_setups",
                     "alert_above_setups", "retest_entry", "momentum_continuation",
                     "candidates", "pbsItems"):
             items = scan_payload.get(key) or []
@@ -135,9 +139,9 @@ class EntryMonitor:
             entry = _entry_level(item)
             if not entry:
                 continue
-            # Skip late-entry items (already above trigger by more than threshold)
+            # Skip stocks that have already gone way too far (> 6% above entry)
             current = _safe_float(item.get("current_price") or item.get("price"))
-            if current and current > entry * (1 + ENTRY_TRIGGER_PCT / 100 * 2):
+            if current and current > entry * 1.06:
                 continue
             new_watched[sym] = {
                 "entry": entry,
@@ -161,9 +165,15 @@ class EntryMonitor:
             return
 
         distance_pct = ((price - entry) / entry) * 100
-        # Within ENTRY_TRIGGER_PCT% of entry = "at entry"
-        if abs(distance_pct) > ENTRY_TRIGGER_PCT:
+        
+        # We only care if it's at entry (down to -1.5%) or flying away (up to +5%)
+        if distance_pct < -ENTRY_TRIGGER_PCT or distance_pct > 5.0:
             return
+
+        label = "🔴 AT ENTRY NOW"
+        if distance_pct > ENTRY_TRIGGER_PCT:
+            label = "🚀 FLYING / CHASE"
+
 
         now = time.time()
         last = self._last_alerted.get(symbol, 0)
@@ -185,7 +195,7 @@ class EntryMonitor:
             "timeHorizon": watched["time_horizon"],
             "detected_at": datetime.now(timezone.utc).isoformat(),
             "detected_at_epoch": now,
-            "label": "🔴 AT ENTRY NOW",
+            "label": label,
         }
 
         with self._lock:
@@ -236,9 +246,9 @@ class EntryMonitor:
                 direction_emoji = "🟢" if alert["direction"] == "bullish" else "🔴"
 
                 lines = [
-                    f"{direction_emoji} *ENTRY ALERT* — `{sym}`",
+                    f"{direction_emoji} *{alert['label']}* — `{sym}`",
                     f"📍 Live Price: ₹{price}",
-                    f"🎯 Entry Zone: ₹{entry}",
+                    f"🎯 Safe Entry: ₹{entry} ({distance_pct:+.1f}%)",
                     f"🛑 Stop Loss: ₹{sl}" if sl else "",
                     f"🏆 Target: ₹{tgt}" if tgt else "",
                     f"⚖️ R:R = {rr}" if rr else "",
