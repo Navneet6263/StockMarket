@@ -422,8 +422,11 @@ export default function Page() {
   const [liveEntryCount, setLiveEntryCount] = useState(0);
   const activeTabRef = useRef(tab);
 
-  // Poll /api/market/live-entries every 5 seconds (dedicated real-time endpoint)
+  // Real-time live entries subscription (WebSocket with automatic polling fallback)
   useEffect(() => {
+    let ws: WebSocket | null = null;
+    let pollInterval: any = null;
+
     const pollLiveEntries = async () => {
       try {
         const r = await fetch(`${API_URL}/api/market/live-entries`, { cache: "no-store" });
@@ -434,9 +437,66 @@ export default function Page() {
         }
       } catch {}
     };
-    pollLiveEntries();
-    const interval = setInterval(pollLiveEntries, 5000);
-    return () => clearInterval(interval);
+
+    const connectWebSocket = () => {
+      try {
+        let wsUrl = "";
+        if (!API_URL || API_URL.startsWith("/")) {
+          const loc = window.location;
+          const proto = loc.protocol === "https:" ? "wss:" : "ws:";
+          wsUrl = `${proto}//${loc.host}${API_URL || ""}/api/live/ws/live-entries`;
+        } else {
+          wsUrl = API_URL.replace(/^http/, "ws") + "/api/live/ws/live-entries";
+        }
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          console.log("[WS] Connected to live entries feed");
+          if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+          }
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const json = JSON.parse(event.data);
+            setLiveEntryCount(json.count || 0);
+            setDataByTab(prev => ({ ...prev, "live-action": json }));
+          } catch (e) {
+            console.error("[WS] Failed to parse message", e);
+          }
+        };
+
+        ws.onclose = () => {
+          console.log("[WS] Connection closed, falling back to polling");
+          if (!pollInterval) {
+            pollLiveEntries();
+            pollInterval = setInterval(pollLiveEntries, 3000);
+          }
+          setTimeout(connectWebSocket, 5000);
+        };
+
+        ws.onerror = (err) => {
+          console.error("[WS] Error:", err);
+          ws?.close();
+        };
+      } catch (e) {
+        console.error("[WS] Connection failed:", e);
+        if (!pollInterval) {
+          pollLiveEntries();
+          pollInterval = setInterval(pollLiveEntries, 3000);
+        }
+      }
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (ws) ws.close();
+      if (pollInterval) clearInterval(pollInterval);
+    };
   }, []);
 
   useEffect(() => {

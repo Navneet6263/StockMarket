@@ -83,6 +83,8 @@ def fetch_all_nse_symbols() -> tuple[str, ...]:
             # NSE equities have symbol ending with -EQ
             if symbol.endswith("-EQ") and name:
                 clean = name.upper().strip()
+                if any(t in clean for t in ("ETF", "BEES", "LIQUID", "GOLD", "SILV", "BOND", "GILT", "MONEY")):
+                    continue
                 if clean and len(clean) <= 20:
                     symbols.append(clean)
         unique = tuple(dict.fromkeys(symbols))

@@ -295,9 +295,16 @@ class MarketHubService:
         # Feed fresh entry levels into the real-time entry monitor
         try:
             from app.services.entry_monitor import get_entry_monitor
-            get_entry_monitor().start(payload)
+            monitor = get_entry_monitor()
+            monitor.start(payload)
+            # Ensure the WebSocket is subscribed to ALL watched symbols
+            watched_symbols = monitor.get_watched_symbols()
+            if watched_symbols:
+                from app.services.angelone_live import get_angelone_live
+                get_angelone_live().start_feed(watched_symbols)
+                logger.info("Live feed updated with %d watched symbols", len(watched_symbols))
         except Exception:
-            logger.debug("entry_monitor update skipped")
+            logger.debug("entry_monitor / live feed update skipped", exc_info=True)
         return payload
 
     def _start_background_refresh(self, force_refresh: bool = True) -> bool:
@@ -694,7 +701,7 @@ class MarketHubService:
             ),
             reverse=True,
         ))
-        top_opportunities = top_ranked[:8]
+        top_opportunities = top_ranked[:500]
         surfaced = {item["symbol"] for item in top_opportunities}
 
         retest_entry = self._unique_signals(sorted(
@@ -706,13 +713,12 @@ class MarketHubService:
             ],
             key=lambda item: (item.get("confidence", 0), item.get("risk_reward", 0), item.get("benchmark_relative_strength", 0)),
             reverse=True,
-        ))[:12]
+        ))[:500]
 
         pre_breakout_setups = self._unique_signals(sorted(
             [
                 item for item in results
                 if item.get("is_pre_breakout")
-                and item.get("attention_only", False)
                 and not item.get("chase_risk", False)
             ],
             key=lambda item: (
@@ -721,7 +727,7 @@ class MarketHubService:
                 item.get("benchmark_relative_strength", 0),
             ),
             reverse=True,
-        ))[:12]
+        ))[:500]
 
         alert_above_setups = [
             item for item in pre_breakout_setups
@@ -743,7 +749,7 @@ class MarketHubService:
                 item.get("benchmark_relative_strength", 0),
             ),
             reverse=True,
-        ))[:12]
+        ))[:500]
 
         # Candidates bucket — medium conviction, setup forming
         candidates_bucket = self._unique_signals(sorted(
@@ -760,7 +766,7 @@ class MarketHubService:
             ],
             key=lambda item: (item["move_quality"], item["confidence"]),
             reverse=True,
-        ))[:15]
+        ))[:500]
 
         # Avoid / Risky bucket — weak setups, high risk
         avoid_risky_bucket = self._unique_signals(sorted(
@@ -770,7 +776,7 @@ class MarketHubService:
             ],
             key=lambda item: item["confidence"],
             reverse=True,
-        ))[:10]
+        ))[:500]
 
         avoid_late_entry = self._unique_signals(sorted(
             [
@@ -788,7 +794,7 @@ class MarketHubService:
                 abs(float(item.get("change_pct") or 0)),
             ),
             reverse=True,
-        ))[:15]
+        ))[:500]
 
         volume_ranked = self._unique_signals(sorted(
             [
@@ -802,7 +808,7 @@ class MarketHubService:
         unusual_volume = self._fill_signal_bucket(
             [item for item in volume_ranked if item["symbol"] not in surfaced],
             volume_ranked,
-            8,
+            500,
         )
 
         breakouts = self._unique_signals([
@@ -826,7 +832,7 @@ class MarketHubService:
                 key=lambda item: (item["move_quality"], item["confidence"], item["relative_volume"]),
                 reverse=True,
             ),
-            8,
+            500,
         )
 
         bearish_ranked = self._unique_signals(sorted(
@@ -834,7 +840,7 @@ class MarketHubService:
             key=lambda item: (item["move_quality"], item["confidence"]),
             reverse=True,
         ))
-        bearish_risks = bearish_ranked[:8]
+        bearish_risks = bearish_ranked[:500]
         surfaced.update(item["symbol"] for item in breakout_candidates)
         surfaced.update(item["symbol"] for item in bearish_risks)
         surfaced.update(item["symbol"] for item in candidates_bucket)
@@ -848,7 +854,7 @@ class MarketHubService:
             ],
             key=lambda item: item.get("confidence", 0),
             reverse=True,
-        ))[:15]
+        ))[:500]
         surfaced.update(item["symbol"] for item in trap_signals)
 
 

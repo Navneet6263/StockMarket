@@ -3,13 +3,72 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.services.angelone_live import get_angelone_live
 
 router = APIRouter(prefix="/api/live", tags=["live"])
 logger = logging.getLogger(__name__)
+
+# Real-time WebSocket connection registry
+active_websockets: set[WebSocket] = set()
+global_loop = None
+
+@router.websocket("/ws/live-entries")
+async def websocket_endpoint(websocket: WebSocket):
+    global global_loop
+    global_loop = asyncio.get_running_loop()
+    await websocket.accept()
+    active_websockets.add(websocket)
+    try:
+        from app.services.entry_monitor import get_entry_monitor
+        monitor = get_entry_monitor()
+        entries = monitor.get_live_entries()
+        await websocket.send_json({
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "count": len(entries),
+            "watchedCount": monitor.get_watched_count(),
+            "entries": entries,
+        })
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        active_websockets.remove(websocket)
+    except Exception:
+        if websocket in active_websockets:
+            active_websockets.remove(websocket)
+
+def on_live_entry_triggered(alert: dict):
+    global global_loop
+    if not global_loop:
+        return
+    try:
+        from app.services.entry_monitor import get_entry_monitor
+        monitor = get_entry_monitor()
+        entries = monitor.get_live_entries()
+        payload = {
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "count": len(entries),
+            "watchedCount": monitor.get_watched_count(),
+            "entries": entries,
+            "new_alert": alert,
+        }
+        for ws in list(active_websockets):
+            try:
+                asyncio.run_coroutine_threadsafe(ws.send_json(payload), global_loop)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+# Register callback with entry monitor
+try:
+    from app.services.entry_monitor import get_entry_monitor
+    get_entry_monitor().subscribe(on_live_entry_triggered)
+except Exception as e:
+    logger.warning("Failed to register WS callback with entry monitor: %s", e)
 
 
 @router.get("/prices")

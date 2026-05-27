@@ -896,6 +896,21 @@ class ScoringEngine:
                 continuation["action"] = "ALERT"
             risk_factors.append("Historical validation is below the BUY/SELL threshold; keep as watch only.")
 
+        eval_allow_buy_call = (
+            True
+            if live_pattern_ready and not entry_blocks_fresh_buy
+            else
+            False
+            if (pre_breakout.get("is_pre_breakout") and not live_pattern_ready) or entry_blocks_fresh_buy
+            else bool(chase["allow_buy_call"] and entry_timing.get("allow_buy_call", True))
+        )
+        eval_attention_only = False if (live_pattern_ready or eval_allow_buy_call) else (
+            (bool(pre_breakout.get("is_pre_breakout")) and not live_pattern_ready)
+            or bool(continuation.get("is_momentum_continuation"))
+            or chase["attention_only"]
+            or bool(entry_timing.get("attention_only"))
+        )
+
         return {
             "symbol": symbol.upper(),
             "direction": direction,
@@ -993,20 +1008,8 @@ class ScoringEngine:
             "supply_score": demand_supply.get("supplyScore"),
             "trap_risk": demand_supply.get("trapRisk"),
             "trap_risk_score": demand_supply.get("trapRiskScore"),
-            "attention_only": False if live_pattern_ready else (
-                (bool(pre_breakout.get("is_pre_breakout")) and not live_pattern_ready)
-                or bool(continuation.get("is_momentum_continuation"))
-                or chase["attention_only"]
-                or bool(entry_timing.get("attention_only"))
-            ),
-            "allow_buy_call": (
-                True
-                if live_pattern_ready and not entry_blocks_fresh_buy
-                else
-                False
-                if (pre_breakout.get("is_pre_breakout") and not live_pattern_ready) or entry_blocks_fresh_buy
-                else bool(chase["allow_buy_call"] and entry_timing.get("allow_buy_call", True))
-            ),
+            "attention_only": eval_attention_only,
+            "allow_buy_call": eval_allow_buy_call,
             "live_pattern_ready": live_pattern_ready,
             "advanced_chart_pattern": advanced_pattern,
             "risk_reward": risk_reward,

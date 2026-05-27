@@ -27,9 +27,25 @@ _EQUITY_QUOTE_TYPE = "EQUITY"
 # Tokens in company short-names or symbols that indicate non-stock instruments
 _BLOCKED_NAME_TOKENS = (
     "ETF", "BEES", "INVIT", "LIQUID", "GOLD", "SILV",
-    "INDEX", "MUTUAL", "FUND",
+    "INDEX", "MUTUAL", "FUND", "NIFTY", "SENSEX",
+    "DEBT", "BOND", "GILT", "MONEY MARKET", "OVERNIGHT",
+    "FIXED INCOME", "ARBITRAGE", "FOF", "SAVINGS",
+    "BALANCED ADVANTAGE", "ASSET ALLOCATION",
+    "DYNAMIC BOND", "FLOATING RATE",
+    "NASDAQ", "HANG SENG", "S&P", "MIDCAP ETF",
 )
-_BLOCKED_SYMBOL_TOKENS = ("BEES", "INVIT")
+_BLOCKED_SYMBOL_TOKENS = (
+    "BEES", "INVIT", "LIQUIDBETF", "LIQUIDADD", "ELIQUID",
+    "LIQUIDIETF", "LIQUID", "LICNETFN50", "LICNFNHGP",
+    "NETFIT", "GOLDCASE", "GOLDBEES", "SILVERBEES",
+    "SETF", "NETF", "NIFTYETF", "BANKETF",
+    "MON100", "MOM100", "AXISNIFTY",
+    "HDFCNIFETF", "ICICINIFTY", "UTINIFTETF",
+    "ICICIB22", "NIFTYBEES", "BANKBEES",
+    "JUNIORBEES", "INFRAIEES", "LOWVOLIETF",
+    "QNIFTY", "MAFANG", "MOM50",
+    "IL&FSENGG",  # defunct
+)
 
 
 class MarketUniverseService:
@@ -113,7 +129,10 @@ class MarketUniverseService:
             dict.fromkeys(
                 self._normalize_symbol(symbol)
                 for symbol in configured
-                if symbol and self._normalize_symbol(symbol) not in invalid_symbols
+                if symbol 
+                and self._normalize_symbol(symbol) not in invalid_symbols
+                and not any(token in self._normalize_symbol(symbol) for token in _BLOCKED_SYMBOL_TOKENS)
+                and not any(token in self._normalize_symbol(symbol) for token in ("ETF", "BEES", "MUTUAL", "FUND", "BOND", "GILT", "LIQUID", "GOLD", "SILV"))
             )
         )
 

@@ -56,16 +56,48 @@ class LivePriceFeed:
         self._subscribers.append(callback)
 
     def start(self, symbols: list[str]):
-        if not ENABLE_LIVE_FEED or self._running:
+        if not ENABLE_LIVE_FEED:
+            return
+        if self._running:
+            # Feed already running — add new symbols dynamically
+            self._add_symbols(symbols)
             return
         api = _get_angel_session()
         if not api:
             logger.warning("[LIVE_FEED] AngelOne not available — feed disabled")
             return
         self._running = True
+        self._sws = None  # will be set inside _run_ws
         self._ws_thread = threading.Thread(target=self._run_ws, args=(api, symbols), daemon=True, name="live-price-feed")
         self._ws_thread.start()
         logger.info("[LIVE_FEED] Started for %d symbols", len(symbols))
+
+    def _add_symbols(self, symbols: list[str]):
+        """Dynamically subscribe new symbols to a running WebSocket."""
+        from app.services.broker_adapter import get_broker_adapter
+        adapter = get_broker_adapter()
+        exchange_token_map: dict[int, list[str]] = {}
+        added = 0
+        for sym in symbols:
+            if sym.upper() in self._tokens:
+                continue  # already subscribed
+            token, ex_type = self._resolve_token_with_exchange(sym, adapter)
+            if token:
+                exchange_token_map.setdefault(ex_type, []).append(token)
+                self._tokens[sym.upper()] = token
+                added += 1
+        if added and self._sws:
+            try:
+                token_list = [
+                    {"exchangeType": ex_type, "tokens": tokens}
+                    for ex_type, tokens in exchange_token_map.items()
+                ]
+                self._sws.subscribe("abc123", 1, token_list)
+                logger.info("[LIVE_FEED] Dynamically added %d new symbols (total: %d)", added, len(self._tokens))
+            except Exception as exc:
+                logger.warning("[LIVE_FEED] Dynamic subscribe failed: %s", exc)
+        elif added:
+            logger.info("[LIVE_FEED] Queued %d symbols (WS not ready yet)", added)
 
     def stop(self):
         self._running = False
@@ -82,12 +114,12 @@ class LivePriceFeed:
             client_code = os.getenv("ANGELONE_CLIENT_ID", "")
 
             sws = SmartWebSocketV2(auth_token, os.getenv("ANGELONE_API_KEY", ""), client_code, feed_token)
+            self._sws = sws  # store reference for dynamic subscriptions
 
-            # Build per-exchange-type token groups (NSE=1, BSE=3) — no duplicates
+            # Build per-exchange-type token groups (NSE=1, BSE=3) — ALL symbols, no limit
             adapter = get_broker_adapter()
-            # Map: exchangeType -> [token, ...]
             exchange_token_map: dict[int, list[str]] = {}
-            for sym in symbols[:50]:  # AngelOne WS limit
+            for sym in symbols:  # subscribe to ALL symbols in universe
                 token, ex_type = self._resolve_token_with_exchange(sym, adapter)
                 if token:
                     exchange_token_map.setdefault(ex_type, []).append(token)
@@ -97,6 +129,7 @@ class LivePriceFeed:
                 {"exchangeType": ex_type, "tokens": tokens}
                 for ex_type, tokens in exchange_token_map.items()
             ]
+            logger.info("[LIVE_FEED] Resolved %d tokens for WebSocket subscription", len(self._tokens))
 
             def on_data(wsapp, message):
                 try:

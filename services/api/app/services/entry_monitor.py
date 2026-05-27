@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 # ── Tuneable constants (all env-overridable) ───────────────────────────────────
 import os
 ENTRY_TRIGGER_PCT   = float(os.getenv("ENTRY_TRIGGER_PCT",   "1.5"))   # ±1.5% of entry = "at entry"
-ALERT_COOLDOWN_SEC  = int(os.getenv("ENTRY_ALERT_COOLDOWN",  "300"))   # 5-min gap between same-stock alerts
-LIVE_ENTRIES_MAX    = int(os.getenv("LIVE_ENTRIES_MAX",       "30"))    # rolling window size
-LIVE_ENTRIES_TTL    = int(os.getenv("LIVE_ENTRIES_TTL_SEC",   "600"))   # drop entries older than 10 min
+ALERT_COOLDOWN_SEC  = int(os.getenv("ENTRY_ALERT_COOLDOWN",  "60"))    # 60-sec gap between same-stock alerts
+LIVE_ENTRIES_MAX    = int(os.getenv("LIVE_ENTRIES_MAX",       "100"))   # rolling window size
+LIVE_ENTRIES_TTL    = int(os.getenv("LIVE_ENTRIES_TTL_SEC",   "1800"))  # keep entries visible for 30 min
 
 
 def _safe_float(value: Any) -> float | None:
@@ -80,8 +80,13 @@ class EntryMonitor:
         # symbol -> last alert epoch
         self._last_alerted: Dict[str, float] = {}
         self._running = False
+        self._subscribers: list[Callable] = []
 
     # ── Public API ─────────────────────────────────────────────────────────────
+
+    def subscribe(self, callback: Callable[[Dict], None]) -> None:
+        with self._lock:
+            self._subscribers.append(callback)
 
     def start(self, scan_payload: Dict) -> None:
         """Register all eligible stocks from the latest scan result.
@@ -212,6 +217,15 @@ class EntryMonitor:
         )
         self._send_telegram(alert)
 
+        # Notify event subscribers (e.g. WebSockets)
+        with self._lock:
+            subs = list(self._subscribers)
+        for cb in subs:
+            try:
+                cb(alert)
+            except Exception as exc:
+                logger.debug("Failed to notify entry subscriber: %s", exc)
+
     def _attach_live_feed(self) -> None:
         """Register callback with the AngelOne live price feed."""
         try:
@@ -239,6 +253,7 @@ class EntryMonitor:
                 sym = alert["symbol"]
                 price = alert["livePrice"]
                 entry = alert["entryLevel"]
+                dist = alert["distancePct"]
                 sl = alert["stopLoss"]
                 tgt = alert["target"]
                 rr = alert["rr"]
@@ -248,7 +263,7 @@ class EntryMonitor:
                 lines = [
                     f"{direction_emoji} *{alert['label']}* — `{sym}`",
                     f"📍 Live Price: ₹{price}",
-                    f"🎯 Safe Entry: ₹{entry} ({distance_pct:+.1f}%)",
+                    f"🎯 Safe Entry: ₹{entry} ({dist:+.1f}%)",
                     f"🛑 Stop Loss: ₹{sl}" if sl else "",
                     f"🏆 Target: ₹{tgt}" if tgt else "",
                     f"⚖️ R:R = {rr}" if rr else "",
