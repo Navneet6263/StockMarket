@@ -292,6 +292,12 @@ class MarketHubService:
         self.last_successful_scan = copy.deepcopy(payload)
         self.last_successful_scan_at = time.time()
         self.scan_cache.set("market_overview", payload)
+        # Feed fresh entry levels into the real-time entry monitor
+        try:
+            from app.services.entry_monitor import get_entry_monitor
+            get_entry_monitor().start(payload)
+        except Exception:
+            logger.debug("entry_monitor update skipped")
         return payload
 
     def _start_background_refresh(self, force_refresh: bool = True) -> bool:

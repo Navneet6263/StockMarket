@@ -5,7 +5,7 @@ import TradingChart from "./components/TradingChart";
 
 const TABS = [
   { id: "dashboard", label: "Dashboard", api: "/api/market/hot-picks" },
-  { id: "live-action", label: "🔴 Live Action", api: "/api/market/hot-picks" },
+  { id: "live-action", label: "🔴 Live Action", api: "/api/market/live-entries" },
   { id: "hot-picks", label: "Hot Picks", api: "/api/market/hot-picks" },
   { id: "pbs", label: "Profit Booking (PBS)", api: "/api/market/hot-picks" },
   { id: "watchlist", label: "Watchlist", api: "/api/market/hot-picks" },
@@ -284,10 +284,18 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
         <div className="stat-card"><span>Entry Quality</span><strong>{humanize(s.entry_quality || "watch")}</strong></div>
         <div className="stat-card"><span>Seller Pressure</span><strong>{humanize(s.seller_pressure || "unknown")}</strong></div>
       </div>
+      {/* ── Trade Levels ─────────────────────────────────────── */}
+      {/* Priority: safe_entry_price (pullback zone) → entry_price → entry_trigger */}
       <div className="stock-targets" style={{ marginTop: 12 }}>
-        <div><span>Entry</span><strong>₹{fmt(s.entry_price ?? s.entry_trigger ?? s.current_price)}</strong></div>
-        <div><span>Target 1</span><strong>₹{fmt(s.target_1 ?? s.target_price)}</strong></div>
-        <div><span>Stop Loss</span><strong>₹{fmt(s.stop_loss ?? s.invalidation)}</strong></div>
+        <div><span>Entry</span><strong>₹{fmt(
+          s.safe_entry_price ?? s.entry_price ?? s.entry_trigger ?? s.current_price
+        )}</strong></div>
+        <div><span>Target 1</span><strong>₹{fmt(
+          s.new_target ?? s.target_1 ?? s.target_price
+        )}</strong></div>
+        <div><span>Stop Loss</span><strong>₹{fmt(
+          s.invalidation_level ?? s.stop_loss ?? s.invalidation
+        )}</strong></div>
       </div>
       
       {chartData ? (
@@ -388,7 +396,8 @@ function OptionsDashboard({ data }: { data: any }) {
 function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
   if (tab === "dashboard" || tab === "hot-picks") return data.hotPicks || data.top_opportunities || [];
-  if (tab === "live-action") return data.liveAction || [];
+  // live-action: data comes from /api/market/live-entries
+  if (tab === "live-action") return data.entries || data.liveAction || [];
   if (tab === "traps") return data.trap_signals || [];
   if (tab === "pbs") return data.pbsRadar || [];
   if (tab === "watchlist") return data.watchlist || data.candidates || [];
@@ -407,7 +416,25 @@ export default function Page() {
   const [search, setSearch] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [liveTicks, setLiveTicks] = useState<Record<string, any>>({});
+  const [liveEntryCount, setLiveEntryCount] = useState(0);
   const activeTabRef = useRef(tab);
+
+  // Poll /api/market/live-entries every 5 seconds (dedicated real-time endpoint)
+  useEffect(() => {
+    const pollLiveEntries = async () => {
+      try {
+        const r = await fetch(`${API_URL}/api/market/live-entries`, { cache: "no-store" });
+        if (r.ok) {
+          const json = await r.json();
+          setLiveEntryCount(json.count || 0);
+          setDataByTab(prev => ({ ...prev, "live-action": json }));
+        }
+      } catch {}
+    };
+    pollLiveEntries();
+    const interval = setInterval(pollLiveEntries, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     activeTabRef.current = tab;
@@ -496,8 +523,21 @@ export default function Page() {
         </form>
         <div className="sidebar-section">Scanner</div>
         {TABS.map(t => (
-          <button key={t.id} className={`sidebar-item ${tab === t.id ? "active" : ""}`} onClick={() => { setTab(t.id); setSelectedSymbol(null); }}>
+          <button key={t.id} className={`sidebar-item ${tab === t.id ? "active" : ""}`} onClick={() => { setTab(t.id); setSelectedSymbol(null); }}
+            style={t.id === "live-action" && liveEntryCount > 0 ? { position: "relative" } : {}}>
             {t.label}
+            {t.id === "live-action" && liveEntryCount > 0 && (
+              <span style={{
+                marginLeft: 6,
+                background: "var(--red, #ef4444)",
+                color: "#fff",
+                borderRadius: 9,
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "1px 6px",
+                animation: "pulse 1s infinite",
+              }}>{liveEntryCount}</span>
+            )}
           </button>
         ))}
       </aside>

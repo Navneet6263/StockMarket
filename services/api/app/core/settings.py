@@ -60,6 +60,8 @@ class Settings:
     custom_universe: tuple[str, ...] = _csv_env("UNIVERSE_SYMBOLS")
     universe_groups: tuple[str, ...] = _csv_env("UNIVERSE_GROUPS") or ("ALL_NSE",)
     invalid_symbols: tuple[str, ...] = _csv_env("INVALID_SYMBOLS") or ("GMRINFRA", "TATAMOTORS")
+    # BSE stocks typically have lower liquidity than NSE — separate threshold
+    bse_min_volume: int = int(os.getenv("BSE_MIN_VOLUME", "5000"))
 
 
 @lru_cache

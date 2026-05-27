@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 
@@ -55,6 +56,30 @@ async def market_hot_picks(
         "blockedBuys": payload.get("blockedBuys", []),
         "smartDebug": payload.get("smartDebug", {}),
     }
+
+
+@router.get("/market/live-entries")
+async def market_live_entries():
+    """Real-time stocks that have hit their entry level right now.
+
+    The Entry Monitor watches every live price tick and promotes a stock
+    the moment its price enters within ENTRY_TRIGGER_PCT of its
+    safe_entry_price / entry_trigger.  This list updates in real-time
+    (sub-second from AngelOne WebSocket ticks).
+    """
+    try:
+        from app.services.entry_monitor import get_entry_monitor
+        monitor = get_entry_monitor()
+        entries = monitor.get_live_entries()
+        return {
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "count": len(entries),
+            "watchedCount": monitor.get_watched_count(),
+            "entries": entries,
+        }
+    except Exception as exc:
+        logger.warning("live-entries endpoint error: %s", exc)
+        return {"generatedAt": datetime.now(timezone.utc).isoformat(), "count": 0, "entries": []}
 
 
 @router.get("/market/opportunities")

@@ -73,19 +73,30 @@ class LivePriceFeed:
     def _run_ws(self, api, symbols: list[str]):
         try:
             from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+            from app.services.broker_adapter import (
+                AngelOneAdapter, get_broker_adapter,
+                _exchange_segment_for_symbol, _ws_exchange_type,
+            )
             auth_token = api.access_token
             feed_token = api.feed_token
             client_code = os.getenv("ANGELONE_CLIENT_ID", "")
 
             sws = SmartWebSocketV2(auth_token, os.getenv("ANGELONE_API_KEY", ""), client_code, feed_token)
 
-            # Resolve tokens
-            token_list = []
-            for sym in symbols[:50]:  # limit 50 for websocket
-                token = self._resolve_token(sym)
+            # Build per-exchange-type token groups (NSE=1, BSE=3) — no duplicates
+            adapter = get_broker_adapter()
+            # Map: exchangeType -> [token, ...]
+            exchange_token_map: dict[int, list[str]] = {}
+            for sym in symbols[:50]:  # AngelOne WS limit
+                token, ex_type = self._resolve_token_with_exchange(sym, adapter)
                 if token:
-                    token_list.append({"exchangeType": 1, "tokens": [token]})  # 1 = NSE
+                    exchange_token_map.setdefault(ex_type, []).append(token)
                     self._tokens[sym.upper()] = token
+
+            token_list = [
+                {"exchangeType": ex_type, "tokens": tokens}
+                for ex_type, tokens in exchange_token_map.items()
+            ]
 
             def on_data(wsapp, message):
                 try:
@@ -135,15 +146,35 @@ class LivePriceFeed:
             logger.warning("[LIVE_FEED] WS failed: %s", exc)
             self._running = False
 
-    def _resolve_token(self, symbol: str) -> str | None:
+    def _resolve_token_with_exchange(self, symbol: str, adapter=None) -> tuple[str | None, int]:
+        """Return (token, ws_exchange_type) for a symbol.
+
+        Detects whether the symbol is an NSE or BSE listing and returns the
+        correct AngelOne WebSocket exchangeType (1=NSE, 3=BSE).
+        """
         try:
-            from app.services.broker_adapter import AngelOneAdapter, get_broker_adapter
-            adapter = get_broker_adapter()
-            if isinstance(adapter, AngelOneAdapter):
-                return adapter._nse_token(symbol)
+            from app.services.broker_adapter import (
+                AngelOneAdapter, get_broker_adapter,
+                _exchange_segment_for_symbol, _ws_exchange_type,
+                _YF_SUFFIX_NSE, _YF_SUFFIX_BSE,
+                _AO_EXCHANGE_NSE, _AO_EXCHANGE_BSE,
+            )
+            if adapter is None:
+                adapter = get_broker_adapter()
+            if not isinstance(adapter, AngelOneAdapter):
+                return None, 1
+            exchange_seg = _exchange_segment_for_symbol(symbol)
+            clean = symbol.upper().replace(_YF_SUFFIX_NSE, "").replace(_YF_SUFFIX_BSE, "")
+            token = adapter._resolve_token(clean, exchange_seg)
+            return token, _ws_exchange_type(exchange_seg)
         except Exception:
             pass
-        return None
+        return None, 1
+
+    def _resolve_token(self, symbol: str) -> str | None:
+        """Legacy helper — always resolves on NSE. Use _resolve_token_with_exchange for multi-exchange."""
+        token, _ = self._resolve_token_with_exchange(symbol)
+        return token
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -941,12 +941,6 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         "hotPicks": hot,
         "watchlist": watchlist,
         "momentumRadar": momentum,
-        "liveAction": [
-            item for item in eligible
-            if item.get("distanceToTriggerPct") is not None
-            and -1.5 <= item["distanceToTriggerPct"] <= 1.5
-            and item.get("entryStatus") != "Wait"
-        ][:16],
         "catalystRadar": catalyst_radar,
         "pbsRadar": pbs_items,
         "baseFormationRadar": base_items[:12],

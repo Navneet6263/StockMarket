@@ -83,9 +83,26 @@ async def predict(req: PredictRequest, hub: MarketHubService = Depends(get_marke
             "quality_grade": "A" if prediction["confidence"] >= 80 else "B" if prediction["confidence"] >= 65 else "C" if prediction["confidence"] >= 55 else "D",
         },
         "trade_plan": {
-            "entry_price": prediction["current_price"],
-            "stop_loss": prediction["invalidation"],
-            "target_1": round(prediction["current_price"] * (1 + (prediction["expected_move_pct"] / 100)), 2) if prediction["direction"] == "bullish" else round(prediction["current_price"] * (1 - abs(prediction["expected_move_pct"]) / 100), 2) if prediction["direction"] == "bearish" else prediction["current_price"],
+            # Prefer safe_entry_price (pullback/support level) over raw current_price
+            "entry_price": (
+                prediction.get("safe_entry_price")
+                or prediction.get("entry_trigger")
+                or prediction["current_price"]
+            ),
+            "stop_loss": (
+                prediction.get("invalidation_level")
+                or prediction.get("invalidation")
+                or prediction.get("stop_loss")
+            ),
+            "target_1": (
+                prediction.get("new_target")
+                or prediction.get("target_1")
+                or round(prediction["current_price"] * (1 + (prediction["expected_move_pct"] / 100)), 2)
+                if prediction["direction"] == "bullish"
+                else round(prediction["current_price"] * (1 - abs(prediction["expected_move_pct"]) / 100), 2)
+                if prediction["direction"] == "bearish"
+                else prediction["current_price"]
+            ),
             "target_2": round(prediction["current_price"] * (1 + (prediction["expected_move_pct"] / 100) * 1.6), 2) if prediction["direction"] == "bullish" else round(prediction["current_price"] * (1 - abs(prediction["expected_move_pct"]) / 100 * 1.6), 2) if prediction["direction"] == "bearish" else prediction["current_price"],
             "expected_move_pct": prediction["expected_move_pct"],
             "risk_reward_ratio": round(abs(prediction["expected_move_pct"]) / max(abs((prediction["current_price"] - (prediction["invalidation"] or prediction["current_price"])) / prediction["current_price"] * 100), 0.5), 2),
