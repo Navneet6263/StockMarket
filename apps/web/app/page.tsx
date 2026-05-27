@@ -225,7 +225,7 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
     let isMounted = true;
     Promise.all([
       fetch(`${API_URL}/api/stocks/${symbol}`, { cache: "no-store" }).then(r => r.ok ? r.json() : null),
-      fetch(`${API_URL}/api/stocks/${symbol}/history?period=3mo`, { cache: "no-store" }).then(r => r.ok ? r.json() : null)
+      fetch(`${API_URL}/api/stocks/${symbol}/history?period=2y`, { cache: "no-store" }).then(r => r.ok ? r.json() : null)
     ])
       .then(([d, c]) => { 
         if (!isMounted) return;

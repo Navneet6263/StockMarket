@@ -229,9 +229,10 @@ class EntryMonitor:
     def _attach_live_feed(self) -> None:
         """Register callback with the AngelOne live price feed."""
         try:
-            from app.services.angelone_live import live_price_feed
-            if live_price_feed is not None:
-                live_price_feed.subscribe(self._on_tick)
+            from app.services.angelone_live import get_angelone_live
+            live_service = get_angelone_live()
+            if live_service is not None and live_service.feed is not None:
+                live_service.feed.subscribe(self._on_tick)
                 logger.info("[ENTRY_MONITOR] Attached to AngelOne live feed")
         except Exception as exc:
             logger.warning("[ENTRY_MONITOR] Could not attach to live feed: %s", exc)
