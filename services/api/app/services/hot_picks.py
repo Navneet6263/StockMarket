@@ -413,8 +413,8 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
         soft_reasons.append("weak_risk_reward")
     if chart["overextended"] and not signal.get("is_momentum_continuation"):
         soft_reasons.append("overextended")
-    if score < 50:
-        rejection_reasons.append("score_below_50")
+    if score < 40:
+        rejection_reasons.append("score_below_40")
 
     clean_risk = bool(invalidation and (not risk_reward or risk_reward >= 1.0) and not chart["overextended"])
     return {
@@ -771,7 +771,7 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         else:
             eligible.append(item)
 
-    hot = [item for item in eligible if item["score"] >= 80 or item["symbol"] in tracked_symbols][:12]
+    hot = [item for item in eligible if item["score"] >= 70 or item["symbol"] in tracked_symbols][:12]
 
     # Enrich top hot picks with AI analysis (Finnhub + Gemini)
     if AI_AVAILABLE:
@@ -814,13 +814,13 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
 
     hot.sort(key=lambda item: item["score"], reverse=True)
     hot_symbols = {item["symbol"] for item in hot}
-    watchlist = [item for item in eligible if 60 <= item["score"] < 80 and item["symbol"] not in hot_symbols][:16]
+    watchlist = [item for item in eligible if 50 <= item["score"] < 70 and item["symbol"] not in hot_symbols][:16]
     used = hot_symbols | {item["symbol"] for item in watchlist}
     momentum = [
         item for item in eligible
         if item["symbol"] not in used
         and (
-            50 <= item["score"] < 60
+            40 <= item["score"] < 50
             or item["chart"]["volumeSpike"]
             or item["setupType"] in {"momentum continuation", "momentum candidate", "watch for breakout"}
         )

@@ -8,6 +8,8 @@ import sys
 from datetime import datetime, timezone
 import pandas as pd
 from pymongo import MongoClient
+from dotenv import load_dotenv
+load_dotenv()
 
 CURRENT_DIR = os.path.dirname(__file__)
 PARENT_DIR = os.path.dirname(CURRENT_DIR)

@@ -682,14 +682,12 @@ class MarketHubService:
         top_ranked = self._unique_signals(sorted(
             [
                 item for item in results
-                if item["direction"] != "neutral" and item["alert_level"] in {"high_priority", "watchlist", "low_priority"}
+                if item["direction"] != "neutral" 
                 and item.get("allow_buy_call", True)
                 and not item.get("attention_only", False)
                 and not item.get("overextended_fresh_entry", False)
                 and item.get("setup_stage") not in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
-                and item.get("risk_reward", 0) >= 1.2
-                and (is_confirmed_top_call(item) or is_live_pattern_ready(item))
-                and (is_historically_validated(item) or is_live_pattern_ready(item))
+                and item.get("risk_reward", 0) >= 1.0
             ],
             key=lambda item: (
                 is_live_pattern_ready(item),

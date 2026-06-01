@@ -9,7 +9,10 @@ from app.core.dependencies import get_market_hub
 
 logger = logging.getLogger(__name__)
 
-MONGO_URI = "mongodb://localhost:27017"
+import os
+from dotenv import load_dotenv
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = "stock_predictor_ml"
 
 class PerformanceTrackerService:

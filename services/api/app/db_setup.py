@@ -6,8 +6,12 @@ Run this to initialize MongoDB collections and indexes
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from datetime import datetime
 
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 # MongoDB connection
-MONGO_URI = "mongodb://localhost:27017"
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = "stock_predictor_ml"
 
 def setup_database():
