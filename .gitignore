@@ -9,3 +9,7 @@ __pycache__/
 *.db
 *.log
 tsconfig.tsbuildinfo
+
+# Cache files
+services/cache/
+*.parquet
