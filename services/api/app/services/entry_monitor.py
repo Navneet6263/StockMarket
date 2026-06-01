@@ -171,8 +171,8 @@ class EntryMonitor:
 
         distance_pct = ((price - entry) / entry) * 100
         
-        # We only care if it's at entry (down to -1.5%) or flying away (up to +5%)
-        if distance_pct < -ENTRY_TRIGGER_PCT or distance_pct > 5.0:
+        # We only care if it's at entry (down to -3.0%) or flying away (up to +5%)
+        if distance_pct < -3.0 or distance_pct > 5.0:
             return
 
         label = "🔴 AT ENTRY NOW"

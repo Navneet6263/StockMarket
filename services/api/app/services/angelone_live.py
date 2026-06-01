@@ -43,6 +43,7 @@ class LivePriceFeed:
         self._running = False
         self._subscribers: list[Callable] = []
         self._tokens: Dict[str, str] = {}  # symbol -> token
+        self._token_map: Dict[str, str] = {}  # token -> symbol
 
     def get_price(self, symbol: str) -> Dict | None:
         with self._lock:
@@ -85,6 +86,7 @@ class LivePriceFeed:
             if token:
                 exchange_token_map.setdefault(ex_type, []).append(token)
                 self._tokens[sym.upper()] = token
+                self._token_map[token] = sym.upper()
                 added += 1
         if added and self._sws:
             try:
@@ -124,6 +126,7 @@ class LivePriceFeed:
                 if token:
                     exchange_token_map.setdefault(ex_type, []).append(token)
                     self._tokens[sym.upper()] = token
+                    self._token_map[token] = sym.upper()
 
             token_list = [
                 {"exchangeType": ex_type, "tokens": tokens}
@@ -135,7 +138,7 @@ class LivePriceFeed:
                 try:
                     data = json.loads(message) if isinstance(message, str) else message
                     token = str(data.get("token", ""))
-                    symbol = next((s for s, t in self._tokens.items() if t == token), None)
+                    symbol = self._token_map.get(token)
                     if not symbol:
                         return
                     price_data = {

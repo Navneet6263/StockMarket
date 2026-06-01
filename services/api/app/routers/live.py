@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Real-time WebSocket connection registry
 active_websockets: set[WebSocket] = set()
+active_websockets_lock = asyncio.Lock()
 global_loop = None
 
 @router.websocket("/ws/live-entries")
@@ -21,7 +22,8 @@ async def websocket_endpoint(websocket: WebSocket):
     global global_loop
     global_loop = asyncio.get_running_loop()
     await websocket.accept()
-    active_websockets.add(websocket)
+    async with active_websockets_lock:
+        active_websockets.add(websocket)
     try:
         from app.services.entry_monitor import get_entry_monitor
         monitor = get_entry_monitor()
@@ -35,10 +37,64 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        active_websockets.remove(websocket)
-    except Exception:
-        if websocket in active_websockets:
+        async with active_websockets_lock:
             active_websockets.remove(websocket)
+    except Exception:
+        async with active_websockets_lock:
+            if websocket in active_websockets:
+                active_websockets.remove(websocket)
+
+@router.websocket("/ws/chart/{symbol}")
+async def chart_websocket(websocket: WebSocket, symbol: str):
+    await websocket.accept()
+    from app.services.live_chart import get_ohlc_aggregator
+    aggregator = get_ohlc_aggregator()
+    queue = aggregator.subscribe(symbol.upper())
+    try:
+        while True:
+            payload = await queue.get()
+            await websocket.send_json(payload)
+    except WebSocketDisconnect:
+        aggregator.unsubscribe(symbol.upper(), queue)
+    except Exception:
+        aggregator.unsubscribe(symbol.upper(), queue)
+
+active_options_websockets: set[WebSocket] = set()
+active_options_websockets_lock = asyncio.Lock()
+
+@router.websocket("/ws/options/{symbol}")
+async def options_websocket(websocket: WebSocket, symbol: str):
+    await websocket.accept()
+    async with active_options_websockets_lock:
+        active_options_websockets.add(websocket)
+        
+    from app.services.options_chain import get_live_options_chain
+    chain_svc = get_live_options_chain()
+    queue = asyncio.Queue()
+    chain_svc.subscribe_ws(symbol.upper(), queue)
+    
+    try:
+        while True:
+            payload = await queue.get()
+            await websocket.send_json(payload)
+    except WebSocketDisconnect:
+        chain_svc.unsubscribe_ws(symbol.upper(), queue)
+        async with active_options_websockets_lock:
+            active_options_websockets.remove(websocket)
+    except Exception:
+        chain_svc.unsubscribe_ws(symbol.upper(), queue)
+        async with active_options_websockets_lock:
+            if websocket in active_options_websockets:
+                active_options_websockets.remove(websocket)
+
+async def _broadcast_payload(payload: dict):
+    async with active_websockets_lock:
+        websockets = list(active_websockets)
+    for ws in websockets:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            pass
 
 def on_live_entry_triggered(alert: dict):
     global global_loop
@@ -55,11 +111,15 @@ def on_live_entry_triggered(alert: dict):
             "entries": entries,
             "new_alert": alert,
         }
-        for ws in list(active_websockets):
-            try:
-                asyncio.run_coroutine_threadsafe(ws.send_json(payload), global_loop)
-            except Exception:
-                pass
+        asyncio.run_coroutine_threadsafe(_broadcast_payload(payload), global_loop)
+        
+        # Save to performance tracker
+        try:
+            from app.services.performance_tracker import get_performance_tracker
+            get_performance_tracker().save_new_entry(alert)
+        except Exception as e:
+            logger.error("Failed to save performance entry: %s", e)
+            
     except Exception:
         pass
 
@@ -69,6 +129,17 @@ try:
     get_entry_monitor().subscribe(on_live_entry_triggered)
 except Exception as e:
     logger.warning("Failed to register WS callback with entry monitor: %s", e)
+
+# Register callback with OHLC Aggregator
+try:
+    from app.services.angelone_live import get_angelone_live
+    from app.services.live_chart import get_ohlc_aggregator
+    aggregator = get_ohlc_aggregator()
+    live_svc = get_angelone_live()
+    if live_svc and live_svc.feed:
+        live_svc.feed.subscribe(aggregator.process_tick)
+except Exception as e:
+    logger.warning("Failed to register OHLCAggregator with live feed: %s", e)
 
 
 @router.get("/prices")

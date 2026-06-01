@@ -1,6 +1,7 @@
 "use client";
 
 import LiveChart from "./LiveChart";
+import OptionsChain from "./OptionsChain";
 import {
   StockDetail,
   TrackerSymbolHistory,
@@ -162,6 +163,10 @@ export default function StockDetailPanel({
             <span>Save the current symbol to manual watchlist if you want it tracked even after it leaves the live scanner.</span>
           </div>
         )}
+      </div>
+
+      <div className="terminal-card soft" style={{ height: "450px", padding: 0 }}>
+        <OptionsChain symbol={detail.symbol} />
       </div>
 
       <div className="detail-grid">

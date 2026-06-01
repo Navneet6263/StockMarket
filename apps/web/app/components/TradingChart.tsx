@@ -189,26 +189,73 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
     };
   }, [data, prediction]);
 
-  // Update live price without re-rendering the whole chart
+  // Real-time WebSocket connection for live candle and pattern updates
   useEffect(() => {
-    if (seriesRef.current && liveQuote && lastCandleTimeRef.current) {
-      const currentData = seriesRef.current.data();
-      if (currentData && currentData.length > 0) {
-        const last = currentData[currentData.length - 1];
-        // If it's the same time period, update the close and high/low
-        if (last.time === lastCandleTimeRef.current) {
-          const newPrice = Number(liveQuote.price);
+    if (!symbol || !seriesRef.current) return;
+    
+    const wsProtocol = window.location.protocol === "https:" || API_URL.startsWith("https") ? "wss:" : "ws:";
+    const host = API_URL.replace(/^https?:\/\//, "");
+    const wsUrl = `${wsProtocol}//${host}/api/live/ws/chart/${symbol}`;
+    
+    const ws = new WebSocket(wsUrl);
+    
+    ws.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        
+        if (payload.type === "CANDLE_UPDATE") {
+          const c = payload.data;
           seriesRef.current.update({
-            time: last.time,
-            open: last.open,
-            high: Math.max(last.high, newPrice),
-            low: Math.min(last.low, newPrice),
-            close: newPrice,
+            time: c.time as Time,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
           });
         }
+        
+        if (payload.type === "PATTERN_DETECTED") {
+          const currentMarkers = seriesRef.current.markers() || [];
+          const newMarkers = payload.patterns.map((p: any) => {
+            let marker: SeriesMarker<any> = { time: p.time as Time, position: 'aboveBar', shape: 'arrowDown', text: p.message, color: '' };
+            
+            switch(p.type) {
+              case "INSTITUTIONAL_TRAP":
+              case "BULL_TRAP":
+                marker.color = "#ef4444";
+                marker.text = "🚨 " + p.message;
+                break;
+              case "BEAR_TRAP":
+                marker.color = "#10b981";
+                marker.position = "belowBar";
+                marker.shape = "arrowUp";
+                marker.text = "🟢 " + p.message;
+                break;
+              case "ACCUMULATION":
+                marker.color = "#3b82f6";
+                marker.position = "belowBar";
+                marker.shape = "arrowUp";
+                marker.text = "🐋 " + p.message;
+                break;
+              case "VOLUME_ANOMALY":
+                marker.color = "#f59e0b";
+                marker.position = "belowBar";
+                marker.shape = "circle";
+                marker.text = "🔥 Vol " + p.message;
+                break;
+            }
+            return marker;
+          });
+          
+          seriesRef.current.setMarkers([...currentMarkers, ...newMarkers]);
+        }
+      } catch (err) {
+        console.error("Failed to parse chart WS message", err);
       }
-    }
-  }, [liveQuote]);
+    };
+    
+    return () => ws.close();
+  }, [symbol]);
 
   return (
     <div 

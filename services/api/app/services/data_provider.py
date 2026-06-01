@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import os
+from pathlib import Path
 from typing import Dict, Iterable
 
 import pandas as pd
@@ -30,6 +31,36 @@ class MarketDataService:
             "BANKNIFTY": "^NSEBANK",
             "SENSEX": "^BSESN",
         }
+        self.cache_dir = Path(__file__).resolve().parents[3] / "cache"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_parquet_path(self, resolved_symbol: str, period: str, interval: str) -> Path:
+        safe_sym = resolved_symbol.replace("^", "").replace(".", "_")
+        return self.cache_dir / f"{safe_sym}_{period}_{interval}.parquet"
+
+    def _load_from_parquet(self, path: Path) -> pd.DataFrame | None:
+        if not path.exists():
+            return None
+        try:
+            df = pd.read_parquet(path)
+            if df.empty:
+                return None
+            import numpy as np
+            last_date = df.index[-1].date()
+            today = datetime.now().date()
+            bus_days_diff = np.busday_count(last_date, today)
+            if bus_days_diff > 1:
+                return None
+            return df
+        except Exception as e:
+            logger.warning("Corrupted parquet cache %s: %s", path, e)
+            return None
+
+    def _save_to_parquet(self, df: pd.DataFrame, path: Path):
+        try:
+            df.to_parquet(path)
+        except Exception as e:
+            logger.warning("Failed to save parquet cache %s: %s", path, e)
 
     def resolve_symbol(self, symbol: str) -> str:
         clean = (symbol or "").upper().replace(" ", "")
@@ -70,6 +101,12 @@ class MarketDataService:
         cached = self.history_cache.get(cache_key)
         if cached is not None:
             return cached.copy()
+            
+        pq_path = self._get_parquet_path(resolved, period, interval)
+        pq_df = self._load_from_parquet(pq_path)
+        if pq_df is not None:
+            self.history_cache.set(cache_key, pq_df, ttl_seconds=self._history_ttl(interval))
+            return pq_df.copy()
 
         # Try broker adapter first (AngelOne when configured)
         if self.use_broker_history and self.broker.is_available() and self.provider_name != "yfinance":
@@ -96,6 +133,7 @@ class MarketDataService:
         frame = self._normalize_frame(history)
         if not frame.empty:
             self.history_cache.set(cache_key, frame, ttl_seconds=self._history_ttl(interval))
+            self._save_to_parquet(frame, pq_path)
         return frame.copy()
 
     def fetch_batch_history(
@@ -120,7 +158,13 @@ class MarketDataService:
             if cached is not None:
                 results[clean] = cached.copy()
             else:
-                pending.append((clean, resolved))
+                pq_path = self._get_parquet_path(resolved, period, interval)
+                pq_df = self._load_from_parquet(pq_path)
+                if pq_df is not None:
+                    self.history_cache.set(cache_key, pq_df, ttl_seconds=self._history_ttl(interval))
+                    results[clean] = pq_df.copy()
+                else:
+                    pending.append((clean, resolved))
 
         effective_chunk_size = max(1, min(chunk_size, self.settings.yahoo_batch_chunk_size))
         for offset in range(0, len(pending), effective_chunk_size):
@@ -174,6 +218,7 @@ class MarketDataService:
                     logger.info("skipped no-data symbol=%s period=%s interval=%s", clean, period, interval)
                     continue
                 self.history_cache.set(f"{resolved}:{period}:{interval}", normalized, ttl_seconds=self._history_ttl(interval))
+                self._save_to_parquet(normalized, self._get_parquet_path(resolved, period, interval))
                 results[clean] = normalized.copy()
 
         return results

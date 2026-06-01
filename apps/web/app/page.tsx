@@ -603,6 +603,10 @@ export default function Page() {
             )}
           </button>
         ))}
+        <div className="sidebar-section">Portfolio</div>
+        <a href="/performance" className="sidebar-item" style={{ textDecoration: "none", display: "block" }}>
+          Performance Tracker ↗
+        </a>
       </aside>
       <main className="main-content">
         <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>

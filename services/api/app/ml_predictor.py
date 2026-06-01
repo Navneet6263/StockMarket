@@ -54,6 +54,8 @@ class StockPredictor:
         self.feature_columns: List[str] = []
 
     def prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        if len(df) < 50:
+            raise ValueError(f"Insufficient data: DataFrame must have at least 50 rows, got {len(df)}")
         features = pd.DataFrame(index=df.index)
 
         close = df["Close"]

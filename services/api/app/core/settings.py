@@ -37,6 +37,7 @@ class Settings:
     min_market_cap: float = float(os.getenv("MIN_MARKET_CAP", "0"))
     include_sme: bool = _bool_env("INCLUDE_SME", False)
     include_indices: bool = _bool_env("INCLUDE_INDICES", True)
+    enable_prefilter: bool = _bool_env("ENABLE_PREFILTER", True)
     scan_interval_sec: int = int(os.getenv("SCAN_INTERVAL_SEC", "60"))
     scan_cache_ttl_sec: int = int(os.getenv("SCAN_CACHE_TTL_SEC", "300"))
     stale_scan_cache_ttl_sec: int = int(os.getenv("STALE_SCAN_CACHE_TTL_SEC", "1800"))

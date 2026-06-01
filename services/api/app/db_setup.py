@@ -48,6 +48,13 @@ def setup_database():
     training.create_index([("symbol", ASCENDING), ("trained_at", DESCENDING)])
     print("[OK] Created 'training_logs' collection with indexes")
     
+    # 6. Trade Positions Collection - Track auto performance
+    trade_positions = db["trade_positions"]
+    trade_positions.create_index([("symbol", ASCENDING)])
+    trade_positions.create_index([("status", ASCENDING)])
+    trade_positions.create_index([("entry_date", DESCENDING)])
+    print("[OK] Created 'trade_positions' collection with indexes")
+    
     # Insert sample data
     sample_prediction = {
         "symbol": "NIFTY",

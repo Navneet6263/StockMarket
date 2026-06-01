@@ -1022,12 +1022,17 @@ class MarketHubService:
 
     def _refresh_scan_market(self, force_refresh: bool = False) -> Dict:
         refresh_started = time.perf_counter()
+        timing_stats = {}
         logger.info("market overview refresh started force_refresh=%s", force_refresh)
 
+        t0 = time.perf_counter()
         discovery = self.universe.discover_market(force_refresh=force_refresh)
         symbols = self._scan_symbols(discovery)
         discovery["scan_attempted_count"] = len(symbols)
+        timing_stats["discovery_ms"] = int((time.perf_counter() - t0) * 1000)
+        
         benchmark_symbol = self.settings.benchmark_symbol
+        t1 = time.perf_counter()
         try:
             benchmark_frame = self.data.fetch_history(benchmark_symbol, period=self.settings.scan_history_period)
         except Exception:
@@ -1042,20 +1047,69 @@ class MarketHubService:
         except Exception:
             logger.exception("daily batch fetch failed")
             daily_frames = {}
+        timing_stats["data_fetch_ms"] = int((time.perf_counter() - t1) * 1000)
 
         preliminary: list[Dict] = []
+        pre_filter_passed = 0
+        pre_filter_dropped = 0
+        filter_lock = threading.Lock()
+        
+        t2 = time.perf_counter()
 
         def evaluate_preliminary(symbol: str) -> Dict | None:
+            nonlocal pre_filter_passed, pre_filter_dropped
             frame = daily_frames.get(symbol)
             if frame is None or frame.empty or len(frame) < self.settings.min_history_bars:
-                logger.info("skipped symbol=%s reason=insufficient_history", symbol)
                 return None
+                
+            quote = discovery.get("symbol_meta", {}).get(symbol)
+            
+            # FAST PRE-FILTER
+            if self.settings.enable_prefilter:
+                try:
+                    last_close = float(quote.get("price") if quote and quote.get("price") else frame['Close'].iloc[-1])
+                    # Price must be between 50 and 5000
+                    if not (50 <= last_close <= 5000):
+                        with filter_lock:
+                            pre_filter_dropped += 1
+                        return None
+                        
+                    # Volume > 20-day average * 0.5
+                    recent_vol_20d = float(frame['Volume'].tail(20).mean())
+                    last_vol = float(quote.get("volume") if quote and quote.get("volume") else frame['Volume'].iloc[-1])
+                    if last_vol <= recent_vol_20d * 0.5:
+                        with filter_lock:
+                            pre_filter_dropped += 1
+                        return None
+                        
+                    # Not more than 6% above entry level (using previous close)
+                    prev_close = float(frame['Close'].iloc[-2]) if len(frame) > 1 else last_close
+                    change_pct = (last_close - prev_close) / prev_close * 100
+                    if change_pct > 6.0:
+                        with filter_lock:
+                            pre_filter_dropped += 1
+                        return None
+                    
+                    # Last 5 candles not completely flat (must have > 0.5% range)
+                    high_5d = float(frame['High'].tail(5).max())
+                    low_5d = float(frame['Low'].tail(5).min())
+                    if (high_5d - low_5d) / max(low_5d, 1) < 0.005:
+                        with filter_lock:
+                            pre_filter_dropped += 1
+                        return None
+                        
+                except Exception:
+                    pass # Fall through if parse fails
+
+            with filter_lock:
+                pre_filter_passed += 1
+
             try:
                 signal = self._evaluate_symbol(
                     symbol,
                     frame,
                     benchmark_frame,
-                    discovery.get("symbol_meta", {}).get(symbol),
+                    quote,
                     None,
                     with_backtest=False,
                 )
@@ -1071,6 +1125,10 @@ class MarketHubService:
                 signal = future.result()
                 if signal is not None:
                     preliminary.append(signal)
+                    
+        timing_stats["pre_filter_passed"] = pre_filter_passed
+        timing_stats["pre_filter_dropped"] = pre_filter_dropped
+        timing_stats["preliminary_ml_ms"] = int((time.perf_counter() - t2) * 1000)
 
         if not preliminary:
             logger.warning(
@@ -1089,8 +1147,11 @@ class MarketHubService:
                     logger.warning("live quote fetch failed during scan symbol=%s", symbol, exc_info=True)
                     return None
 
-            with ThreadPoolExecutor(max_workers=max(1, min(8, len(top_symbols)))) as executor:
-                futures = [executor.submit(fetch_live_quote, symbol) for symbol in top_symbols]
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = []
+                for symbol in top_symbols:
+                    futures.append(executor.submit(fetch_live_quote, symbol))
+                    time.sleep(0.2)
                 for future in as_completed(futures):
                     result = future.result()
                     if result is not None:
@@ -1148,12 +1209,17 @@ class MarketHubService:
         except Exception:
             logger.exception("telegram market alerts failed during market overview refresh")
             payload["telegram_alerts"] = {"sent": 0, "error": "telegram_alerts_failed"}
+            
+        timing_stats["total_scan_ms"] = int((time.perf_counter() - refresh_started) * 1000)
+        payload["timing_stats"] = timing_stats
+        
         saved = self._save_successful_scan(payload)
         logger.info(
-            "market overview refresh completed symbols=%s valid=%s duration_ms=%s",
+            "market overview refresh completed symbols=%s valid=%s duration_ms=%s stats=%s",
             len(symbols),
             len(enhanced),
-            round((time.perf_counter() - refresh_started) * 1000),
+            timing_stats["total_scan_ms"],
+            timing_stats
         )
         return saved
 
