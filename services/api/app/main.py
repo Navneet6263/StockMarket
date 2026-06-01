@@ -85,7 +85,8 @@ async def start_market_background_scanner():
 app = CORSMiddleware(
     fastapi_app,
     allow_origins=_cors_origins(),
-    allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+|https://.*\.vercel\.app",
+    allow_origin_regex=r"http://localhost:\d+|http://127\.0\.0\.1:\d+|https://.*\.vercel\.app|https://.*\.bullalways\.in",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
