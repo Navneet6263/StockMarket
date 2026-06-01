@@ -30,7 +30,7 @@ class Settings:
     detail_history_period: str = os.getenv("DETAIL_HISTORY_PERIOD", "6mo")
     universe_size: int = int(os.getenv("UNIVERSE_SIZE", "5000"))
     scan_symbol_limit: int = int(os.getenv("SCAN_SYMBOL_LIMIT", "5000"))
-    intraday_symbol_limit: int = int(os.getenv("SCAN_INTRADAY_LIMIT", "200"))
+    intraday_symbol_limit: int = int(os.getenv("SCAN_INTRADAY_LIMIT", "100"))
     min_history_bars: int = int(os.getenv("MIN_HISTORY_BARS", "120"))
     min_price: float = float(os.getenv("MIN_PRICE", "10"))
     min_volume: int = int(os.getenv("MIN_VOLUME", "50000"))

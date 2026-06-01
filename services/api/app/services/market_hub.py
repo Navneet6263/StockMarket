@@ -1149,7 +1149,7 @@ class MarketHubService:
                 futures = []
                 for symbol in top_symbols:
                     futures.append(executor.submit(fetch_live_quote, symbol))
-                    time.sleep(0.2)
+                    time.sleep(0.05)
                 for future in as_completed(futures):
                     result = future.result()
                     if result is not None:
