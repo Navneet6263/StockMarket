@@ -30,6 +30,8 @@ DEFAULT_CORS_ORIGINS = (
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://stock-market-web-eight.vercel.app",
+    "https://bullalways.in",
+    "https://www.bullalways.in",
 )
 
 
