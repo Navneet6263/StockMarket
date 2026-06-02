@@ -7,7 +7,6 @@ const TABS = [
   { id: "dashboard", label: "Dashboard", api: "/api/market/hot-picks" },
   { id: "live-action", label: "🔴 Live Action", api: "/api/market/live-entries" },
   { id: "hot-picks", label: "Hot Picks", api: "/api/market/hot-picks" },
-  { id: "pbs", label: "Profit Booking (PBS)", api: "/api/market/hot-picks" },
   { id: "watchlist", label: "Watchlist", api: "/api/market/hot-picks" },
   { id: "base-radar", label: "Base Formation", api: "/api/market/hot-picks" },
   { id: "momentum", label: "Momentum", api: "/api/market/hot-picks" },
@@ -431,6 +430,7 @@ export default function Page() {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [liveTicks, setLiveTicks] = useState<Record<string, any>>({});
   const [liveEntryCount, setLiveEntryCount] = useState(0);
+  const [activeFilter, setActiveFilter] = useState("all");
   const activeTabRef = useRef(tab);
 
   // Real-time live entries subscription (WebSocket with automatic polling fallback)
@@ -548,7 +548,16 @@ export default function Page() {
 
   const data = dataByTab[tab] || null;
   const items = extractItems(tab, data);
-  const liveItems = items.map((item: any) => overlayLiveTick(item, liveTicks[item.symbol]));
+  const allLiveItems = items.map((item: any) => overlayLiveTick(item, liveTicks[item.symbol]));
+  
+  // Apply active filter
+  const liveItems = activeFilter === "all" ? allLiveItems
+    : activeFilter === "bullish" ? allLiveItems.filter((x: any) => x.direction === "bullish")
+    : activeFilter === "bearish" ? allLiveItems.filter((x: any) => x.direction === "bearish")
+    : activeFilter === "breakout" ? allLiveItems.filter((x: any) => x.entry_label?.includes("BREAKOUT") || x.has_breakout)
+    : activeFilter === "high-conf" ? allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80)
+    : allLiveItems;
+
   const mood = summary?.marketMood || data?.marketMood || "loading";
   const stats = summary?.summary || data?.summary || {};
 
@@ -597,7 +606,7 @@ export default function Page() {
         </form>
         <div className="sidebar-section">Scanner</div>
         {TABS.map(t => (
-          <button key={t.id} className={`sidebar-item ${tab === t.id ? "active" : ""}`} onClick={() => { setTab(t.id); setSelectedSymbol(null); }}
+          <button key={t.id} className={`sidebar-item ${tab === t.id ? "active" : ""}`} onClick={() => { setTab(t.id); setSelectedSymbol(null); setActiveFilter("all"); }}
             style={t.id === "live-action" && liveEntryCount > 0 ? { position: "relative" } : {}}>
             {t.label}
             {t.id === "live-action" && liveEntryCount > 0 && (
@@ -648,11 +657,28 @@ export default function Page() {
 
             {/* Filter bar */}
             <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>All ({liveItems.length})</button>
-              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>Bullish ({liveItems.filter((x: any) => x.direction === 'bullish').length})</button>
-              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>Bearish ({liveItems.filter((x: any) => x.direction === 'bearish').length})</button>
-              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>Breakout ({liveItems.filter((x: any) => x.entry_label?.includes('BREAKOUT')).length})</button>
-              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>High Confidence ({liveItems.filter((x: any) => (x.confidence ?? 0) > 80).length})</button>
+              {([
+                { key: "all",       label: "All",             count: allLiveItems.length },
+                { key: "bullish",   label: "📈 Bullish",       count: allLiveItems.filter((x: any) => x.direction === "bullish").length },
+                { key: "bearish",   label: "📉 Bearish",       count: allLiveItems.filter((x: any) => x.direction === "bearish").length },
+                { key: "breakout",  label: "⚡ Breakout",      count: allLiveItems.filter((x: any) => x.entry_label?.includes("BREAKOUT") || x.has_breakout).length },
+                { key: "high-conf", label: "🎯 High Confidence", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
+              ] as { key: string; label: string; count: number }[]).map(f => (
+                <button
+                  key={f.key}
+                  className="refresh-btn"
+                  onClick={() => setActiveFilter(f.key)}
+                  style={{
+                    fontSize: 13,
+                    padding: "6px 12px",
+                    background: activeFilter === f.key ? "var(--green, #22c55e)" : undefined,
+                    color: activeFilter === f.key ? "#000" : undefined,
+                    fontWeight: activeFilter === f.key ? 700 : undefined,
+                  }}
+                >
+                  {f.label} ({f.count})
+                </button>
+              ))}
             </div>
 
             <h2 className="section-title">{TABS.find(t => t.id === tab)?.label} ({liveItems.length} stocks)</h2>
