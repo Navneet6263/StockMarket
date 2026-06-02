@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 import os
 from dotenv import load_dotenv
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-DB_NAME = "stock_predictor_ml"
+MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL", "mongodb://localhost:27017")
+DB_NAME = os.getenv("MONGO_DB_NAME", "stock_predictor_ml")
 
 class PerformanceTrackerService:
     def __init__(self):
@@ -30,6 +30,7 @@ class PerformanceTrackerService:
         # Check if already open
         existing = self.collection.find_one({"symbol": symbol, "status": "open"})
         if existing:
+            logger.info(f"[PERFORMANCE] {symbol} already has open position, skipping")
             return
 
         entry = {
@@ -49,7 +50,7 @@ class PerformanceTrackerService:
         
         try:
             self.collection.insert_one(entry)
-            logger.info(f"[PERFORMANCE] Saved new open position for {symbol}")
+            logger.info(f"[PERFORMANCE] Trade saved: {symbol} at ₹{entry['entry_price']} ({alert.get('direction', 'bullish')})")
         except Exception as e:
             logger.error(f"[PERFORMANCE] Failed to save entry for {symbol}: {e}")
 

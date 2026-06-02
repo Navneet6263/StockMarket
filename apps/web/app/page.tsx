@@ -126,8 +126,15 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <h3>{item.symbol}</h3>
           {item.label && <span className="tag" style={{ background: "var(--red, #ef4444)", color: "#fff", fontWeight: "bold" }}>{item.label}</span>}
+          {item.quality_grade && <span className="tag" style={{ 
+            background: item.quality_grade === 'A' ? 'var(--green)' : item.quality_grade === 'B' ? 'var(--yellow)' : item.quality_grade === 'C' ? 'var(--orange)' : 'var(--red)',
+            color: '#fff',
+            fontWeight: 'bold'
+          }}>Grade {item.quality_grade}</span>}
         </div>
-        <span className={`badge ${isHighTrap ? 'bearish' : direction}`}>{isHighTrap ? 'AVOID' : humanize(direction)}</span>
+        <span className={`badge ${isHighTrap ? 'bearish' : direction}`}>
+          {isHighTrap ? '🛑 AVOID' : direction === 'bullish' ? '📈 Bullish' : direction === 'bearish' ? '📉 Bearish' : humanize(direction)}
+        </span>
       </div>
       {chartPattern ? <div className="stock-reason" style={{ marginTop: 4 }}>{humanize(chartPattern)}</div> : null}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -135,10 +142,14 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         <span className={`stock-change ${change >= 0 ? "up" : "down"}`}>{fmtPct(change)}</span>
       </div>
       <div className="stock-meta">
-        <span className={`tag ${actionClass}`}>{action}</span>
-        {(item.risk_reward || item.rr) ? <span className="tag">RR 1:{fmt(item.risk_reward ?? item.rr, 1)}</span> : null}
-        {item.confidence ? <span className="tag">{fmt(item.confidence ?? item.score, 0)}%</span> : null}
-        {item.relative_volume ? <span className="tag">{fmt(item.relative_volume, 1)}x vol</span> : null}
+        <span className={`tag ${actionClass}`}>{action === 'BUY' ? '✅ BUY' : action === 'SELL' ? '🛑 SELL' : '👁️ WATCH'}</span>
+        {(item.risk_reward || item.rr) ? <span className="tag">⚖️ RR 1:{fmt(item.risk_reward ?? item.rr, 1)}</span> : null}
+        {item.confidence ? <span className="tag" style={{ 
+          background: (item.confidence ?? 0) > 80 ? 'var(--green)' : (item.confidence ?? 0) > 60 ? 'var(--yellow)' : 'var(--orange)',
+          color: '#fff',
+          fontWeight: 'bold'
+        }}>🎯 {fmt(item.confidence ?? item.score, 0)}%</span> : null}
+        {item.relative_volume ? <span className="tag">📦 {fmt(item.relative_volume, 1)}x vol</span> : null}
         {item.entry_quality ? <span className="tag">{humanize(item.entry_quality)} entry</span> : null}
         {item.seller_pressure ? <span className="tag">{humanize(item.seller_pressure)} sellers</span> : null}
         {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking</span> : null}
@@ -627,21 +638,36 @@ export default function Page() {
         ) : (
           <>
             <div className="stats-row">
-              <div className="stat-card"><span>Scanned</span><strong>{stats.totalScanned ?? stats.total_scanned_universe ?? "..."}</strong></div>
-              <div className="stat-card"><span>Hot Picks</span><strong>{stats.highConfidence ?? stats.high_priority ?? 0}</strong></div>
-              <div className="stat-card"><span>Breakouts</span><strong>{stats.breakouts ?? stats.breakout_count ?? 0}</strong></div>
-              <div className="stat-card"><span>Bullish</span><strong style={{ color: "var(--green)" }}>{stats.bullish ?? stats.bullish_setups ?? 0}</strong></div>
-              <div className="stat-card"><span>Bearish</span><strong style={{ color: "var(--red)" }}>{stats.bearish ?? stats.bearish_risk_count ?? 0}</strong></div>
-              <div className="stat-card"><span>This Tab</span><strong>{liveItems.length}</strong></div>
+              <div className="stat-card"><span>📊 Scanned</span><strong>{stats.totalScanned ?? stats.total_scanned_universe ?? "..."}</strong></div>
+              <div className="stat-card"><span>🔥 Hot Picks</span><strong style={{ color: "var(--green)" }}>{stats.highConfidence ?? stats.high_priority ?? 0}</strong></div>
+              <div className="stat-card"><span>⚡ Breakouts</span><strong style={{ color: "var(--yellow)" }}>{stats.breakouts ?? stats.breakout_count ?? 0}</strong></div>
+              <div className="stat-card"><span>📈 Bullish</span><strong style={{ color: "var(--green)" }}>{stats.bullish ?? stats.bullish_setups ?? 0}</strong></div>
+              <div className="stat-card"><span>📉 Bearish</span><strong style={{ color: "var(--red)" }}>{stats.bearish ?? stats.bearish_risk_count ?? 0}</strong></div>
+              <div className="stat-card"><span>✅ This Tab</span><strong>{liveItems.length}</strong></div>
+            </div>
+
+            {/* Filter bar */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>All ({liveItems.length})</button>
+              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>Bullish ({liveItems.filter((x: any) => x.direction === 'bullish').length})</button>
+              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>Bearish ({liveItems.filter((x: any) => x.direction === 'bearish').length})</button>
+              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>Breakout ({liveItems.filter((x: any) => x.entry_label?.includes('BREAKOUT')).length})</button>
+              <button className="refresh-btn" style={{ fontSize: 13, padding: "6px 12px" }}>High Confidence ({liveItems.filter((x: any) => (x.confidence ?? 0) > 80).length})</button>
             </div>
 
             <h2 className="section-title">{TABS.find(t => t.id === tab)?.label} ({liveItems.length} stocks)</h2>
-            {liveItems.length ? (
+            {loading ? (
+              <div className="stock-grid">
+                {[1,2,3,4,5,6].map(i => <div key={i} className="stock-card" style={{ animation: "pulse 1.5s infinite", background: "var(--bg, #1a1a1a)" }}>
+                  <div style={{ height: 120, background: "var(--border, #333)" }}></div>
+                </div>)}
+              </div>
+            ) : liveItems.length ? (
               <div className="stock-grid">
                 {liveItems.map((item: any, i: number) => <StockCard key={item.symbol || i} item={item} onSelect={setSelectedSymbol} />)}
               </div>
             ) : (
-              <p className="empty-msg">{loading ? "Scanning market..." : "No stocks found in this category right now."}</p>
+              <p className="empty-msg">No stocks found in this category right now.</p>
             )}
           </>
         )}

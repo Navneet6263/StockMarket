@@ -5,8 +5,11 @@ sys.stdout = sys.stderr
 from dotenv import load_dotenv
 load_dotenv('.env')
 
+import os
 from pymongo import MongoClient
-mc = MongoClient('mongodb://localhost:27017', serverSelectionTimeoutMS=1000)
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+mc = MongoClient(MONGO_URI, serverSelectionTimeoutMS=1000)
 mc.admin.command('ping')
 db = mc['stock_predictor_ml']
 print('[OK] DB connected')

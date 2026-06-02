@@ -131,7 +131,7 @@ class EntryMonitor:
         all_results: List[Dict] = []
         for key in ("all_entry_levels", "results", "top_opportunities", "pre_breakout_setups",
                     "alert_above_setups", "retest_entry", "momentum_continuation",
-                    "candidates", "pbsItems"):
+                    "candidates", "pbsItems", "pre_registered"):
             items = scan_payload.get(key) or []
             if isinstance(items, list):
                 all_results.extend(items)

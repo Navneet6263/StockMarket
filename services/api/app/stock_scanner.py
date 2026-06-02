@@ -5,9 +5,11 @@ from __future__ import annotations
 import os
 import threading
 import time
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
+from pathlib import Path
 
 from app.live_data import LiveDataService
 from app.market_universe import MarketUniverseService
@@ -26,6 +28,10 @@ CACHE_TTL_MIN = int(os.getenv("SCAN_CACHE_TTL_MIN", "10"))
 DEEP_SCAN_LIMIT = int(os.getenv("SCAN_DEEP_LIMIT", "1500"))
 PREVIEW_LIMIT = int(os.getenv("SCAN_PREVIEW_LIMIT", "10"))
 MODEL_CACHE_TTL_MIN = int(os.getenv("MODEL_CACHE_TTL_MIN", "60"))
+
+# Delisted cache settings
+DELISTED_CACHE_FILE = "services/cache/delisted_cache.json"
+DELISTED_CACHE_DAYS = 7
 
 # ── Strict filters for Top Calls (HIGH CONVICTION only) ──────────────────────
 TOP_CALL_MIN_RR = float(os.getenv("TOP_CALL_MIN_RR", "2.0"))
@@ -323,6 +329,46 @@ class StockScanner:
         self._scan_started_at = 0.0
         self._skipped: List[Dict] = []
         self._progress = self._blank_progress()
+        self._delisted_cache = self._load_delisted_cache()
+        self._scan_progress_counter = 0
+
+    def _load_delisted_cache(self) -> Dict:
+        """Load delisted stocks cache from file."""
+        try:
+            cache_path = Path(DELISTED_CACHE_FILE)
+            if cache_path.exists():
+                with open(cache_path, 'r') as f:
+                    cache = json.load(f)
+                # Remove expired entries
+                now = datetime.utcnow()
+                cutoff = (now - timedelta(days=DELISTED_CACHE_DAYS)).isoformat()
+                cache = {k: v for k, v in cache.items() if v.get("cached_at", "") > cutoff}
+                return cache
+        except Exception as e:
+            print(f"[SCANNER] Failed to load delisted cache: {e}")
+        return {}
+
+    def _save_delisted_cache(self):
+        """Save delisted stocks cache to file."""
+        try:
+            cache_path = Path(DELISTED_CACHE_FILE)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, 'w') as f:
+                json.dump(self._delisted_cache, f, indent=2)
+        except Exception as e:
+            print(f"[SCANNER] Failed to save delisted cache: {e}")
+
+    def _is_delisted(self, symbol: str) -> bool:
+        """Check if stock is in delisted cache."""
+        return symbol.upper() in self._delisted_cache
+
+    def _mark_delisted(self, symbol: str, reason: str):
+        """Add stock to delisted cache."""
+        self._delisted_cache[symbol.upper()] = {
+            "reason": reason,
+            "cached_at": datetime.utcnow().isoformat()
+        }
+        self._save_delisted_cache()
 
     # ── Progress helpers ─────────────────────────────────────────────────────
 
@@ -413,6 +459,11 @@ class StockScanner:
         cached = self.result_cache.get(symbol)
         if cached:
             return cached
+            
+        # Check delisted cache
+        if self._is_delisted(symbol):
+            self._skipped.append({"symbol": symbol, "reason": "delisted_cached"})
+            return None
 
         if REQUEST_DELAY > 0:
             time.sleep(REQUEST_DELAY)
@@ -420,7 +471,9 @@ class StockScanner:
         try:
             df = self._fetch_with_retry(symbol)
             if df is None:
-                self._skipped.append({"symbol": symbol, "reason": "insufficient_history_or_fetch_failed"})
+                # Check if error was due to delisting
+                self._mark_delisted(symbol, "fetch_failed_possibly_delisted")
+                self._skipped.append({"symbol": symbol, "reason": "delisted_or_insufficient_data"})
                 return None
 
             # Use cached model; train inline only if not cached (background precompute for next scan)
@@ -577,10 +630,18 @@ class StockScanner:
             futures = {pool.submit(self._scan_one, symbol): symbol for symbol in batch}
             for future in as_completed(futures):
                 symbol = futures[future]
+                self._scan_progress_counter += 1
                 self._set_progress(
                     current_symbol=symbol,
                     elapsed_sec=round(time.time() - self._scan_started_at, 1),
                 )
+                
+                # Log progress every 500 stocks
+                if self._scan_progress_counter % 500 == 0:
+                    elapsed = round(time.time() - self._scan_started_at, 1)
+                    passed = self._progress["top_calls_found"] + self._progress["candidates_found"]
+                    print(f"[SCANNER] Scanned {self._scan_progress_counter}/{self._progress['total']}, passed filter: {passed}, time elapsed: {elapsed}s")
+                
                 try:
                     result = future.result()
                     if result:
@@ -623,6 +684,59 @@ class StockScanner:
 
     # ── Main scan entry ──────────────────────────────────────────────────────
 
+    def _pre_register_candidates(self, stock_list: List[str]) -> List[Dict]:
+        """Fast pre-filter to register stocks for live monitoring BEFORE full scan."""
+        pre_registered = []
+        logger.info("[SCANNER] Pre-registering candidates for live monitoring...")
+        
+        for symbol in stock_list[:min(len(stock_list), 500)]:
+            try:
+                # Get quick snapshot without full ML processing
+                df = self._fetch_with_retry(symbol, period="3mo")
+                if df is None or len(df) < 60:
+                    continue
+                    
+                close = df['Close'].iloc[-1]
+                volume = df['Volume'].iloc[-1]
+                avg_volume = df['Volume'].rolling(20).mean().iloc[-1]
+                vol_ratio = volume / avg_volume if avg_volume > 0 else 0
+                
+                # Basic support/resistance
+                support = df['Low'].rolling(20).min().iloc[-1]
+                resistance = df['High'].rolling(20).max().iloc[-1]
+                
+                # Check if near support (within 3%)
+                near_support = abs(close - support) / support < 0.03 if support > 0 else False
+                
+                # Volume above average
+                volume_ok = vol_ratio > 0.8
+                
+                if near_support and volume_ok:
+                    # Create basic entry estimate
+                    entry_estimate = support * 1.005  # slightly above support
+                    stop_estimate = support * 0.98
+                    target_estimate = resistance
+                    
+                    pre_registered.append({
+                        "symbol": symbol,
+                        "safe_entry_price": entry_estimate,
+                        "invalidation_level": stop_estimate,
+                        "target_1": target_estimate,
+                        "direction": "bullish",
+                        "current_price": close,
+                        "volume_ratio": vol_ratio,
+                        "setup_type": "pre_scan_setup",
+                        "signal_stage": "watching",
+                        "confidence": 0.5,
+                        "rr": (target_estimate - entry_estimate) / (entry_estimate - stop_estimate) if entry_estimate > stop_estimate else 1.0,
+                    })
+                    
+            except Exception:
+                continue
+                
+        logger.info(f"[SCANNER] Pre-registered {len(pre_registered)} stocks for live monitoring")
+        return pre_registered
+
     def scan_all(self, stocks: Optional[List[str]] = None) -> Dict:
         self._reset_progress()
         discovery = None
@@ -636,6 +750,7 @@ class StockScanner:
                 candidate_pool=len(stock_list),
                 selected=len(stock_list),
             )
+            pre_registered = []
         else:
             self._set_progress(stage="discovering", message="Loading live Yahoo market universe.")
             discovery = self.market_universe.discover_market()
@@ -654,6 +769,20 @@ class StockScanner:
                     "note": discovery.get("note"),
                 },
             )
+            
+            # Pre-register candidates for live monitoring BEFORE full scan
+            self._set_progress(stage="pre_registering", message="Pre-registering stocks for live monitoring...")
+            pre_registered = self._pre_register_candidates(shortlisted)
+            
+            # Immediately start monitoring pre-registered stocks
+            if pre_registered:
+                try:
+                    from app.services.entry_monitor import get_entry_monitor
+                    monitor = get_entry_monitor()
+                    monitor.start({"pre_registered": pre_registered})
+                    logger.info(f"[SCANNER] Started live monitoring for {len(pre_registered)} pre-registered stocks")
+                except Exception as e:
+                    logger.warning(f"[SCANNER] Failed to start pre-monitoring: {e}")
 
         total = len(stock_list)
         start = time.time()
