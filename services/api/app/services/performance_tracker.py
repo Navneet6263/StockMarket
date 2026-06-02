@@ -1,270 +1,342 @@
+"""
+Performance Tracker
+====================
+- Auto saves every BUY alert as an open trade
+- Every 5 min checks: target hit / SL hit / time stop / RSI reversal
+- On exit: saves WHY it exited, what candle formed, how many days held
+- Full history in MongoDB: entry date, exit date, price, pnl, reason, candle
+"""
+from __future__ import annotations
+
 import asyncio
 import logging
-from datetime import datetime, timezone
-import pandas as pd
-from pymongo import MongoClient
+import os
+from datetime import datetime, timezone, timedelta
 
-from app.services.angelone_live import get_angelone_live
-from app.core.dependencies import get_market_hub
+from pymongo import MongoClient
 
 logger = logging.getLogger(__name__)
 
-import os
-from dotenv import load_dotenv
-
 MONGO_URI = os.getenv("MONGO_URI") or os.getenv("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.getenv("MONGO_DB_NAME", "stock_predictor_ml")
+DB_NAME   = os.getenv("MONGO_DB_NAME", "stock_predictor_ml")
+
+
+# ── Candle pattern detector (last candle) ──────────────────────────────────────
+def _detect_candle_pattern(df) -> str:
+    """Return a human-readable last candle pattern name."""
+    if df is None or len(df) < 2:
+        return "unknown"
+    try:
+        o, h, l, c = float(df["Open"].iloc[-1]), float(df["High"].iloc[-1]), float(df["Low"].iloc[-1]), float(df["Close"].iloc[-1])
+        body   = abs(c - o)
+        rng    = h - l if h != l else 0.001
+        upper  = h - max(o, c)
+        lower  = min(o, c) - l
+        body_ratio = body / rng
+
+        if body_ratio < 0.1:
+            return "Doji"
+        if body_ratio > 0.7:
+            return "Bullish Marubozu" if c > o else "Bearish Marubozu"
+        if lower > body * 2 and upper < body * 0.5 and c > o:
+            return "Hammer"
+        if upper > body * 2 and lower < body * 0.5 and c < o:
+            return "Shooting Star"
+        if lower > body * 2 and upper < body * 0.5 and c < o:
+            return "Hanging Man"
+        if upper > body * 2 and lower < body * 0.5 and c > o:
+            return "Inverted Hammer"
+        # Engulfing (compare with prev candle)
+        po, pc = float(df["Open"].iloc[-2]), float(df["Close"].iloc[-2])
+        if c > o and pc < po and c > po and o < pc:
+            return "Bullish Engulfing"
+        if c < o and pc > po and c < po and o > pc:
+            return "Bearish Engulfing"
+        return "Bullish Candle" if c > o else "Bearish Candle"
+    except Exception:
+        return "unknown"
+
+
+def _calc_rsi(df, period: int = 14) -> float:
+    try:
+        if df is None or len(df) < period + 1:
+            return 50.0
+        delta = df["Close"].diff()
+        gain  = delta.where(delta > 0, 0).rolling(period).mean()
+        loss  = (-delta.where(delta < 0, 0)).rolling(period).mean()
+        rs    = gain / loss
+        return float((100 - (100 / (1 + rs))).iloc[-1])
+    except Exception:
+        return 50.0
+
 
 class PerformanceTrackerService:
     def __init__(self):
-        self.client = MongoClient(MONGO_URI)
-        self.db = self.client[DB_NAME]
+        self.client     = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        self.db         = self.client[DB_NAME]
         self.collection = self.db["trade_positions"]
+        # ensure indexes exist
+        self.collection.create_index([("symbol", 1), ("status", 1)])
+        self.collection.create_index([("entry_date", -1)])
+
+    # ── Save new trade when BUY alert fires ────────────────────────────────────
 
     def save_new_entry(self, alert: dict):
-        """Called when entry_monitor fires a BUY/SELL signal."""
-        symbol = alert.get("symbol")
+        symbol = (alert.get("symbol") or "").upper()
         if not symbol:
             return
 
-        # Check if already open
-        existing = self.collection.find_one({"symbol": symbol, "status": "open"})
-        if existing:
-            logger.info(f"[PERFORMANCE] {symbol} already has open position, skipping")
+        if self.collection.find_one({"symbol": symbol, "status": "open"}):
+            logger.info("[PERFORMANCE] %s already open — skipped", symbol)
             return
 
-        entry = {
-            "symbol": symbol,
-            "entry_price": alert.get("entryLevel", alert.get("livePrice")),
-            "entry_date": datetime.now(timezone.utc).isoformat(),
-            "target1": alert.get("target"),
-            "stop_loss": alert.get("stopLoss"),
-            "direction": alert.get("direction", "bullish"),
-            "confidence": alert.get("confidence", 0),
-            "status": "open",
-            "exit_price": None,
-            "exit_date": None,
-            "pnl": None,
-            "exit_reason": None,
-        }
-        
-        try:
-            self.collection.insert_one(entry)
-            logger.info(f"[PERFORMANCE] Trade saved: {symbol} at ₹{entry['entry_price']} ({alert.get('direction', 'bullish')})")
-        except Exception as e:
-            logger.error(f"[PERFORMANCE] Failed to save entry for {symbol}: {e}")
+        entry_price = alert.get("entryLevel") or alert.get("livePrice")
+        if not entry_price:
+            return
 
-    def _calculate_rsi(self, symbol: str) -> float:
-        """Calculate recent RSI to detect reversals for early exit."""
-        try:
-            hub = get_market_hub()
-            df = hub.data.fetch_history(symbol, period="5d", interval="15m")
-            if df.empty or len(df) < 14:
-                return 50.0
-                
-            delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            return float(rsi.iloc[-1])
-        except Exception as e:
-            logger.warning(f"[PERFORMANCE] Failed to calculate RSI for {symbol}: {e}")
-            return 50.0
+        doc = {
+            "symbol":       symbol,
+            "entry_price":  round(float(entry_price), 2),
+            "entry_date":   datetime.now(timezone.utc).isoformat(),
+            "target1":      alert.get("target"),
+            "stop_loss":    alert.get("stopLoss"),
+            "direction":    alert.get("direction", "bullish"),
+            "confidence":   alert.get("confidence", 0),
+            "rr":           alert.get("rr"),
+            "setup_type":   alert.get("setupType", ""),
+            "signal_stage": alert.get("signalStage", ""),
+            "status":       "open",
+            # filled on close
+            "exit_price":   None,
+            "exit_date":    None,
+            "exit_reason":  None,
+            "exit_candle":  None,
+            "days_held":    None,
+            "pnl":          None,
+            "pnl_pct":      None,
+            "order_type":   "paper",   # upgraded to "live" by broker sync
+        }
+
+        self.collection.insert_one(doc)
+        logger.info("[PERFORMANCE] Trade saved: %s @ ₹%.2f (%s)",
+                    symbol, entry_price, doc["direction"])
+
+    # ── Auto exit check — called every 5 min ──────────────────────────────────
 
     async def check_auto_exits(self):
-        """Background loop executed every 5 mins."""
         try:
-            open_positions = list(self.collection.find({"status": {"$in": ["open", "live_executed"]}}))
+            open_positions = list(self.collection.find(
+                {"status": {"$in": ["open", "live_executed"]}}
+            ))
             if not open_positions:
                 return
 
-            live_svc = get_angelone_live()
+            from app.services.angelone_live import get_angelone_live
+            from app.core.dependencies import get_market_hub
+
+            live_svc    = get_angelone_live()
             live_prices = live_svc.get_all_live_prices()
-            
+            hub         = get_market_hub()
+
             for pos in open_positions:
                 symbol = pos["symbol"]
+
+                # Get live price
                 live_data = live_prices.get(symbol)
-                
-                # Try quote if live_data not in WS
                 if not live_data:
                     try:
-                        hub = get_market_hub()
                         live_data = hub.data.fetch_live_snapshot(symbol)
                     except Exception:
                         continue
-                        
                 if not live_data:
                     continue
-                    
-                current_price = live_data.get("ltp", live_data.get("price"))
+
+                current_price = live_data.get("ltp") or live_data.get("price")
                 if not current_price:
                     continue
-                    
-                entry_price = pos.get("actual_entry_price", pos["entry_price"])
-                target1 = pos["target1"]
-                stop_loss = pos["stop_loss"]
-                direction = pos["direction"]
-                
+
+                current_price = float(current_price)
+                entry_price   = float(pos.get("actual_entry_price") or pos["entry_price"])
+                target1       = pos.get("target1")
+                stop_loss     = pos.get("stop_loss")
+                direction     = pos.get("direction", "bullish")
+
                 exit_reason = None
-                
-                # Check Target and Stop Loss
+
+                # 1. Hard Stop Loss / Target
                 if direction == "bullish":
-                    if stop_loss and current_price <= stop_loss:
+                    if stop_loss and current_price <= float(stop_loss):
                         exit_reason = "Stop Loss Hit"
-                    elif target1 and current_price >= target1:
+                    elif target1 and current_price >= float(target1):
                         exit_reason = "Target 1 Hit"
-                else: # bearish
-                    if stop_loss and current_price >= stop_loss:
+                else:
+                    if stop_loss and current_price >= float(stop_loss):
                         exit_reason = "Stop Loss Hit"
-                    elif target1 and current_price <= target1:
+                    elif target1 and current_price <= float(target1):
                         exit_reason = "Target 1 Hit"
-                        
-                # Early Profit Booking Logic
+
+                # 2. Early profit booking: 60% to target + RSI reversal
                 if not exit_reason and target1 and entry_price:
-                    distance_to_target = abs(target1 - entry_price)
-                    current_distance = current_price - entry_price if direction == "bullish" else entry_price - current_price
-                    
-                    if distance_to_target > 0:
-                        progress = current_distance / distance_to_target
-                        if progress > 0.6: # 60% of the way there
-                            rsi = self._calculate_rsi(symbol)
-                            if (direction == "bullish" and rsi < 40) or (direction == "bearish" and rsi > 60):
-                                exit_reason = "Early Profit Booking"
-                                
-                # Time Stop Logic
+                    dist_total   = abs(float(target1) - entry_price)
+                    dist_current = current_price - entry_price if direction == "bullish" else entry_price - current_price
+                    if dist_total > 0 and dist_current / dist_total > 0.6:
+                        rsi = await asyncio.to_thread(self._get_rsi, symbol, hub)
+                        if (direction == "bullish" and rsi < 40) or (direction == "bearish" and rsi > 60):
+                            exit_reason = "Early Profit Booking (RSI Reversal)"
+
+                # 3. Time stop — 14 calendar days
                 if not exit_reason:
-                    entry_date = datetime.fromisoformat(pos["entry_date"].replace('Z', '+00:00'))
-                    days_held = (datetime.now(timezone.utc) - entry_date).days
-                    if days_held >= 14: # roughly 10 trading days
-                        exit_reason = "Time Stop"
+                    entry_dt  = datetime.fromisoformat(pos["entry_date"].replace("Z", "+00:00"))
+                    days_held = (datetime.now(timezone.utc) - entry_dt).days
+                    if days_held >= 14:
+                        exit_reason = "Time Stop (14 days)"
 
                 if exit_reason:
-                    self.close_position(symbol, current_price, exit_reason)
-                    
-        except Exception as e:
-            logger.error(f"[PERFORMANCE] Auto-exit check failed: {e}")
+                    # Fetch daily candle for exit candle pattern
+                    candle = await asyncio.to_thread(self._get_last_candle, symbol, hub)
+                    self._close_position(pos, current_price, exit_reason, candle)
 
-    def close_position(self, symbol: str, exit_price: float, reason: str):
-        pos = self.collection.find_one({"symbol": symbol, "status": {"$in": ["open", "live_executed"]}})
-        if not pos:
-            return
-            
-        entry_price = pos.get("actual_entry_price", pos["entry_price"])
-        direction = pos["direction"]
-        
-        if direction == "bullish":
-            pnl = exit_price - entry_price
-        else:
-            pnl = entry_price - exit_price
-            
+        except Exception as e:
+            logger.error("[PERFORMANCE] Auto-exit check failed: %s", e)
+
+    # ── Close position ─────────────────────────────────────────────────────────
+
+    def _close_position(self, pos: dict, exit_price: float, reason: str, exit_candle: str = "unknown"):
+        entry_price = float(pos.get("actual_entry_price") or pos["entry_price"])
+        direction   = pos.get("direction", "bullish")
+        entry_dt    = datetime.fromisoformat(pos["entry_date"].replace("Z", "+00:00"))
+        days_held   = (datetime.now(timezone.utc) - entry_dt).days
+
+        pnl     = (exit_price - entry_price) if direction == "bullish" else (entry_price - exit_price)
+        pnl_pct = (pnl / entry_price) * 100 if entry_price else 0
+
         status = "closed"
         if reason == "Target 1 Hit":
             status = "target_hit"
         elif reason == "Stop Loss Hit":
             status = "stopped"
-            
+
         self.collection.update_one(
             {"_id": pos["_id"]},
             {"$set": {
-                "status": status,
-                "exit_price": round(exit_price, 2),
-                "exit_date": datetime.now(timezone.utc).isoformat(),
-                "pnl": round(pnl, 2),
-                "exit_reason": reason
+                "status":      status,
+                "exit_price":  round(exit_price, 2),
+                "exit_date":   datetime.now(timezone.utc).isoformat(),
+                "exit_reason": reason,
+                "exit_candle": exit_candle,
+                "days_held":   days_held,
+                "pnl":         round(pnl, 2),
+                "pnl_pct":     round(pnl_pct, 2),
             }}
         )
-        logger.info(f"[PERFORMANCE] Closed position {symbol} @ {exit_price} - {reason}")
-        
+        logger.info("[PERFORMANCE] Closed %s @ ₹%.2f | reason: %s | candle: %s | PnL: ₹%.2f (%.1f%%) | %d days",
+                    pos["symbol"], exit_price, reason, exit_candle, pnl, pnl_pct, days_held)
+
+    def close_position(self, symbol: str, exit_price: float, reason: str, exit_candle: str = "unknown"):
+        pos = self.collection.find_one({"symbol": symbol, "status": {"$in": ["open", "live_executed"]}})
+        if pos:
+            self._close_position(pos, exit_price, reason, exit_candle)
+
+    # ── Manual close from UI ───────────────────────────────────────────────────
+
     def manual_close(self, symbol: str) -> dict:
         pos = self.collection.find_one({"symbol": symbol, "status": {"$in": ["open", "live_executed"]}})
         if not pos:
             return {"success": False, "reason": "No open position found"}
-            
-        # Get live price
-        live_svc = get_angelone_live()
+
+        from app.services.angelone_live import get_angelone_live
+        from app.core.dependencies import get_market_hub
+        live_svc  = get_angelone_live()
         live_data = live_svc.get_live_price(symbol)
         if not live_data:
             try:
-                hub = get_market_hub()
-                live_data = hub.data.fetch_live_snapshot(symbol)
+                live_data = get_market_hub().data.fetch_live_snapshot(symbol)
             except Exception:
                 live_data = {}
-                
-        price = live_data.get("ltp", live_data.get("price"))
+
+        price = live_data.get("ltp") or live_data.get("price") if live_data else None
         if not price:
             return {"success": False, "reason": "Could not fetch live price"}
-            
-        self.close_position(symbol, price, "Manual Close")
+
+        self.close_position(symbol, float(price), "Manual Close")
         return {"success": True, "exit_price": price}
 
+    # ── Helpers ────────────────────────────────────────────────────────────────
+
+    def _get_rsi(self, symbol: str, hub) -> float:
+        try:
+            df = hub.data.fetch_history(symbol, period="5d", interval="15m")
+            return _calc_rsi(df)
+        except Exception:
+            return 50.0
+
+    def _get_last_candle(self, symbol: str, hub) -> str:
+        try:
+            df = hub.data.fetch_history(symbol, period="5d", interval="1d")
+            return _detect_candle_pattern(df)
+        except Exception:
+            return "unknown"
+
+    # ── Broker order sync ──────────────────────────────────────────────────────
+
     async def sync_broker_orders(self):
-        """Fetch AngelOne order book and sync with our DB."""
         try:
             from app.services.broker_adapter import get_broker_adapter, AngelOneAdapter
             adapter = get_broker_adapter()
             if not isinstance(adapter, AngelOneAdapter) or not adapter.is_available():
                 return
-                
+
             api = adapter._api
             if not api:
                 return
-                
+
             resp = api.orderBook()
             if not resp or not resp.get("status"):
                 return
-                
-            orders = resp.get("data") or []
-            if not orders:
-                return
-                
-            today = datetime.now().date().isoformat()
-            
-            db_positions = list(self.collection.find({
-                "entry_date": {"$regex": f"^{today}"}
-            }))
-            
-            for pos in db_positions:
-                symbol = pos.get("symbol")
-                matching_orders = [o for o in orders if o.get("tradingsymbol", "").startswith(symbol)]
-                if not matching_orders:
+
+            orders  = resp.get("data") or []
+            today   = datetime.now().date().isoformat()
+            db_open = list(self.collection.find({"entry_date": {"$regex": f"^{today}"}}))
+
+            for pos in db_open:
+                symbol   = pos.get("symbol")
+                matching = [o for o in orders if o.get("tradingsymbol", "").startswith(symbol)]
+                if not matching:
                     if pos.get("order_type") != "paper":
                         self.collection.update_one({"_id": pos["_id"]}, {"$set": {"order_type": "paper"}})
                     continue
-                    
-                order = matching_orders[0]
+
+                order  = matching[0]
                 status = order.get("status", "").lower()
-                
                 updates = {"order_type": "live"}
-                
-                if status == "complete" or status == "completed":
-                    actual_price = float(order.get("averageprice", 0) or order.get("price", 0))
-                    if actual_price > 0 and pos.get("status") == "open":
-                        updates["actual_entry_price"] = actual_price
-                        updates["status"] = "live_executed"
-                        
-                        signal_price = pos.get("entry_price")
-                        direction = pos.get("direction", "bullish")
-                        if direction == "bullish":
-                            updates["slippage"] = actual_price - signal_price
-                        else:
-                            updates["slippage"] = signal_price - actual_price
-                            
+
+                if status in ("complete", "completed"):
+                    actual = float(order.get("averageprice") or order.get("price") or 0)
+                    if actual > 0 and pos.get("status") == "open":
+                        signal_price = float(pos.get("entry_price", 0))
+                        updates["actual_entry_price"] = actual
+                        updates["status"]             = "live_executed"
+                        updates["slippage"]           = actual - signal_price if pos.get("direction") == "bullish" else signal_price - actual
+
                 elif status == "rejected":
                     if pos.get("status") == "open":
-                        updates["status"] = "live_rejected"
-                        updates["exit_reason"] = "Order Rejected by Broker"
-                        updates["exit_date"] = datetime.now(timezone.utc).isoformat()
-                        
+                        updates.update({
+                            "status":     "live_rejected",
+                            "exit_reason": "Order Rejected by Broker",
+                            "exit_date":   datetime.now(timezone.utc).isoformat(),
+                        })
+
                 if updates:
                     self.collection.update_one({"_id": pos["_id"]}, {"$set": updates})
-                    
-        except Exception as e:
-            logger.error(f"[PERFORMANCE] Broker order sync failed: {e}")
 
-_tracker = None
-def get_performance_tracker():
+        except Exception as e:
+            logger.error("[PERFORMANCE] Broker sync failed: %s", e)
+
+
+_tracker: PerformanceTrackerService | None = None
+
+
+def get_performance_tracker() -> PerformanceTrackerService:
     global _tracker
     if _tracker is None:
         _tracker = PerformanceTrackerService()
