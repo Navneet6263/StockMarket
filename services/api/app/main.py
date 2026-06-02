@@ -72,6 +72,11 @@ fastapi_app = FastAPI(
     description="Real-time market scanning, explainable prediction, and dashboard-first stock intelligence.",
 )
 
+# NOTE: prefixes are already defined inside each router file — do NOT add them again here
+# live.py       → prefix="/api/live"
+# performance.py→ prefix="/api/performance"
+# market.py     → prefix="/api"  (routes: /api/market/...)
+# stocks.py     → prefix="/api/stocks"
 fastapi_app.include_router(health_router)
 fastapi_app.include_router(market_router)
 fastapi_app.include_router(stocks_router)
