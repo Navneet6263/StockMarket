@@ -135,7 +135,7 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
   }
 
   const change = item.change_pct ?? item.changePct ?? item.raw?.change_pct ?? 0;
-  const price = item.currentPrice ?? item.current_price ?? item.price ?? item.raw?.current_price ?? item.raw?.price ?? 0;
+  const price = item.livePrice ?? item.currentPrice ?? item.current_price ?? item.price ?? item.raw?.current_price ?? item.raw?.price ?? 0;
   const action = item.action ?? item.effectiveAction ?? item.display_action ?? item.recommended_action ?? "WATCH";
   const actionClass = action === "BUY" || action === "REENTRY_BUY" ? "buy" : action === "SELL" ? "sell" : "watch";
   const direction = item.direction || "neutral";
@@ -302,31 +302,8 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
         if (isMounted) setLoading(false);
       });
 
-    const interval = setInterval(() => {
-      fetch(`${API_URL}/api/stocks/${symbol}/live`, { cache: "no-store" })
-        .then(r => r.ok ? r.json() : null)
-        .then(liveData => {
-          if (!isMounted || !liveData) return;
-          setDetail((prev: any) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              quote: {
-                ...prev.quote,
-                price: liveData.price,
-                change: liveData.change,
-                change_percent: liveData.change_percent,
-                timestamp: liveData.timestamp,
-              },
-            };
-          });
-        })
-        .catch(() => {});
-    }, 15000);
-
     return () => {
       isMounted = false;
-      clearInterval(interval);
     };
   }, [symbol]);
 
@@ -735,7 +712,6 @@ export default function Page() {
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
-  const [liveTicks, setLiveTicks] = useState<Record<string, any>>({});
   const [liveEntryCount, setLiveEntryCount] = useState(0);
   const [activeFilter, setActiveFilter] = useState("all");
   const activeTabRef = useRef(tab);
@@ -857,7 +833,7 @@ export default function Page() {
 
   const data = dataByTab[tab] || null;
   const items = extractItems(tab, data);
-  const allLiveItems = items.map((item: any) => overlayLiveTick(item, liveTicks[item.symbol]));
+  const allLiveItems = items;
   
   const liveItems = activeFilter === "all" ? allLiveItems
     : activeFilter === "bullish" ? allLiveItems.filter((x: any) => x.direction === "bullish")
@@ -868,29 +844,6 @@ export default function Page() {
 
   const mood = summary?.marketMood || data?.marketMood || "loading";
   const stats = summary?.summary || data?.summary || {};
-
-  useEffect(() => {
-    if (selectedSymbol || !items.length) return;
-    const symbols = Array.from(new Set(items.map((item: any) => item.symbol).filter(Boolean))).slice(0, 80);
-    if (!symbols.length) return;
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:4001";
-    const ws = new WebSocket(wsUrl);
-    ws.onopen = () => { symbols.forEach(symbol => ws.send(JSON.stringify({ type: "subscribe", symbol }))); };
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === "live_update" && message.symbol) {
-          setLiveTicks(prev => ({ ...prev, [message.symbol]: message.data || message }));
-        }
-      } catch {}
-    };
-    return () => {
-      symbols.forEach(symbol => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "unsubscribe", symbol }));
-      });
-      ws.close();
-    };
-  }, [items, selectedSymbol]);
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();

@@ -1138,18 +1138,33 @@ class MarketHubService:
         top_symbols = self._top_symbols(preliminary, self.settings.intraday_symbol_limit)
         live_quotes: dict[str, Dict] = {}
         if top_symbols:
-            def fetch_live_quote(symbol: str) -> tuple[str, Dict] | None:
-                try:
-                    return symbol, self.data.fetch_live_snapshot(symbol)
-                except Exception:
-                    logger.warning("live quote fetch failed during scan symbol=%s", symbol, exc_info=True)
-                    return None
+            api_semaphore = threading.Semaphore(3)
+            request_count = 0
+            count_lock = threading.Lock()
 
-            with ThreadPoolExecutor(max_workers=10) as executor:
+            def fetch_live_quote(symbol: str) -> tuple[str, Dict] | None:
+                nonlocal request_count
+                with api_semaphore:
+                    with count_lock:
+                        request_count += 1
+                        if request_count % 50 == 0:
+                            time.sleep(2.0)
+                        else:
+                            time.sleep(0.2)
+                    try:
+                        return symbol, self.data.fetch_live_snapshot(symbol)
+                    except Exception as exc:
+                        if "Access denied" in str(exc) or "access denied" in str(exc).lower():
+                            logger.warning("Access denied for %s, waiting 5s", symbol)
+                            time.sleep(5.0)
+                        else:
+                            logger.warning("live quote fetch failed during scan symbol=%s", symbol, exc_info=True)
+                        return None
+
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 futures = []
                 for symbol in top_symbols:
                     futures.append(executor.submit(fetch_live_quote, symbol))
-                    time.sleep(0.05)
                 for future in as_completed(futures):
                     result = future.result()
                     if result is not None:
