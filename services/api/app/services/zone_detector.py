@@ -21,6 +21,11 @@ class ZoneDetector:
         try:
             if history is None or history.empty or len(history) < 3:
                 return []
+            
+            # Drop rows with None/NaN in OHLC columns before processing
+            history = history.dropna(subset=['open', 'high', 'low', 'close'])
+            if len(history) < 3:
+                return []
                 
             df = self._classify_candles(history.tail(max_lookback)).reset_index()
             zones = []

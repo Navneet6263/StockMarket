@@ -40,6 +40,13 @@ async def market_hot_picks(
     force_refresh: bool = False,
     hub: MarketHubService = Depends(get_market_hub),
 ):
+    # Instant cache read - no blocking
+    if not force_refresh:
+        cached_result = hub.get_hot_picks()
+        if cached_result.get("last_updated"):
+            return cached_result
+    
+    # Only do full scan if explicitly requested
     payload = await scan_market_with_timeout(hub, force_refresh)
     try:
         tracker_dashboard = await asyncio.to_thread(hub.get_tracker_dashboard)

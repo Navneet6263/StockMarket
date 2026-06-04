@@ -55,6 +55,13 @@ class MarketHubService:
         self._nifty_context_cache: Dict | None = None
         self._nifty_context_at: float = 0.0
         self._nifty_context_ttl: float = 300.0  # 5 minutes
+        
+        # Thread-safe cache for instant API reads
+        self._cache_lock = threading.RLock()
+        self._live_entries_cache: list = []
+        self._hot_picks_cache: Dict = {}
+        self._last_scan_time: str | None = None
+        self._is_scanning: bool = False
 
     def start_background_scanner(self) -> bool:
         if self.background_scan_started:
@@ -1021,6 +1028,11 @@ class MarketHubService:
     def _refresh_scan_market(self, force_refresh: bool = False) -> Dict:
         refresh_started = time.perf_counter()
         timing_stats = {}
+        
+        # Mark scanning started
+        with self._cache_lock:
+            self._is_scanning = True
+        
         logger.info("market overview refresh started force_refresh=%s", force_refresh)
 
         t0 = time.perf_counter()
@@ -1145,25 +1157,23 @@ class MarketHubService:
             def fetch_live_quote(symbol: str) -> tuple[str, Dict] | None:
                 nonlocal request_count
                 with api_semaphore:
-                    with count_lock:
-                        request_count += 1
-                        if request_count % 50 == 0:
-                            time.sleep(2.0)
-                        else:
-                            time.sleep(0.2)
                     try:
                         return symbol, self.data.fetch_live_snapshot(symbol)
                     except Exception as exc:
                         if "Access denied" in str(exc) or "access denied" in str(exc).lower():
-                            logger.warning("Access denied for %s, waiting 5s", symbol)
-                            time.sleep(5.0)
+                            logger.warning("Access denied for %s, skipping", symbol)
                         else:
                             logger.warning("live quote fetch failed during scan symbol=%s", symbol, exc_info=True)
                         return None
 
-            with ThreadPoolExecutor(max_workers=3) as executor:
+            with ThreadPoolExecutor(max_workers=5) as executor:
                 futures = []
-                for symbol in top_symbols:
+                for idx, symbol in enumerate(top_symbols):
+                    # Rate limit BETWEEN submissions, not inside the task
+                    if idx > 0 and idx % 50 == 0:
+                        time.sleep(2.0)
+                    elif idx > 0:
+                        time.sleep(0.3)
                     futures.append(executor.submit(fetch_live_quote, symbol))
                 for future in as_completed(futures):
                     result = future.result()
@@ -1226,6 +1236,12 @@ class MarketHubService:
         timing_stats["total_scan_ms"] = int((time.perf_counter() - refresh_started) * 1000)
         payload["timing_stats"] = timing_stats
         
+        # Update thread-safe cache
+        with self._cache_lock:
+            self._last_scan_time = datetime.now(timezone.utc).isoformat()
+            self._hot_picks_cache = payload
+            self._is_scanning = False
+        
         saved = self._save_successful_scan(payload)
         logger.info(
             "market overview refresh completed symbols=%s valid=%s duration_ms=%s stats=%s",
@@ -1235,6 +1251,24 @@ class MarketHubService:
             timing_stats
         )
         return saved
+
+    def get_live_entries(self) -> Dict:
+        """Instant read from cache - no blocking operations."""
+        with self._cache_lock:
+            return {
+                "entries": self._live_entries_cache.copy(),
+                "scanning": self._is_scanning,
+                "last_updated": self._last_scan_time,
+            }
+    
+    def get_hot_picks(self) -> Dict:
+        """Instant read from cache - no blocking operations."""
+        with self._cache_lock:
+            return {
+                **self._hot_picks_cache.copy(),
+                "scanning": self._is_scanning,
+                "last_updated": self._last_scan_time,
+            }
 
     def scan_market(self, force_refresh: bool = False) -> Dict:
         started = time.perf_counter()
@@ -1287,6 +1321,9 @@ class MarketHubService:
             return payload
         except Exception:
             logger.exception("market overview refresh failed")
+            # Mark scanning stopped on error
+            with self._cache_lock:
+                self._is_scanning = False
             if self._last_success_is_usable():
                 return self._copy_with_warning(
                     self.last_successful_scan or {},

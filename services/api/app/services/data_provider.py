@@ -33,6 +33,52 @@ class MarketDataService:
         }
         self.cache_dir = Path(__file__).resolve().parents[3] / "cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Delisted stocks cache
+        self.delisted_cache_path = Path("/var/www/StockMarket/services/api/delisted_cache.json")
+        self.delisted_cache: Dict[str, str] = self._load_delisted_cache()
+    
+    def _load_delisted_cache(self) -> Dict[str, str]:
+        """Load delisted stocks cache from disk."""
+        if not self.delisted_cache_path.exists():
+            return {}
+        try:
+            import json
+            with open(self.delisted_cache_path, 'r') as f:
+                cache = json.load(f)
+            # Clean up entries older than 7 days
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+            return {k: v for k, v in cache.items() if v > cutoff}
+        except Exception as e:
+            logger.warning("Failed to load delisted cache: %s", e)
+            return {}
+    
+    def _save_delisted_cache(self):
+        """Save delisted stocks cache to disk."""
+        try:
+            import json
+            self.delisted_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.delisted_cache_path, 'w') as f:
+                json.dump(self.delisted_cache, f, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save delisted cache: %s", e)
+    
+    def _is_delisted(self, symbol: str) -> bool:
+        """Check if symbol is in delisted cache (within 7 days)."""
+        added_at = self.delisted_cache.get(symbol)
+        if not added_at:
+            return False
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        return added_at > cutoff
+    
+    def _mark_delisted(self, symbol: str):
+        """Add symbol to delisted cache."""
+        from datetime import datetime
+        self.delisted_cache[symbol] = datetime.now().isoformat()
+        self._save_delisted_cache()
+        logger.info("Marked symbol as delisted: %s", symbol)
 
     def _get_parquet_path(self, resolved_symbol: str, period: str, interval: str) -> Path:
         safe_sym = resolved_symbol.replace("^", "").replace(".", "_")
@@ -96,6 +142,12 @@ class MarketDataService:
         if clean in set(self.settings.invalid_symbols):
             logger.info("skipped invalid symbol=%s", clean)
             return pd.DataFrame()
+        
+        # Check delisted cache
+        if self._is_delisted(clean):
+            logger.info("skipped delisted symbol=%s", clean)
+            return pd.DataFrame()
+            
         resolved = self.resolve_symbol(symbol)
         cache_key = f"{resolved}:{period}:{interval}"
         cached = self.history_cache.get(cache_key)
@@ -128,12 +180,20 @@ class MarketDataService:
         except TypeError:
             history = yf.Ticker(resolved).history(period=period, interval=interval, auto_adjust=False)
         except Exception as exc:
-            logger.warning("history fetch failed symbol=%s error=%s", clean, exc)
+            error_str = str(exc).lower()
+            if "delisted" in error_str or "not found" in error_str:
+                self._mark_delisted(clean)
+                logger.warning("Symbol possibly delisted, cached: %s", clean)
+            else:
+                logger.warning("history fetch failed symbol=%s error=%s", clean, exc)
             return pd.DataFrame()
         frame = self._normalize_frame(history)
         if not frame.empty:
             self.history_cache.set(cache_key, frame, ttl_seconds=self._history_ttl(interval))
             self._save_to_parquet(frame, pq_path)
+        else:
+            # Empty frame from Yahoo might indicate delisted stock
+            self._mark_delisted(clean)
         return frame.copy()
 
     def fetch_batch_history(
@@ -147,7 +207,7 @@ class MarketDataService:
         resolved_map = {
             self.clean_symbol(symbol): self.resolve_symbol(symbol)
             for symbol in dict.fromkeys(symbols)
-            if symbol and self.clean_symbol(symbol) not in invalid_symbols
+            if symbol and self.clean_symbol(symbol) not in invalid_symbols and not self._is_delisted(self.clean_symbol(symbol))
         }
         results: dict[str, pd.DataFrame] = {}
         pending: list[tuple[str, str]] = []
@@ -215,7 +275,9 @@ class MarketDataService:
 
                 normalized = self._normalize_frame(frame)
                 if normalized.empty:
-                    logger.info("skipped no-data symbol=%s period=%s interval=%s", clean, period, interval)
+                    # Mark as delisted if Yahoo returns empty
+                    self._mark_delisted(clean)
+                    logger.info("skipped no-data symbol=%s period=%s interval=%s (marked delisted)", clean, period, interval)
                     continue
                 self.history_cache.set(f"{resolved}:{period}:{interval}", normalized, ttl_seconds=self._history_ttl(interval))
                 self._save_to_parquet(normalized, self._get_parquet_path(resolved, period, interval))
