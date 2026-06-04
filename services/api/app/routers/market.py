@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 
 from app.core.dependencies import get_market_hub
-from app.options_analyzer import OptionsAnalyzer
+from app.options_analyzer import OptionsAnalyzer, get_index_quotes
 from app.services.hot_picks import build_hot_picks_response
 from app.services.market_hub import MarketHubService
 
@@ -333,11 +333,29 @@ async def market_traps(
 async def market_options_analysis(
     symbol: str = Query("NIFTY"),
 ):
-    """Option chain analysis for a given symbol (mostly used for indices like NIFTY/BANKNIFTY)"""
+    """
+    Full option chain analysis — returns spot, PCR, max pain, OI chart,
+    10-day swing prediction, and CE/PE recommendation.
+    Supported: NIFTY | BANKNIFTY | FINNIFTY | MIDCPNIFTY
+    """
     try:
         analyzer = OptionsAnalyzer()
-        data = await asyncio.to_thread(analyzer.get_nifty_options_chain, symbol)
-        return analyzer.analyze_options_data(data)
+        # get_full_analysis returns already-analyzed data — do NOT call analyze_options_data again
+        return await asyncio.to_thread(analyzer.get_full_analysis, symbol)
     except Exception as e:
         logger.exception("Failed to analyze options for %s", symbol)
         return {"error": str(e), "symbol": symbol}
+
+
+@router.get("/market/indices")
+async def market_indices():
+    """
+    Live index quotes for the top ticker bar.
+    Returns: Nifty 50, BankNifty, Sensex, FinNifty, MidCapNifty, India VIX
+    Cached for 60 seconds — fast, non-blocking.
+    """
+    try:
+        return await asyncio.to_thread(get_index_quotes)
+    except Exception as e:
+        logger.exception("Failed to fetch index quotes")
+        return []

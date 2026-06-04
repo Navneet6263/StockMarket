@@ -4,14 +4,14 @@ import { API_URL, humanize, fmt, fmtPct } from "./lib/market";
 import TradingChart from "./components/TradingChart";
 
 const TABS = [
-  { id: "dashboard", label: "Dashboard", api: "/api/market/hot-picks" },
-  { id: "live-action", label: "🔴 Live Action", api: "/api/market/live-entries" },
-  { id: "hot-picks", label: "Hot Picks", api: "/api/market/hot-picks" },
-  { id: "watchlist", label: "Watchlist", api: "/api/market/hot-picks" },
-  { id: "base-radar", label: "Base Formation", api: "/api/market/hot-picks" },
-  { id: "momentum", label: "Momentum", api: "/api/market/hot-picks" },
-  { id: "traps", label: "Traps & Risks", api: "/api/market/traps" },
-  { id: "options", label: "Options Chain", api: "/api/market/options-analysis" },
+  { id: "dashboard",   label: "Dashboard",       api: "/api/market/hot-picks" },
+  { id: "live-action", label: "🔴 Live Action",  api: "/api/market/live-entries" },
+  { id: "hot-picks",   label: "Hot Picks",        api: "/api/market/hot-picks" },
+  { id: "watchlist",   label: "Watchlist",         api: "/api/market/hot-picks" },
+  { id: "base-radar",  label: "Base Formation",    api: "/api/market/hot-picks" },
+  { id: "momentum",    label: "Momentum",           api: "/api/market/hot-picks" },
+  { id: "traps",       label: "Traps & Risks",     api: "/api/market/traps" },
+  { id: "options",     label: "⚡ Options",         api: "/api/market/options-analysis?symbol=NIFTY" },
 ];
 
 function priceText(value: any) {
@@ -55,6 +55,60 @@ function demandTone(status: any, trapRisk: any) {
   return "watch";
 }
 
+// ── Index Ticker Bar ────────────────────────────────────────────────────────
+function IndexTickerBar() {
+  const [indices, setIndices] = useState<any[]>([]);
+
+  const fetchIndices = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/market/indices`, { cache: "no-store" });
+      if (r.ok) {
+        const data = await r.json();
+        setIndices(data);
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    fetchIndices();
+    const interval = setInterval(fetchIndices, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!indices.length) return null;
+
+  return (
+    <div className="index-ticker-bar">
+      {indices.map((idx: any) => {
+        const isVix = idx.key === "VIX";
+        const isUp = idx.is_up;
+        const color = isVix
+          ? idx.price > 20 ? "var(--red)" : idx.price > 15 ? "var(--orange)" : "var(--green)"
+          : isUp ? "var(--green)" : "var(--red)";
+        return (
+          <div key={idx.key} className="index-ticker-item">
+            <span className="index-ticker-name">{idx.name}</span>
+            <span className="index-ticker-price" style={{ color }}>
+              {idx.price != null ? (isVix ? idx.price.toFixed(2) : fmt(idx.price)) : "–"}
+            </span>
+            {!isVix && idx.change_pct != null && (
+              <span className="index-ticker-change" style={{ color }}>
+                {isUp ? "▲" : "▼"} {Math.abs(idx.change_pct).toFixed(2)}%
+              </span>
+            )}
+            {isVix && idx.price != null && (
+              <span className="index-ticker-change" style={{ color, fontSize: 11 }}>
+                {idx.price > 20 ? "🔴 High" : idx.price > 15 ? "🟡 Elevated" : "🟢 Low"}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Stock Card ───────────────────────────────────────────────────────────────
 function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => void }) {
   if (item.entryRule && item.instrumentRule) {
     return (
@@ -113,7 +167,7 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         <div className="trap-alert">
           <div className="trap-kicker">🚨 AVOID - INSTITUTIONAL TRAP</div>
           <div className="trap-desc">
-            {item.bull_trap?.bull_trap_detected ? "Fake Breakout Detected. Price broke resistance but failed to sustain." : 
+            {item.bull_trap?.bull_trap_detected ? "Fake Breakout Detected. Price broke resistance but failed to sustain." :
              item.trap_warnings?.[0] || "High institutional selling pressure detected."}
           </div>
           <div className="stock-meta" style={{ marginTop: 4 }}>
@@ -225,6 +279,7 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
   );
 }
 
+// ── Stock Detail Panel ───────────────────────────────────────────────────────
 function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void }) {
   const [detail, setDetail] = useState<any>(null);
   const [chartData, setChartData] = useState<any>(null);
@@ -247,7 +302,6 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
         if (isMounted) setLoading(false);
       });
 
-    // Auto-refresh live price every 15 seconds
     const interval = setInterval(() => {
       fetch(`${API_URL}/api/stocks/${symbol}/live`, { cache: "no-store" })
         .then(r => r.ok ? r.json() : null)
@@ -297,18 +351,10 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
         <div className="stat-card"><span>Entry Quality</span><strong>{humanize(s.entry_quality || "watch")}</strong></div>
         <div className="stat-card"><span>Seller Pressure</span><strong>{humanize(s.seller_pressure || "unknown")}</strong></div>
       </div>
-      {/* ── Trade Levels ─────────────────────────────────────── */}
-      {/* Priority: safe_entry_price (pullback zone) → entry_price → entry_trigger */}
       <div className="stock-targets" style={{ marginTop: 12 }}>
-        <div><span>Entry</span><strong>₹{fmt(
-          s.safe_entry_price ?? s.entry_price ?? s.entry_trigger ?? s.current_price
-        )}</strong></div>
-        <div><span>Target 1</span><strong>₹{fmt(
-          s.new_target ?? s.target_1 ?? s.target_price
-        )}</strong></div>
-        <div><span>Stop Loss</span><strong>₹{fmt(
-          s.invalidation_level ?? s.stop_loss ?? s.invalidation
-        )}</strong></div>
+        <div><span>Entry</span><strong>₹{fmt(s.safe_entry_price ?? s.entry_price ?? s.entry_trigger ?? s.current_price)}</strong></div>
+        <div><span>Target 1</span><strong>₹{fmt(s.new_target ?? s.target_1 ?? s.target_price)}</strong></div>
+        <div><span>Stop Loss</span><strong>₹{fmt(s.invalidation_level ?? s.stop_loss ?? s.invalidation)}</strong></div>
       </div>
       
       {chartData ? (
@@ -340,76 +386,335 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
   );
 }
 
-function OptionsDashboard({ data }: { data: any }) {
-  if (!data) return <div className="empty-msg">No options data available.</div>;
-  if (data.error) return <div className="empty-msg">Error: {data.error}</div>;
+// ── Options Dashboard — REBUILT ──────────────────────────────────────────────
+function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
+  const [activeIndex, setActiveIndex] = useState("NIFTY");
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [lastFetch, setLastFetch] = useState<Date | null>(null);
 
-  const { symbol, spot_price, pcr, max_pain, call_oi, put_oi, atm_strike, support, resistance, signal, records } = data;
-  
+  const INDEX_LIST = [
+    { key: "NIFTY",      label: "Nifty 50" },
+    { key: "BANKNIFTY",  label: "Bank Nifty" },
+    { key: "FINNIFTY",   label: "Fin Nifty" },
+    { key: "MIDCPNIFTY", label: "Midcap" },
+  ];
+
+  const fetchData = async (sym: string) => {
+    setLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/api/market/options-analysis?symbol=${sym}`, { cache: "no-store" });
+      if (r.ok) {
+        const json = await r.json();
+        setData(json);
+        setLastFetch(new Date());
+      }
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchData(activeIndex);
+    const interval = setInterval(() => fetchData(activeIndex), 300000); // refresh every 5min
+    return () => clearInterval(interval);
+  }, [activeIndex]);
+
+  const rec = data?.recommendation;
+  const swing = data?.swing_prediction;
+  const isFallback = data?.data_source === "fallback";
+  const isNoTrade = !rec || rec.action === "NO_TRADE";
+  const isCe = rec?.action === "BUY_CE";
+
+  // Stock options from hot picks (confidence >= 75)
+  const hotPicks = hotPicksData?.hotPicks || hotPicksData?.top_opportunities || [];
+  const stockOptions = hotPicks.filter((s: any) => (s.confidence ?? s.score ?? 0) >= 75 && s.direction && s.direction !== "neutral");
+
   return (
     <div className="options-dashboard">
-      <div className="stats-row">
-        <div className="stat-card"><span>Spot Price ({symbol})</span><strong>₹{fmt(spot_price)}</strong></div>
-        <div className="stat-card"><span>PCR</span><strong style={{ color: pcr >= 1 ? "var(--green)" : "var(--red)" }}>{pcr?.toFixed(2)}</strong></div>
-        <div className="stat-card"><span>Max Pain</span><strong>{max_pain}</strong></div>
-        <div className="stat-card"><span>Options Signal</span><strong style={{ color: signal?.direction === "bullish" ? "var(--green)" : signal?.direction === "bearish" ? "var(--red)" : "var(--orange)" }}>{humanize(signal?.direction)}</strong></div>
-      </div>
-      
-      <div className="demand-panel">
-        <h3 style={{ fontSize: 16, color: '#fff', marginBottom: 8 }}>Key Levels (OI Built-up)</h3>
-        <div style={{ display: "flex", gap: 24 }}>
-          <div>
-            <span style={{ color: "var(--green)", fontSize: 12 }}>MAJOR SUPPORT (Put OI)</span>
-            <strong style={{ display: 'block', fontSize: 20, color: '#fff' }}>{support?.level}</strong>
-            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{fmt(support?.oi)} contracts</span>
-          </div>
-          <div>
-            <span style={{ color: "var(--red)", fontSize: 12 }}>MAJOR RESISTANCE (Call OI)</span>
-            <strong style={{ display: 'block', fontSize: 20, color: '#fff' }}>{resistance?.level}</strong>
-            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{fmt(resistance?.oi)} contracts</span>
-          </div>
+      {/* ── Index Selector ── */}
+      <div className="options-index-tabs">
+        {INDEX_LIST.map(idx => (
+          <button
+            key={idx.key}
+            className={`options-index-tab ${activeIndex === idx.key ? "active" : ""}`}
+            onClick={() => { setActiveIndex(idx.key); }}
+            id={`options-tab-${idx.key.toLowerCase()}`}
+          >
+            {idx.label}
+          </button>
+        ))}
+        <div style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>
+          {lastFetch ? `Updated: ${lastFetch.toLocaleTimeString()}` : ""}
+          <button
+            onClick={() => fetchData(activeIndex)}
+            style={{ marginLeft: 8, background: "none", border: "1px solid var(--border)", color: "var(--muted)", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}
+            disabled={loading}
+          >
+            {loading ? "⟳" : "↻ Refresh"}
+          </button>
         </div>
-        {signal?.reason && <p className="stock-reason" style={{ marginTop: 8 }}>{signal.reason}</p>}
       </div>
-      
-      {records && (
-        <div className="detail-panel" style={{ marginTop: 16 }}>
-          <h3>Option Chain (Near ATM)</h3>
-          <div style={{ marginTop: 16 }}>
-            <div className="options-strike-row" style={{ color: "var(--muted)", borderBottom: "1px solid var(--border)", fontWeight: "bold" }}>
-              <div className="options-put">PUT OI (Support)</div>
-              <div className="options-strike">STRIKE</div>
-              <div className="options-call">CALL OI (Resistance)</div>
+
+      {loading && !data ? (
+        <div className="empty-msg">⟳ Loading option chain data…</div>
+      ) : !data ? (
+        <div className="empty-msg">Could not load options data. Try refreshing.</div>
+      ) : (
+        <>
+          {/* ── Fallback Warning ── */}
+          {isFallback && (
+            <div className="options-warning-banner">
+              ⚠️ <strong>Live NSE data unavailable.</strong> Showing estimated spot price only.
+              Do NOT trade options based on this — wait for live data.
             </div>
-            {records.filter((r: any) => Math.abs(r.strikePrice - spot_price) < spot_price * 0.03).map((r: any) => {
-              const maxOi = Math.max(...records.map((x: any) => Math.max(x.pe_oi || 0, x.ce_oi || 0)));
-              const peWidth = ((r.pe_oi || 0) / maxOi) * 100;
-              const ceWidth = ((r.ce_oi || 0) / maxOi) * 100;
-              return (
-                <div key={r.strikePrice} className={`options-strike-row ${r.strikePrice === atm_strike ? 'atm' : ''}`}>
-                  <div className="options-put">
-                    <div>{fmt(r.pe_oi)}</div>
-                    <div className="oi-bar put" style={{ width: `${peWidth}%`, marginLeft: 'auto' }}></div>
+          )}
+
+          {/* ── 10-Day Swing Prediction + Recommendation ── */}
+          <div className={`options-rec-box ${isNoTrade ? "no-trade" : isCe ? "bullish-rec" : "bearish-rec"}`}>
+            <div className="options-rec-header">
+              <span className="options-rec-label">
+                {isNoTrade ? "⛔ NO TRADE — Market Unclear" : rec?.label}
+              </span>
+              <span className="options-rec-horizon">📅 10-Day Swing Prediction</span>
+            </div>
+
+            {isNoTrade ? (
+              <p className="options-rec-reason">{rec?.reason || "Confidence too low or data unavailable. Stay out until clear signal."}</p>
+            ) : (
+              <>
+                <div className="options-rec-main">
+                  <div>
+                    <div className="options-rec-strategy">{rec?.strategy}</div>
+                    <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>
+                      🎯 Confidence: <strong style={{ color: "#fff" }}>{rec?.confidence}%</strong>
+                      &nbsp;&nbsp;⏳ Horizon: <strong style={{ color: "#fff" }}>{rec?.horizon}</strong>
+                    </div>
+                    {rec?.vix_note && (
+                      <div style={{ fontSize: 12, color: "var(--orange)", marginTop: 4 }}>
+                        📊 {rec.vix_note}
+                      </div>
+                    )}
                   </div>
-                  <div className="options-strike">{r.strikePrice}</div>
-                  <div className="options-call">
-                    <div>{fmt(r.ce_oi)}</div>
-                    <div className="oi-bar call" style={{ width: `${ceWidth}%` }}></div>
+                  <div className="options-rec-levels">
+                    <div>
+                      <span>Strike</span>
+                      <strong>{rec?.strike}</strong>
+                    </div>
+                    <div>
+                      <span>Stop (underlying)</span>
+                      <strong style={{ color: "var(--red)" }}>₹{fmt(rec?.stop_loss_underlying)}</strong>
+                    </div>
+                    <div>
+                      <span>Target (underlying)</span>
+                      <strong style={{ color: "var(--green)" }}>₹{fmt(rec?.target_underlying)}</strong>
+                    </div>
                   </div>
                 </div>
-              );
-            })}
+
+                {rec?.reasons?.length > 0 && (
+                  <div className="options-rec-reasons">
+                    <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 8 }}>Why this trade:</div>
+                    {rec.reasons.map((r: string, i: number) => (
+                      <div key={i} className="options-signal-row">
+                        <span className={isCe ? "signal-bull" : "signal-bear"}>
+                          {isCe ? "▲" : "▼"}
+                        </span>
+                        <span>{r}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="options-rec-warning">
+                  ⚠️ {rec?.warning}
+                </div>
+              </>
+            )}
           </div>
-        </div>
+
+          {/* ── Key Metrics ── */}
+          <div className="stats-row">
+            <div className="stat-card">
+              <span>Spot ({data.label})</span>
+              <strong>₹{fmt(data.spot_price)}</strong>
+            </div>
+            <div className="stat-card">
+              <span>ATM Strike</span>
+              <strong>{data.atm_strike}</strong>
+            </div>
+            <div className="stat-card">
+              <span>PCR</span>
+              <strong style={{ color: data.pcr >= 1.2 ? "var(--green)" : data.pcr <= 0.8 ? "var(--red)" : "var(--orange)" }}>
+                {data.pcr?.toFixed(2)}
+                <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 6 }}>
+                  {data.pcr >= 1.2 ? "Bullish" : data.pcr <= 0.8 ? "Bearish" : "Neutral"}
+                </span>
+              </strong>
+            </div>
+            <div className="stat-card">
+              <span>Max Pain</span>
+              <strong>{data.max_pain}</strong>
+            </div>
+            <div className="stat-card">
+              <span>IV Proxy</span>
+              <strong>{data.iv_proxy > 0 ? `${(data.iv_proxy * 100).toFixed(1)}%` : "–"}</strong>
+            </div>
+            <div className="stat-card">
+              <span>India VIX</span>
+              <strong style={{ color: (data.india_vix ?? 15) > 20 ? "var(--red)" : (data.india_vix ?? 15) > 15 ? "var(--orange)" : "var(--green)" }}>
+                {data.india_vix ? data.india_vix.toFixed(2) : "–"}
+              </strong>
+            </div>
+          </div>
+
+          {/* ── OI Signals Summary ── */}
+          <div className="demand-panel">
+            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 24 }}>
+              <div>
+                <div style={{ fontSize: 11, color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.1em" }}>SUPPORT (Max Put OI)</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "#fff", marginTop: 4 }}>₹{fmt(data.support)}</div>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>OI: {fmt(data.oi_change?.put_change_oi)} contracts added</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: "var(--red)", textTransform: "uppercase", letterSpacing: "0.1em" }}>RESISTANCE (Max Call OI)</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "#fff", marginTop: 4 }}>₹{fmt(data.resistance)}</div>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>OI: {fmt(data.oi_change?.call_change_oi)} contracts added</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>OI Bias</div>
+                <div style={{ fontSize: 18, fontWeight: 800, marginTop: 4, color: data.oi_change?.bias === "bullish_support" ? "var(--green)" : data.oi_change?.bias === "bearish_resistance" ? "var(--red)" : "var(--orange)" }}>
+                  {data.oi_change?.bias === "bullish_support" ? "🟢 Bullish Support" :
+                   data.oi_change?.bias === "bearish_resistance" ? "🔴 Bearish Resistance" : "⚪ Neutral"}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── OI Chain Chart ── */}
+          {data.records && data.records.length > 0 && (
+            <div className="detail-panel">
+              <h3 style={{ fontSize: 16, color: "#fff", marginBottom: 16 }}>
+                Option Chain — Near ATM ({data.atm_strike})
+              </h3>
+              <div>
+                <div className="options-strike-row" style={{ color: "var(--muted)", fontWeight: 700, borderBottom: "1px solid var(--border)" }}>
+                  <div className="options-put">PUT OI → Support</div>
+                  <div className="options-strike">Strike</div>
+                  <div className="options-call">Call OI → Resistance</div>
+                </div>
+                {(() => {
+                  const maxOi = Math.max(...data.records.map((r: any) => Math.max(r.pe_oi || 0, r.ce_oi || 0)), 1);
+                  return data.records.map((r: any) => {
+                    const peWidth = ((r.pe_oi || 0) / maxOi) * 100;
+                    const ceWidth = ((r.ce_oi || 0) / maxOi) * 100;
+                    const isAtm = r.strikePrice === data.atm_strike;
+                    return (
+                      <div key={r.strikePrice} className={`options-strike-row ${isAtm ? "atm" : ""}`}>
+                        <div className="options-put">
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+                            <div className="oi-bar put" style={{ width: `${peWidth}%` }}></div>
+                            <span style={{ minWidth: 60, textAlign: "right" }}>{fmt(r.pe_oi)}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>
+                            LTP: ₹{r.pe_ltp?.toFixed(1) || "–"}
+                          </div>
+                        </div>
+                        <div className="options-strike">
+                          {r.strikePrice}
+                          {isAtm && <div style={{ fontSize: 10, color: "var(--accent)", fontWeight: 800 }}>ATM</div>}
+                        </div>
+                        <div className="options-call">
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ minWidth: 60 }}>{fmt(r.ce_oi)}</span>
+                            <div className="oi-bar call" style={{ width: `${ceWidth}%` }}></div>
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                            LTP: ₹{r.ce_ltp?.toFixed(1) || "–"}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* ── All Technical Signals ── */}
+          {swing?.signals?.length > 0 && (
+            <div className="demand-panel">
+              <div style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 12 }}>
+                📊 All Analysis Signals (10-day horizon)
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {swing.signals.map((sig: string, i: number) => (
+                  <div key={i} className="options-signal-row">
+                    <span style={{ color: "var(--accent)" }}>•</span>
+                    <span style={{ fontSize: 14, color: "var(--muted)" }}>{sig}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Stock Options from Hot Picks ── */}
+          {stockOptions.length > 0 && (
+            <div>
+              <h2 className="section-title">📋 Stock Options Suggestions (from Hot Picks)</h2>
+              <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
+                These stocks have ≥75% confidence. Based on direction, here's the option play:
+              </div>
+              <div className="stock-grid">
+                {stockOptions.slice(0, 6).map((stock: any) => {
+                  const isBull = stock.direction === "bullish";
+                  const price = stock.currentPrice ?? stock.current_price ?? stock.price ?? 0;
+                  const step = price < 500 ? 10 : price < 2000 ? 50 : price < 5000 ? 100 : 200;
+                  const atmStrike = Math.round(price / step) * step;
+                  const conf = stock.confidence ?? stock.score ?? 0;
+                  return (
+                    <div key={stock.symbol} className={`stock-card ${isBull ? "options-ce-card" : "options-pe-card"}`}>
+                      <div className="stock-card-top">
+                        <h3>{stock.symbol}</h3>
+                        <span className={`badge ${isBull ? "bullish" : "bearish"}`}>
+                          {isBull ? "📈 BUY CE" : "📉 BUY PE"}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                        Stock at <strong style={{ color: "#fff" }}>₹{fmt(price)}</strong> — ATM Strike ~<strong style={{ color: "#fff" }}>{atmStrike}</strong>
+                      </div>
+                      <div className="stock-meta">
+                        <span className={`tag ${isBull ? "buy" : "sell"}`}>
+                          {isBull ? `Buy ${stock.symbol} ${atmStrike} CE` : `Buy ${stock.symbol} ${atmStrike} PE`}
+                        </span>
+                        <span className="tag">🎯 {fmt(conf, 0)}% conf</span>
+                      </div>
+                      <p className="stock-reason">
+                        {stock.aiReason || stock.reason || stock.signal_summary || "Strong signal — direction confirmed by multiple indicators."}
+                      </p>
+                      <div className="stock-targets">
+                        <div><span>Entry Zone</span><strong>₹{fmt(stock.entryZone ?? stock.entry_trigger ?? price)}</strong></div>
+                        <div><span>Target</span><strong>₹{fmt(stock.target_1 ?? stock.target_price)}</strong></div>
+                        <div><span>Stop</span><strong>₹{fmt(stock.stop_loss ?? stock.stoploss)}</strong></div>
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--orange)", borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                        ⚠️ Check liquidity before buying. Only trade options on stocks with high volume.
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
 
+// ── Extract items from API data ──────────────────────────────────────────────
 function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
   if (tab === "dashboard" || tab === "hot-picks") return data.hotPicks || data.top_opportunities || [];
-  // live-action: data comes from /api/market/live-entries
   if (tab === "live-action") return data.entries || data.liveAction || [];
   if (tab === "traps") return data.trap_signals || [];
   if (tab === "pbs") return data.pbsRadar || [];
@@ -421,12 +726,13 @@ function extractItems(tab: string, data: any): any[] {
   return [];
 }
 
+// ── Main Page ────────────────────────────────────────────────────────────────
 export default function Page() {
   const [tab, setTab] = useState("dashboard");
   const [dataByTab, setDataByTab] = useState<Record<string, any>>({});
   const [summary, setSummary] = useState<any>(null);
-  const [loading, setLoading] = useState(true);           // true only on very first load
-  const [refreshing, setRefreshing] = useState(false);    // silent background refresh indicator
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [liveTicks, setLiveTicks] = useState<Record<string, any>>({});
@@ -434,7 +740,7 @@ export default function Page() {
   const [activeFilter, setActiveFilter] = useState("all");
   const activeTabRef = useRef(tab);
 
-  // Real-time live entries subscription (WebSocket with automatic polling fallback)
+  // Real-time live entries subscription
   useEffect(() => {
     let ws: WebSocket | null = null;
     let pollInterval: any = null;
@@ -464,38 +770,24 @@ export default function Page() {
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          console.log("[WS] Connected to live entries feed");
-          if (pollInterval) {
-            clearInterval(pollInterval);
-            pollInterval = null;
-          }
+          if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
         };
-
         ws.onmessage = (event) => {
           try {
             const json = JSON.parse(event.data);
             setLiveEntryCount(json.count || 0);
             setDataByTab(prev => ({ ...prev, "live-action": json }));
-          } catch (e) {
-            console.error("[WS] Failed to parse message", e);
-          }
+          } catch {}
         };
-
         ws.onclose = () => {
-          console.log("[WS] Connection closed, falling back to polling");
           if (!pollInterval) {
             pollLiveEntries();
             pollInterval = setInterval(pollLiveEntries, 3000);
           }
           setTimeout(connectWebSocket, 5000);
         };
-
-        ws.onerror = (err) => {
-          console.error("[WS] Error:", err);
-          ws?.close();
-        };
-      } catch (e) {
-        console.error("[WS] Connection failed:", e);
+        ws.onerror = () => { ws?.close(); };
+      } catch {
         if (!pollInterval) {
           pollLiveEntries();
           pollInterval = setInterval(pollLiveEntries, 3000);
@@ -504,7 +796,6 @@ export default function Page() {
     };
 
     connectWebSocket();
-
     return () => {
       if (ws) ws.close();
       if (pollInterval) clearInterval(pollInterval);
@@ -519,12 +810,16 @@ export default function Page() {
     const isCurrentTab = activeTabRef.current === tabId;
     const alreadyHasData = Boolean(dataByTab[tabId]);
 
-    // Only show full loading spinner when tab has NO cached data yet
     if (isCurrentTab && !alreadyHasData) {
       setLoading(true);
     } else if (isCurrentTab && !force) {
-      // Silent background refresh — show tiny refreshing indicator, keep cards visible
       setRefreshing(true);
+    }
+
+    // Options tab has its own internal fetch — skip here
+    if (tabId === "options") {
+      if (isCurrentTab) { setLoading(false); setRefreshing(false); }
+      return;
     }
 
     const tabConfig = TABS.find(t => t.id === tabId) || TABS[0];
@@ -556,7 +851,6 @@ export default function Page() {
 
   useEffect(() => {
     load(tab);
-    // Auto-refresh every 90s silently (no skeleton shown)
     const interval = setInterval(() => load(tab), 90000);
     return () => clearInterval(interval);
   }, [tab, load]);
@@ -565,7 +859,6 @@ export default function Page() {
   const items = extractItems(tab, data);
   const allLiveItems = items.map((item: any) => overlayLiveTick(item, liveTicks[item.symbol]));
   
-  // Apply active filter
   const liveItems = activeFilter === "all" ? allLiveItems
     : activeFilter === "bullish" ? allLiveItems.filter((x: any) => x.direction === "bullish")
     : activeFilter === "bearish" ? allLiveItems.filter((x: any) => x.direction === "bearish")
@@ -582,9 +875,7 @@ export default function Page() {
     if (!symbols.length) return;
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:4001";
     const ws = new WebSocket(wsUrl);
-    ws.onopen = () => {
-      symbols.forEach(symbol => ws.send(JSON.stringify({ type: "subscribe", symbol })));
-    };
+    ws.onopen = () => { symbols.forEach(symbol => ws.send(JSON.stringify({ type: "subscribe", symbol }))); };
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
@@ -607,10 +898,13 @@ export default function Page() {
     if (sym) setSelectedSymbol(sym);
   }
 
+  // Hot picks for stock options tab (always load dashboard data)
+  const dashboardData = dataByTab["dashboard"] || null;
+
   return (
     <div className="app-layout">
       <aside className="sidebar">
-        <div className="sidebar-logo">StockAI</div>
+        <div className="sidebar-logo">BullAlways</div>
         <form onSubmit={handleSearch} style={{ padding: "0 4px", marginBottom: 12 }}>
           <input
             className="search-box"
@@ -621,7 +915,8 @@ export default function Page() {
         </form>
         <div className="sidebar-section">Scanner</div>
         {TABS.map(t => (
-          <button key={t.id} className={`sidebar-item ${tab === t.id ? "active" : ""}`} onClick={() => { setTab(t.id); setSelectedSymbol(null); setActiveFilter("all"); }}
+          <button key={t.id} className={`sidebar-item ${tab === t.id ? "active" : ""}`}
+            onClick={() => { setTab(t.id); setSelectedSymbol(null); setActiveFilter("all"); }}
             style={t.id === "live-action" && liveEntryCount > 0 ? { position: "relative" } : {}}>
             {t.label}
             {t.id === "live-action" && liveEntryCount > 0 && (
@@ -643,81 +938,86 @@ export default function Page() {
           Performance Tracker ↗
         </a>
       </aside>
-      <main className="main-content">
-        <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-          <div>
-            <h1>{selectedSymbol || TABS.find(t => t.id === tab)?.label}</h1>
-            <p>Updated: {data?.generated_at || data?.lastUpdated ? new Date(data.generated_at || data.lastUpdated).toLocaleString() : "..."}</p>
-          </div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            {refreshing && (
-              <span style={{ fontSize: 11, color: "#888", animation: "pulse 1s infinite" }}>↻ updating…</span>
-            )}
-            <span className={`mood-badge ${mood}`}>{humanize(mood)}</span>
-            <button className="refresh-btn" onClick={() => load(tab, true)} disabled={loading || refreshing}>
-              {loading ? "..." : refreshing ? "↻" : "Refresh"}
-            </button>
-          </div>
-        </div>
 
-        {tab === "options" ? (
-          <OptionsDashboard data={data} />
-        ) : selectedSymbol ? (
-          <StockDetail symbol={selectedSymbol} onClose={() => setSelectedSymbol(null)} />
-        ) : (
-          <>
-            <div className="stats-row">
-              <div className="stat-card"><span>📊 Scanned</span><strong>{stats.totalScanned ?? stats.total_scanned_universe ?? "..."}</strong></div>
-              <div className="stat-card"><span>🔥 Hot Picks</span><strong style={{ color: "var(--green)" }}>{stats.highConfidence ?? stats.high_priority ?? 0}</strong></div>
-              <div className="stat-card"><span>⚡ Breakouts</span><strong style={{ color: "var(--yellow)" }}>{stats.breakouts ?? stats.breakout_count ?? 0}</strong></div>
-              <div className="stat-card"><span>📈 Bullish</span><strong style={{ color: "var(--green)" }}>{stats.bullish ?? stats.bullish_setups ?? 0}</strong></div>
-              <div className="stat-card"><span>📉 Bearish</span><strong style={{ color: "var(--red)" }}>{stats.bearish ?? stats.bearish_risk_count ?? 0}</strong></div>
-              <div className="stat-card"><span>✅ This Tab</span><strong>{liveItems.length}</strong></div>
+      <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+        {/* ── Index Ticker Bar ── */}
+        <IndexTickerBar />
+
+        <main className="main-content">
+          <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+            <div>
+              <h1>{selectedSymbol || TABS.find(t => t.id === tab)?.label}</h1>
+              <p>Updated: {data?.generated_at || data?.lastUpdated ? new Date(data.generated_at || data.lastUpdated).toLocaleString() : "..."}</p>
             </div>
-
-            {/* Filter bar */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-              {([
-                { key: "all",       label: "All",             count: allLiveItems.length },
-                { key: "bullish",   label: "📈 Bullish",       count: allLiveItems.filter((x: any) => x.direction === "bullish").length },
-                { key: "bearish",   label: "📉 Bearish",       count: allLiveItems.filter((x: any) => x.direction === "bearish").length },
-                { key: "breakout",  label: "⚡ Breakout",      count: allLiveItems.filter((x: any) => x.entry_label?.includes("BREAKOUT") || x.has_breakout).length },
-                { key: "high-conf", label: "🎯 High Confidence", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
-              ] as { key: string; label: string; count: number }[]).map(f => (
-                <button
-                  key={f.key}
-                  className="refresh-btn"
-                  onClick={() => setActiveFilter(f.key)}
-                  style={{
-                    fontSize: 13,
-                    padding: "6px 12px",
-                    background: activeFilter === f.key ? "var(--green, #22c55e)" : undefined,
-                    color: activeFilter === f.key ? "#000" : undefined,
-                    fontWeight: activeFilter === f.key ? 700 : undefined,
-                  }}
-                >
-                  {f.label} ({f.count})
-                </button>
-              ))}
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              {refreshing && (
+                <span style={{ fontSize: 11, color: "#888", animation: "pulse 1s infinite" }}>↻ updating…</span>
+              )}
+              <span className={`mood-badge ${mood}`}>{humanize(mood)}</span>
+              <button className="refresh-btn" onClick={() => load(tab, true)} disabled={loading || refreshing}>
+                {loading ? "..." : refreshing ? "↻" : "Refresh"}
+              </button>
             </div>
+          </div>
 
-            <h2 className="section-title">{TABS.find(t => t.id === tab)?.label} ({liveItems.length} stocks)</h2>
-            {loading ? (
-              <div className="stock-grid">
-                {[1,2,3,4,5,6].map(i => <div key={i} className="stock-card" style={{ animation: "pulse 1.5s infinite", background: "var(--bg, #1a1a1a)" }}>
-                  <div style={{ height: 120, background: "var(--border, #333)" }}></div>
-                </div>)}
+          {tab === "options" ? (
+            <OptionsDashboard hotPicksData={dashboardData} />
+          ) : selectedSymbol ? (
+            <StockDetail symbol={selectedSymbol} onClose={() => setSelectedSymbol(null)} />
+          ) : (
+            <>
+              <div className="stats-row">
+                <div className="stat-card"><span>📊 Scanned</span><strong>{stats.totalScanned ?? stats.total_scanned_universe ?? "..."}</strong></div>
+                <div className="stat-card"><span>🔥 Hot Picks</span><strong style={{ color: "var(--green)" }}>{stats.highConfidence ?? stats.high_priority ?? 0}</strong></div>
+                <div className="stat-card"><span>⚡ Breakouts</span><strong style={{ color: "var(--yellow)" }}>{stats.breakouts ?? stats.breakout_count ?? 0}</strong></div>
+                <div className="stat-card"><span>📈 Bullish</span><strong style={{ color: "var(--green)" }}>{stats.bullish ?? stats.bullish_setups ?? 0}</strong></div>
+                <div className="stat-card"><span>📉 Bearish</span><strong style={{ color: "var(--red)" }}>{stats.bearish ?? stats.bearish_risk_count ?? 0}</strong></div>
+                <div className="stat-card"><span>✅ This Tab</span><strong>{liveItems.length}</strong></div>
               </div>
-            ) : liveItems.length ? (
-              <div className="stock-grid">
-                {liveItems.map((item: any, i: number) => <StockCard key={item.symbol || i} item={item} onSelect={setSelectedSymbol} />)}
+
+              <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+                {([
+                  { key: "all",       label: "All",             count: allLiveItems.length },
+                  { key: "bullish",   label: "📈 Bullish",       count: allLiveItems.filter((x: any) => x.direction === "bullish").length },
+                  { key: "bearish",   label: "📉 Bearish",       count: allLiveItems.filter((x: any) => x.direction === "bearish").length },
+                  { key: "breakout",  label: "⚡ Breakout",      count: allLiveItems.filter((x: any) => x.entry_label?.includes("BREAKOUT") || x.has_breakout).length },
+                  { key: "high-conf", label: "🎯 High Confidence", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
+                ] as { key: string; label: string; count: number }[]).map(f => (
+                  <button
+                    key={f.key}
+                    className="refresh-btn"
+                    onClick={() => setActiveFilter(f.key)}
+                    style={{
+                      fontSize: 13,
+                      padding: "6px 12px",
+                      background: activeFilter === f.key ? "var(--green, #22c55e)" : undefined,
+                      color: activeFilter === f.key ? "#000" : undefined,
+                      fontWeight: activeFilter === f.key ? 700 : undefined,
+                    }}
+                  >
+                    {f.label} ({f.count})
+                  </button>
+                ))}
               </div>
-            ) : (
-              <p className="empty-msg">No stocks found in this category right now.</p>
-            )}
-          </>
-        )}
-      </main>
+
+              <h2 className="section-title">{TABS.find(t => t.id === tab)?.label} ({liveItems.length} stocks)</h2>
+              {loading ? (
+                <div className="stock-grid">
+                  {[1,2,3,4,5,6].map(i => <div key={i} className="stock-card" style={{ animation: "pulse 1.5s infinite", background: "var(--bg, #1a1a1a)" }}>
+                    <div style={{ height: 120, background: "var(--border, #333)" }}></div>
+                  </div>)}
+                </div>
+              ) : liveItems.length ? (
+                <div className="stock-grid">
+                  {liveItems.map((item: any, i: number) => <StockCard key={item.symbol || i} item={item} onSelect={setSelectedSymbol} />)}
+                </div>
+              ) : (
+                <p className="empty-msg">No stocks found in this category right now.</p>
+              )}
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

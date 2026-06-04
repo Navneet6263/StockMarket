@@ -13,6 +13,7 @@
   --accent-gradient: linear-gradient(135deg, #6366f1, #a855f7, #ec4899);
   --green: #10b981;
   --green-glow: rgba(16, 185, 129, 0.3);
+  --yellow: #eab308;
   --red: #ef4444;
   --red-glow: rgba(239, 68, 68, 0.4);
   --orange: #f59e0b;
@@ -422,3 +423,251 @@ body {
 .oi-bar { height: 6px; border-radius: 3px; margin-top: 6px; transition: width 0.4s; }
 .oi-bar.call { background: linear-gradient(90deg, transparent, var(--red)); opacity: 0.8; }
 .oi-bar.put { background: linear-gradient(270deg, transparent, var(--green)); opacity: 0.8; }
+
+/* ── Index Ticker Bar ──────────────────────────────────────────────────────── */
+.index-ticker-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 0 24px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 20px rgba(0,0,0,0.4);
+}
+.index-ticker-bar::-webkit-scrollbar { display: none; }
+
+.index-ticker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-right: 1px solid rgba(255,255,255,0.05);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.index-ticker-item:hover { background: rgba(255,255,255,0.03); }
+.index-ticker-item:first-child { padding-left: 0; }
+
+.index-ticker-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.index-ticker-price {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.index-ticker-change {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.05);
+}
+
+/* ── Options Index Tabs ───────────────────────────────────────────────────── */
+.options-index-tabs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+  flex-wrap: wrap;
+}
+.options-index-tab {
+  padding: 10px 24px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  letter-spacing: 0.03em;
+}
+.options-index-tab:hover {
+  background: rgba(255,255,255,0.05);
+  color: #fff;
+}
+.options-index-tab.active {
+  background: var(--accent-gradient);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+}
+
+/* ── Options Recommendation Box ──────────────────────────────────────────── */
+.options-rec-box {
+  border-radius: var(--radius);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  position: relative;
+  overflow: hidden;
+  animation: slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.options-rec-box.bullish-rec {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(16, 185, 129, 0.03));
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  box-shadow: 0 0 40px rgba(16, 185, 129, 0.1);
+}
+.options-rec-box.bearish-rec {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(239, 68, 68, 0.03));
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  box-shadow: 0 0 40px rgba(239, 68, 68, 0.1);
+}
+.options-rec-box.no-trade {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(245, 158, 11, 0.02));
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+}
+.options-rec-box.bullish-rec::before {
+  content: '📈';
+  position: absolute;
+  right: 24px; top: 24px;
+  font-size: 64px;
+  opacity: 0.12;
+}
+.options-rec-box.bearish-rec::before {
+  content: '📉';
+  position: absolute;
+  right: 24px; top: 24px;
+  font-size: 64px;
+  opacity: 0.12;
+}
+
+.options-rec-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.options-rec-label {
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+.options-rec-horizon {
+  font-size: 13px;
+  padding: 6px 16px;
+  border-radius: 20px;
+  background: rgba(255,255,255,0.08);
+  color: var(--muted);
+  font-weight: 600;
+}
+.options-rec-main {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.options-rec-strategy {
+  font-size: 18px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.01em;
+}
+.options-rec-levels {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.options-rec-levels > div {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  text-align: center;
+  min-width: 100px;
+}
+.options-rec-levels > div span {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 6px;
+  font-weight: 700;
+}
+.options-rec-levels > div strong {
+  display: block;
+  font-size: 18px;
+  font-weight: 800;
+}
+.options-rec-reasons {
+  background: rgba(0,0,0,0.2);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.options-rec-warning {
+  font-size: 12px;
+  color: var(--orange);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-weight: 500;
+}
+.options-rec-reason {
+  font-size: 15px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+/* ── Options Signal Rows ─────────────────────────────────────────────────── */
+.options-signal-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.signal-bull { color: var(--green); font-weight: 800; font-size: 12px; }
+.signal-bear { color: var(--red); font-weight: 800; font-size: 12px; }
+
+/* ── Warning Banner ──────────────────────────────────────────────────────── */
+.options-warning-banner {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.1), rgba(245, 158, 11, 0.05));
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 12px;
+  padding: 16px 20px;
+  font-size: 14px;
+  color: #fff;
+  line-height: 1.6;
+}
+
+/* ── Stock Option Cards (CE / PE variant) ────────────────────────────────── */
+.options-ce-card { border-color: rgba(16, 185, 129, 0.3) !important; }
+.options-ce-card::before { background: var(--green) !important; }
+.options-pe-card { border-color: rgba(239, 68, 68, 0.3) !important; }
+.options-pe-card::before { background: var(--red) !important; }
+
+/* ── App layout tweak for ticker bar (already defined at top — no duplicate needed) ─── */
+
+@media (max-width: 900px) {
+  .index-ticker-bar { padding: 0 12px; }
+  .options-rec-box { padding: 20px; }
+  .options-rec-main { flex-direction: column; }
+  .options-rec-levels { gap: 12px; }
+  .options-index-tabs { gap: 6px; }
+  .options-index-tab { padding: 8px 14px; font-size: 13px; }
+}
