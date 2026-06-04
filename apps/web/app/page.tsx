@@ -425,7 +425,8 @@ export default function Page() {
   const [tab, setTab] = useState("dashboard");
   const [dataByTab, setDataByTab] = useState<Record<string, any>>({});
   const [summary, setSummary] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);           // true only on very first load
+  const [refreshing, setRefreshing] = useState(false);    // silent background refresh indicator
   const [search, setSearch] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [liveTicks, setLiveTicks] = useState<Record<string, any>>({});
@@ -516,7 +517,16 @@ export default function Page() {
 
   const load = useCallback(async (tabId: string, force = false) => {
     const isCurrentTab = activeTabRef.current === tabId;
-    if (isCurrentTab) setLoading(true);
+    const alreadyHasData = Boolean(dataByTab[tabId]);
+
+    // Only show full loading spinner when tab has NO cached data yet
+    if (isCurrentTab && !alreadyHasData) {
+      setLoading(true);
+    } else if (isCurrentTab && !force) {
+      // Silent background refresh — show tiny refreshing indicator, keep cards visible
+      setRefreshing(true);
+    }
+
     const tabConfig = TABS.find(t => t.id === tabId) || TABS[0];
     try {
       const r = await fetch(`${API_URL}${tabConfig.api}?force_refresh=${force}`, { cache: "no-store" });
@@ -537,12 +547,17 @@ export default function Page() {
         if (tabId === "dashboard") setSummary(json);
       }
     } catch {}
-    if (activeTabRef.current === tabId) setLoading(false);
+    if (activeTabRef.current === tabId) {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     load(tab);
-    const interval = setInterval(() => load(tab), 60000);
+    // Auto-refresh every 90s silently (no skeleton shown)
+    const interval = setInterval(() => load(tab), 90000);
     return () => clearInterval(interval);
   }, [tab, load]);
 
@@ -635,8 +650,13 @@ export default function Page() {
             <p>Updated: {data?.generated_at || data?.lastUpdated ? new Date(data.generated_at || data.lastUpdated).toLocaleString() : "..."}</p>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {refreshing && (
+              <span style={{ fontSize: 11, color: "#888", animation: "pulse 1s infinite" }}>↻ updating…</span>
+            )}
             <span className={`mood-badge ${mood}`}>{humanize(mood)}</span>
-            <button className="refresh-btn" onClick={() => load(tab, true)} disabled={loading}>{loading ? "..." : "Refresh"}</button>
+            <button className="refresh-btn" onClick={() => load(tab, true)} disabled={loading || refreshing}>
+              {loading ? "..." : refreshing ? "↻" : "Refresh"}
+            </button>
           </div>
         </div>
 

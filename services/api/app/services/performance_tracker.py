@@ -94,6 +94,36 @@ class PerformanceTrackerService:
         if not entry_price:
             return
 
+        # ── Quality Gate: only save genuinely strong signals ──────────────────
+        confidence  = float(alert.get("confidence") or 0)
+        rr          = float(alert.get("rr") or 0)
+        stop_loss   = alert.get("stopLoss")
+        direction   = alert.get("direction", "bullish")
+        label       = alert.get("label", "")
+        distance    = float(alert.get("distancePct") or 0)
+
+        # Must have: confidence >= 70, RR >= 1.3, stop loss defined, direction bullish
+        if confidence < 70:
+            logger.info("[PERFORMANCE] %s skipped — confidence %.1f < 70", symbol, confidence)
+            return
+        if rr and rr < 1.3:
+            logger.info("[PERFORMANCE] %s skipped — RR %.2f < 1.3", symbol, rr)
+            return
+        if not stop_loss:
+            logger.info("[PERFORMANCE] %s skipped — no stop loss defined", symbol)
+            return
+        if direction != "bullish":
+            logger.info("[PERFORMANCE] %s skipped — direction is %s (only bullish tracked)", symbol, direction)
+            return
+        if "CHASE" in label.upper() or "FLYING" in label.upper():
+            logger.info("[PERFORMANCE] %s skipped — label is CHASE/FLYING (too late to enter)", symbol)
+            return
+        # Stock must be within 3% of entry (not already far away)
+        if distance > 3.0:
+            logger.info("[PERFORMANCE] %s skipped — already %.1f%% away from entry", symbol, distance)
+            return
+        # ─────────────────────────────────────────────────────────────────────
+
         doc = {
             "symbol":       symbol,
             "entry_price":  round(float(entry_price), 2),
@@ -120,6 +150,7 @@ class PerformanceTrackerService:
         self.collection.insert_one(doc)
         logger.info("[PERFORMANCE] Trade saved: %s @ ₹%.2f (%s)",
                     symbol, entry_price, doc["direction"])
+
 
     # ── Auto exit check — called every 5 min ──────────────────────────────────
 

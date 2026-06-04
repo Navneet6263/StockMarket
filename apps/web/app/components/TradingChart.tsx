@@ -15,6 +15,8 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
   const chartRef = useRef<any>(null);
   const seriesRef = useRef<any>(null);
   const lastCandleTimeRef = useRef<any>(null);
+  const lastUpdateRef = useRef<number>(0);     // throttle: epoch ms of last chart update
+  const lastWsCandle = useRef<any>(null);      // hold latest candle between throttle windows
 
   useEffect(() => {
     const chartData = data?.data || [];
@@ -202,23 +204,55 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
     ws.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
-        
+
         if (payload.type === "CANDLE_UPDATE") {
           const c = payload.data;
-          seriesRef.current.update({
-            time: c.time as Time,
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close,
-          });
+
+          // ── Fix: ensure time is a plain number (Unix seconds) ──────────────
+          let candleTime: number;
+          if (typeof c.time === "number") {
+            candleTime = c.time;
+          } else if (typeof c.time === "object" && c.time !== null) {
+            // lightweight-charts BusinessDay object { year, month, day }
+            const bd = c.time as { year: number; month: number; day: number };
+            candleTime = Math.floor(new Date(bd.year, bd.month - 1, bd.day).getTime() / 1000);
+          } else if (typeof c.time === "string") {
+            candleTime = Math.floor(new Date(c.time).getTime() / 1000);
+          } else {
+            return; // skip unparseable
+          }
+
+          // ── Reject candles older than the last known candle ──────────────
+          if (lastCandleTimeRef.current && candleTime < lastCandleTimeRef.current) {
+            return;
+          }
+
+          const candle = {
+            time: candleTime as Time,
+            open:  Number(c.open),
+            high:  Number(c.high),
+            low:   Number(c.low),
+            close: Number(c.close),
+          };
+
+          // ── Throttle: buffer update, apply max once per second ──────────
+          lastWsCandle.current = candle;
+          const now = Date.now();
+          if (now - lastUpdateRef.current >= 1000) {
+            lastUpdateRef.current = now;
+            if (seriesRef.current) {
+              try {
+                seriesRef.current.update(candle);
+                lastCandleTimeRef.current = candleTime;
+              } catch (_) { /* ignore out-of-order */ }
+            }
+          }
         }
-        
+
         if (payload.type === "PATTERN_DETECTED") {
-          const currentMarkers = seriesRef.current.markers() || [];
+          const currentMarkers = seriesRef.current?.markers() || [];
           const newMarkers = payload.patterns.map((p: any) => {
             let marker: SeriesMarker<any> = { time: p.time as Time, position: 'aboveBar', shape: 'arrowDown', text: p.message, color: '' };
-            
             switch(p.type) {
               case "INSTITUTIONAL_TRAP":
               case "BULL_TRAP":
@@ -246,11 +280,12 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
             }
             return marker;
           });
-          
-          seriesRef.current.setMarkers([...currentMarkers, ...newMarkers]);
+          if (seriesRef.current) {
+            seriesRef.current.setMarkers([...currentMarkers, ...newMarkers]);
+          }
         }
       } catch (err) {
-        console.error("Failed to parse chart WS message", err);
+        // silently suppress — don't log on every bad tick
       }
     };
     
