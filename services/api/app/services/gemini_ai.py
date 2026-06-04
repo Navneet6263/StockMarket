@@ -23,7 +23,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-ENABLE_GEMINI_AI = os.getenv("ENABLE_GEMINI_AI", "true").lower() == "true"
+ENABLE_GEMINI_AI = os.getenv("GEMINI_ENABLED", os.getenv("ENABLE_GEMINI_AI", "true")).lower() == "true"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT_SEC", "15"))
@@ -35,6 +35,8 @@ GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
 _cache: Dict[str, tuple[float, Dict]] = {}
 _last_success_by_symbol: Dict[str, tuple[float, Dict]] = {}
 _cache_lock = threading.Lock()
+_consecutive_429_errors = 0
+_cooldown_until = 0.0
 
 
 def _cached(key: str) -> Dict | None:
@@ -87,6 +89,10 @@ def analyze_stock_with_ai(
 
     if not ENABLE_GEMINI_AI or not GEMINI_API_KEY:
         return _unavailable("gemini_disabled_or_no_key")
+
+    with _cache_lock:
+        if time.time() < _cooldown_until:
+            return _stale_success(symbol, "gemini_in_cooldown") or _unavailable("gemini_in_cooldown")
 
     try:
         prompt = _build_prompt(symbol, technical, news, earnings, insider, recommendations, market_context)
@@ -216,6 +222,7 @@ def _build_prompt(
 
 def _call_gemini(prompt: str) -> Dict[str, Any] | None:
     """Call Gemini API and return text plus small diagnostics."""
+    global _consecutive_429_errors, _cooldown_until
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
     generation_config: Dict[str, Any] = {
@@ -233,9 +240,24 @@ def _call_gemini(prompt: str) -> Dict[str, Any] | None:
 
     try:
         resp = requests.post(url, json=payload, timeout=GEMINI_TIMEOUT)
+        
+        if resp.status_code == 429:
+            with _cache_lock:
+                _consecutive_429_errors += 1
+                if _consecutive_429_errors >= 3:
+                    _cooldown_until = time.time() + 60.0
+                    logger.warning("[GEMINI] 3 consecutive 429 errors. Pausing all calls for 60 seconds.")
+                else:
+                    logger.warning(f"[GEMINI] 429 quota exceeded. Error count: {_consecutive_429_errors}")
+            return {"text": "", "errorReason": "gemini_http_429_quota_exceeded"}
+
         if resp.status_code != 200:
             logger.warning("[GEMINI] API returned %d: %s", resp.status_code, resp.text[:200])
             return {"text": "", "errorReason": f"gemini_http_{resp.status_code}"}
+            
+        with _cache_lock:
+            _consecutive_429_errors = 0
+            
         data = resp.json()
         candidates = data.get("candidates", [])
         if candidates:
