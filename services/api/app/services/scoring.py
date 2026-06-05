@@ -147,6 +147,16 @@ class ScoringEngine:
         if rs_delta > 0:
             score += 1
             reasons.append("Relative strength vs benchmark is improving.")
+            
+        # Order Flow / Level 2 Iceberg Detection
+        bid_ask = self._safe(snapshot, "bid_ask_ratio", 1.0)
+        total_buy_qty = self._safe(snapshot, "total_buy_qty", 0)
+        if distance_to_resistance <= 2.5 and bid_ask >= 2.5 and total_buy_qty > 50000:
+            score += 4
+            labels.append("ICEBERG_ACCUMULATION")
+            labels.append("PRE_BREAKOUT_CONFIRMED")
+            reasons.insert(0, f"Order Book shows massive institutional bidding ({bid_ask:.1f}x buyers) near resistance.")
+            
         if advanced_score >= 75 and advanced.get("direction") == "bullish":
             score += 4
             labels.extend(str(label) for label in advanced.get("labels", [])[:4])
@@ -156,7 +166,7 @@ class ScoringEngine:
             labels.extend(str(label) for label in advanced.get("labels", [])[:3])
             reasons.insert(0, f"{advanced.get('pattern_name')} adds chart-pattern confluence.")
 
-        if score < 4 and advanced_score < 68:
+        if score < 4 and advanced_score < 68 and "ICEBERG_ACCUMULATION" not in labels:
             return {
                 "is_pre_breakout": False,
                 "pre_breakout_labels": list(dict.fromkeys(labels)),

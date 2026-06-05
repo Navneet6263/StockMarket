@@ -180,9 +180,35 @@ class LiveOptionsChainService:
         spot_data = get_angelone_live().get_live_price(symbol)
         spot_price = spot_data.get("ltp", 0) if spot_data else 0
         
+        # Calculate Time to Expiry (T)
+        expiry_str = self._chain_meta[symbol]["expiry"]
+        try:
+            expiry_date = datetime.strptime(expiry_str, "%d%b%Y").replace(hour=15, minute=30, tzinfo=timezone.utc)
+            # Assuming IST roughly, just use an approximation
+            T = max(0.001, (expiry_date - datetime.now(timezone.utc)).total_seconds() / (365.25 * 86400))
+        except Exception:
+            T = 0.01
+            
+        from app.services.greeks import black_scholes_iv_and_greeks
+        
         for s in strikes:
             if spot_price > 0:
                 s["itm"] = (s["strike"] < spot_price and s["ce_ltp"] > 0) or (s["strike"] > spot_price and s["pe_ltp"] > 0)
+                
+            # Calculate Greeks if ltp > 0
+            if spot_price > 0 and s["ce_ltp"] > 0:
+                greeks_ce = black_scholes_iv_and_greeks("CE", spot_price, s["strike"], T, 0.07, s["ce_ltp"])
+                s["ce_iv"] = greeks_ce["iv"]
+                s["ce_greeks"] = greeks_ce
+            else:
+                s["ce_greeks"] = {"iv": 0.0, "delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+                
+            if spot_price > 0 and s["pe_ltp"] > 0:
+                greeks_pe = black_scholes_iv_and_greeks("PE", spot_price, s["strike"], T, 0.07, s["pe_ltp"])
+                s["pe_iv"] = greeks_pe["iv"]
+                s["pe_greeks"] = greeks_pe
+            else:
+                s["pe_greeks"] = {"iv": 0.0, "delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
                 
         pcr = (total_pe_oi / total_ce_oi) if total_ce_oi > 0 else 1.0
         
@@ -192,13 +218,11 @@ class LiveOptionsChainService:
         
         for eval_strike in [s["strike"] for s in strikes]:
             total_loss = 0
-            for s in strikes:
-                # Loss for CE writer if expiry is at eval_strike
-                if eval_strike > s["strike"]:
-                    total_loss += (eval_strike - s["strike"]) * s["ce_oi"]
-                # Loss for PE writer if expiry is at eval_strike
-                if eval_strike < s["strike"]:
-                    total_loss += (s["strike"] - eval_strike) * s["pe_oi"]
+            for s_inner in strikes:
+                if eval_strike > s_inner["strike"]:
+                    total_loss += (eval_strike - s_inner["strike"]) * s_inner["ce_oi"]
+                if eval_strike < s_inner["strike"]:
+                    total_loss += (s_inner["strike"] - eval_strike) * s_inner["pe_oi"]
                     
             if total_loss < min_loss:
                 min_loss = total_loss
@@ -209,7 +233,7 @@ class LiveOptionsChainService:
         return {
             "type": "OPTIONS_SNAPSHOT",
             "symbol": symbol,
-            "expiry": self._chain_meta[symbol]["expiry"],
+            "expiry": expiry_str,
             "pcr": round(pcr, 2),
             "max_pain": max_pain,
             "spot_price": spot_price,

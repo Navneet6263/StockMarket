@@ -94,7 +94,7 @@ class LivePriceFeed:
                     {"exchangeType": ex_type, "tokens": tokens}
                     for ex_type, tokens in exchange_token_map.items()
                 ]
-                self._sws.subscribe("abc123", 1, token_list)
+                self._sws.subscribe("abc123", 3, token_list)
                 logger.info("[LIVE_FEED] Dynamically added %d new symbols (total: %d)", added, len(self._tokens))
             except Exception as exc:
                 logger.warning("[LIVE_FEED] Dynamic subscribe failed: %s", exc)
@@ -151,6 +151,19 @@ class LivePriceFeed:
                         "close": float(data.get("closed_price", 0)) / 100,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
+                    
+                    # Parse Level 2 Order Book (Market Depth) from Mode 3
+                    buy_qty = 0
+                    sell_qty = 0
+                    if "best_5_buy_data" in data:
+                        buy_qty = sum(item.get("quantity", 0) for item in data["best_5_buy_data"])
+                    if "best_5_sell_data" in data:
+                        sell_qty = sum(item.get("quantity", 0) for item in data["best_5_sell_data"])
+                    
+                    price_data["total_buy_qty"] = buy_qty
+                    price_data["total_sell_qty"] = sell_qty
+                    price_data["bid_ask_ratio"] = round(buy_qty / sell_qty, 2) if sell_qty > 0 else (99.0 if buy_qty > 0 else 1.0)
+                    
                     with self._lock:
                         self._prices[symbol] = price_data
                     for cb in self._subscribers:
@@ -162,7 +175,7 @@ class LivePriceFeed:
                     pass
 
             def on_open(wsapp):
-                sws.subscribe("abc123", 1, token_list)  # mode 1 = LTP
+                sws.subscribe("abc123", 3, token_list)  # mode 3 = SnapQuote (Full Depth)
 
             def on_error(wsapp, error):
                 logger.warning("[LIVE_FEED] WS error: %s", error)

@@ -235,10 +235,18 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
         entry_rule = "Strict option gate blocked this setup."
         confidence = round(score, 1)
 
+    import datetime
+    today_weekday = datetime.datetime.now().weekday() # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+    if today_weekday in [2, 3]:
+        expiry_rule = "⚠️ THETA DANGER (Wed/Thu): DO NOT buy current week expiry. Strictly buy NEXT week's expiry to avoid zero-gamma trap."
+    else:
+        expiry_rule = "Prefer current expiry ONLY if 3+ sessions remain. Otherwise shift to next week."
+
     target_rule = f"First underlying target near {_fmt_price(target)}." if target else "Book by price action; target unavailable."
-    invalidation_rule = f"Exit option if underlying fails {_fmt_price(fail)} or option premium loses 25-30%."
-    expiry_rule = "Prefer ATM/ITM next expiry with 3+ sessions left; otherwise use next monthly. Avoid far OTM weekly."
-    risk_rule = "Max premium risk 0.25-0.50% of capital; no averaging losing options."
+    invalidation_rule = f"Exit option if underlying fails {_fmt_price(fail)} or if option premium loses 25% (Auto-Cut)."
+    risk_rule = "Max premium risk 0.50% of capital. No averaging losing options."
+    
+    instrument_rule = f"Strictly {option_side} with Delta > 0.45 (ATM/ITM). Block if IV Percentile > 60% (Avoid IV Crush)."
 
     return {
         "symbol": symbol,
@@ -251,7 +259,7 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
         "underlyingTrigger": _fmt_price(trigger),
         "underlyingInvalidation": _fmt_price(fail),
         "distanceToTriggerPct": distance,
-        "instrumentRule": f"Use liquid ATM/ITM {option_side}; avoid far OTM.",
+        "instrumentRule": instrument_rule,
         "entryRule": entry_rule,
         "targetRule": target_rule,
         "invalidationRule": invalidation_rule,

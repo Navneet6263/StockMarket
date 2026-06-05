@@ -153,6 +153,53 @@ def compute_sector_strength(
         return _unknown(f"compute_error: {exc}")
 
 
+def rank_global_sectors(all_signals: List[Dict]) -> Dict[str, Dict]:
+    """
+    Ranks all mapped sectors based on their average 20-day return.
+    Returns a dict mapping sector name to its global rank data (rank, category: top_3, bottom_3, neutral).
+    """
+    sector_returns = {}
+    for s in all_signals:
+        sec = get_sector(s.get("symbol", ""))
+        ret = s.get("return_20d")
+        if sec and ret is not None:
+            if sec not in sector_returns:
+                sector_returns[sec] = []
+            sector_returns[sec].append(float(ret))
+            
+    # Calculate averages
+    sector_avgs = []
+    for sec, returns in sector_returns.items():
+        if len(returns) >= 2: # At least 2 stocks
+            sector_avgs.append({
+                "sector": sec,
+                "avg_return": sum(returns) / len(returns)
+            })
+            
+    # Sort sectors descending by average return
+    sector_avgs.sort(key=lambda x: x["avg_return"], reverse=True)
+    
+    ranked_map = {}
+    total_sectors = len(sector_avgs)
+    
+    for i, data in enumerate(sector_avgs):
+        rank = i + 1
+        category = "neutral"
+        if rank <= 3:
+            category = "top_3"
+        elif total_sectors >= 6 and rank > total_sectors - 3:
+            category = "bottom_3"
+            
+        ranked_map[data["sector"]] = {
+            "rank": rank,
+            "total_sectors": total_sectors,
+            "avg_return": round(data["avg_return"], 2),
+            "category": category
+        }
+        
+    return ranked_map
+
+
 def _unknown(reason: str) -> Dict:
     return {
         "sectorStrength": "unknown",
@@ -165,4 +212,5 @@ def _unknown(reason: str) -> Dict:
         "sectorRank": "unknown",
         "sectorReason": reason,
         "sectorAvailable": False,
+        "globalSectorCategory": "neutral"
     }

@@ -194,6 +194,20 @@ class PerformanceTrackerService:
 
                 exit_reason = None
 
+                # Trailing Stop Loss (Risk-Free at 1:2 RR)
+                if stop_loss and target1 and not exit_reason:
+                    risk = abs(entry_price - float(stop_loss))
+                    if risk > 0:
+                        reward = (current_price - entry_price) if direction == "bullish" else (entry_price - current_price)
+                        if reward >= 1.5 * risk:  # At 1:1.5 or 1:2 RR, move SL to entry
+                            new_sl = entry_price
+                            # Update SL only if it's tightening
+                            if (direction == "bullish" and float(stop_loss) < new_sl) or \
+                               (direction == "bearish" and float(stop_loss) > new_sl):
+                                self.collection.update_one({"_id": pos["_id"]}, {"$set": {"stop_loss": new_sl}})
+                                pos["stop_loss"] = new_sl
+                                stop_loss = new_sl
+
                 # 1. Hard Stop Loss / Target
                 if direction == "bullish":
                     if stop_loss and current_price <= float(stop_loss):

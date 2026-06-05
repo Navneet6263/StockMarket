@@ -12,7 +12,7 @@ import pandas as pd
 from app.services.base_quality import score_base_quality
 from app.services.delivery_analysis import analyse_delivery
 from app.services.market_breadth import compute_market_breadth, should_block_buy
-from app.services.sector_strength import compute_sector_strength
+from app.services.sector_strength import compute_sector_strength, rank_global_sectors
 from app.services.swing_ml import compute_swing_5d
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ def enrich_signal(
     frame: pd.DataFrame,
     market_context: Dict,
     all_signals: List[Dict],
+    global_sectors: Dict[str, Dict],
     ml_model=None,
 ) -> Dict:
     """
@@ -58,6 +59,14 @@ def enrich_signal(
         signal.get("return_20d"),
         all_signals,
     )
+    
+    # Apply global sector ranking
+    sec_name = sector.get("sector")
+    if sec_name and sec_name in global_sectors:
+        sector["globalSectorRank"] = global_sectors[sec_name]["rank"]
+        sector["globalSectorCategory"] = global_sectors[sec_name]["category"]
+    else:
+        sector["globalSectorCategory"] = "neutral"
 
     # ── Final smart score ─────────────────────────────────────────────────────
     chart_score = max(
@@ -159,6 +168,10 @@ def build_smart_scan_payload(
 
     # ── A: Market breadth (once for all) ─────────────────────────────────────
     market_context = compute_market_breadth(benchmark_frame, all_results)
+    
+    # Global Sector Ranking
+    global_sectors = rank_global_sectors(all_results)
+    
     logger.info(
         "[SMART] marketMood=%s freshBuyBlocked=%s totalSignals=%d",
         market_context.get("marketMood"),
@@ -185,6 +198,7 @@ def build_smart_scan_payload(
             frame,
             market_context,
             all_results,
+            global_sectors,
             ml_model=ml_models.get(symbol.upper()),
         )
         enriched_map[symbol] = enriched
@@ -298,6 +312,14 @@ def _market_score(market_context: Dict, sector: Dict) -> float:
     rs = sector.get("relativeStrengthScore")
     if rs is not None:
         base = min(base + float(rs) * 8, 100)
+        
+    # Apply Global Sector Top 3 / Bottom 3 Bonus
+    global_category = sector.get("globalSectorCategory", "neutral")
+    if global_category == "top_3":
+        base = min(base + 20, 100)
+    elif global_category == "bottom_3":
+        base = max(base - 20, 0)
+        
     return max(base, 0)
 
 
