@@ -295,7 +295,7 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
       .then(([d, c]) => { 
         if (!isMounted) return;
         setDetail(d); 
-        if (c) setChartData(c);
+        setChartData(c || { data: [], active_zones: [] });
         setLoading(false); 
       })
       .catch(() => {

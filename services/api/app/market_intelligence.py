@@ -45,14 +45,26 @@ class MarketIntelligenceService:
             return None
 
     def _fetch_metric(self, ticker: str, period: str = "5d") -> Dict:
+        import math
         hist = yf.Ticker(ticker).history(period=period, auto_adjust=False)
         if hist.empty:
             raise ValueError(f"no data for {ticker}")
 
-        latest = float(hist["Close"].iloc[-1])
-        previous = float(hist["Close"].iloc[-2]) if len(hist) > 1 else latest
+        close_series = hist["Close"].ffill().dropna()
+        if close_series.empty:
+            raise ValueError(f"no valid close data for {ticker}")
+
+        latest = float(close_series.iloc[-1])
+        previous = float(close_series.iloc[-2]) if len(close_series) > 1 else latest
+        
+        if math.isnan(latest): latest = 0.0
+        if math.isnan(previous): previous = 0.0
+        
         change = latest - previous
-        change_pct = ((change / previous) * 100) if previous else 0.0
+        change_pct = ((change / previous) * 100) if previous and not math.isnan(previous) and previous != 0 else 0.0
+
+        if math.isnan(change): change = 0.0
+        if math.isnan(change_pct): change_pct = 0.0
 
         return {
             "symbol": ticker,

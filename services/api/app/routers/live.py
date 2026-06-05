@@ -59,6 +59,33 @@ async def chart_websocket(websocket: WebSocket, symbol: str):
     except Exception:
         aggregator.unsubscribe(symbol.upper(), queue)
 
+@router.get("/chart/history/{symbol}")
+async def chart_history(symbol: str):
+    """Fetch historical OHLC data for the chart initialization."""
+    from app.services.data_provider import MarketDataService
+    from app.core.settings import get_settings
+    import pandas as pd
+    
+    try:
+        data_service = MarketDataService(get_settings())
+        df = await asyncio.to_thread(data_service.fetch_history, symbol, period="5d", interval="15m")
+        if df.empty:
+            return {"data": []}
+        
+        candles = []
+        for idx, row in df.iterrows():
+            candles.append({
+                "time": int(idx.timestamp()),
+                "open": float(row['Open']),
+                "high": float(row['High']),
+                "low": float(row['Low']),
+                "close": float(row['Close']),
+            })
+        return {"data": candles[-100:]}
+    except Exception as e:
+        logger.warning(f"Failed to fetch chart history for {symbol}: {e}")
+        return {"data": []}
+
 active_options_websockets: set[WebSocket] = set()
 active_options_websockets_lock = asyncio.Lock()
 

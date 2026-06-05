@@ -37,7 +37,7 @@ def _attach_live_price(pos: dict) -> dict:
 
 
 @router.get("/open")
-async def get_open_positions():
+def get_open_positions():
     tracker   = get_performance_tracker()
     positions = list(tracker.collection.find(
         {"status": {"$in": ["open", "live_executed"]}}, {"_id": 0}
@@ -47,7 +47,7 @@ async def get_open_positions():
 
 
 @router.get("/history")
-async def get_history():
+def get_history():
     tracker   = get_performance_tracker()
     positions = list(tracker.collection.find(
         {"status": {"$in": ["closed", "target_hit", "stopped"]}},
@@ -57,7 +57,7 @@ async def get_history():
 
 
 @router.post("/close/{symbol}")
-async def close_position(symbol: str):
+def close_position(symbol: str):
     tracker = get_performance_tracker()
     return tracker.manual_close(symbol.upper())
 
@@ -67,13 +67,17 @@ async def performance_websocket(websocket: WebSocket):
     await websocket.accept()
     async with active_perf_websockets_lock:
         active_perf_websockets.add(websocket)
+        
+    def _fetch_snapshot():
+        tracker   = get_performance_tracker()
+        positions = list(tracker.collection.find(
+            {"status": {"$in": ["open", "live_executed"]}}, {"_id": 0}
+        ))
+        return [_attach_live_price(p) for p in positions]
+
     try:
         while True:
-            tracker   = get_performance_tracker()
-            positions = list(tracker.collection.find(
-                {"status": {"$in": ["open", "live_executed"]}}, {"_id": 0}
-            ))
-            positions = [_attach_live_price(p) for p in positions]
+            positions = await asyncio.to_thread(_fetch_snapshot)
             await websocket.send_json({
                 "type":           "PERFORMANCE_SNAPSHOT",
                 "open_positions": positions,

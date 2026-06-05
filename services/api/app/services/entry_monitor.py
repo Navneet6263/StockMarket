@@ -204,11 +204,21 @@ class EntryMonitor:
         }
 
         with self._lock:
-            # Remove duplicate if same symbol already queued
-            existing = [e for e in self._live_entries if e["symbol"] != symbol]
-            self._live_entries.clear()
-            self._live_entries.extend(existing)
-            self._live_entries.appendleft(alert)  # newest first
+            # Find if it already exists
+            existing_idx = next((i for i, e in enumerate(self._live_entries) if e["symbol"] == symbol), None)
+            
+            if existing_idx is not None:
+                # Update in-place so it doesn't jump around the UI
+                self._live_entries[existing_idx].update({
+                    "livePrice": alert["livePrice"],
+                    "distancePct": alert["distancePct"],
+                    "label": alert["label"],
+                    "detected_at": alert["detected_at"],
+                    "detected_at_epoch": alert["detected_at_epoch"],
+                })
+            else:
+                self._live_entries.appendleft(alert)  # newest first
+                
             self._last_alerted[symbol] = now
 
         logger.info(

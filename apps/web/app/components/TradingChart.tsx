@@ -21,7 +21,7 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
   useEffect(() => {
     const chartData = data?.data || [];
     const zones = data?.active_zones || [];
-    if (!chartContainerRef.current || chartData.length === 0) return;
+    if (!chartContainerRef.current) return;
 
     const handleResize = () => {
       if (chartRef.current && chartContainerRef.current) {
@@ -80,7 +80,9 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
       };
     });
     
-    candlestickSeries.setData(formattedData);
+    if (formattedData.length > 0) {
+      candlestickSeries.setData(formattedData);
+    }
 
     // Add Markers for Traps / Signals
     if (prediction && formattedData.length > 0) {
@@ -195,6 +197,7 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
   useEffect(() => {
     if (!symbol || !seriesRef.current) return;
     
+    let isMounted = true;
     const wsProtocol = window.location.protocol === "https:" || API_URL.startsWith("https") ? "wss:" : "ws:";
     const host = API_URL.replace(/^https?:\/\//, "");
     const wsUrl = `${wsProtocol}//${host}/api/live/ws/chart/${symbol}`;
@@ -208,19 +211,12 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
         if (payload.type === "CANDLE_UPDATE") {
           const c = payload.data;
 
-          // ── Fix: ensure time is a plain number (Unix seconds) ──────────────
-          let candleTime: number;
-          if (typeof c.time === "number") {
-            candleTime = c.time;
-          } else if (typeof c.time === "object" && c.time !== null) {
-            // lightweight-charts BusinessDay object { year, month, day }
-            const bd = c.time as { year: number; month: number; day: number };
-            candleTime = Math.floor(new Date(bd.year, bd.month - 1, bd.day).getTime() / 1000);
-          } else if (typeof c.time === "string") {
-            candleTime = Math.floor(new Date(c.time).getTime() / 1000);
-          } else {
-            return; // skip unparseable
+          const rawTime = c.time ?? c.start_time;
+          let candleTime = Number(rawTime);
+          if (isNaN(candleTime) && typeof rawTime === "string") {
+            candleTime = Math.floor(new Date(rawTime).getTime() / 1000);
           }
+          if (!candleTime) return;
 
           // ── Reject candles older than the last known candle ──────────────
           if (lastCandleTimeRef.current && candleTime < lastCandleTimeRef.current) {
@@ -285,11 +281,14 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
           }
         }
       } catch (err) {
-        // silently suppress — don't log on every bad tick
+        // silently suppress
       }
     };
     
-    return () => ws.close();
+    return () => {
+      isMounted = false;
+      ws.close();
+    };
   }, [symbol]);
 
   return (

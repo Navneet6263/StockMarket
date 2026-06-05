@@ -122,7 +122,7 @@ class OHLCAggregator:
 
     def process_tick(self, symbol: str, tick: dict):
         now = time.time()
-        candle_start = now - (now % self.interval)
+        candle_start = int(now - (now % self.interval))
         
         if symbol not in self.candle_history:
             self.candle_history[symbol] = []
@@ -151,7 +151,7 @@ class OHLCAggregator:
                     
             # Start a new candle period
             self.current_candles[symbol] = {
-                "time": candle_start,
+                "time": int(candle_start),
                 "open": tick["ltp"],
                 "high": tick["ltp"],
                 "low": tick["ltp"],
