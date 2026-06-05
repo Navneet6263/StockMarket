@@ -667,7 +667,8 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
               <div className="stock-grid">
                 {stockOptions.slice(0, 6).map((stock: any) => {
                   const isBull = stock.direction === "bullish";
-                  const price = stock.currentPrice ?? stock.current_price ?? stock.price ?? 0;
+                  const rawPrice = stock.currentPrice ?? stock.current_price ?? stock.price ?? 0;
+                  const price = Number(asNumber(rawPrice) || 0);
                   const step = price < 500 ? 10 : price < 2000 ? 50 : price < 5000 ? 100 : 200;
                   const atmStrike = Math.round(price / step) * step;
                   const conf = stock.confidence ?? stock.score ?? 0;
