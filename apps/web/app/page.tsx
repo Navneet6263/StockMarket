@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API_URL, humanize, fmt, fmtPct } from "./lib/market";
+import { API_URL, humanize, fmt, fmtPct, asNumber } from "./lib/market";
 import TradingChart from "./components/TradingChart";
 
 const TABS = [
