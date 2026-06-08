@@ -395,6 +395,14 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
         "newsSectorCatalyst": round(min(20, catalyst_score), 1),
     }
     raw_score = sum(breakdown.values())
+    
+    # Inject Sector Strength +/- 20 Bonus
+    global_category = signal.get("globalSectorCategory", "neutral")
+    if global_category == "top_3":
+        raw_score = min(raw_score + 20, 100)
+    elif global_category == "bottom_3":
+        raw_score = max(raw_score - 20, 0)
+        
     score = max(0, min(100, raw_score))
     if confidence:
         score = round((score * 0.72) + (min(100, confidence) * 0.28), 1)
@@ -749,7 +757,17 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
     if scan.get("cache_status") in {"stale", "refresh_failed_stale", "tracked_fallback", "refresh_in_progress"}:
         warnings.append("Showing cached or persisted scanner data while live scan refreshes.")
 
-    mapped = [map_pick(signal, last_updated) for signal in _all_signals(scan)]
+    from app.services.sector_strength import rank_global_sectors, get_sector
+    all_signals_list = _all_signals(scan)
+    global_sectors = rank_global_sectors(all_signals_list)
+    
+    # Inject global sector category into signals before mapping
+    for sig in all_signals_list:
+        sec = get_sector(sig.get("symbol", ""))
+        if sec and sec in global_sectors:
+            sig["globalSectorCategory"] = global_sectors[sec]["category"]
+
+    mapped = [map_pick(signal, last_updated) for signal in all_signals_list]
     mapped.sort(key=lambda item: item["score"], reverse=True)
 
     # Make active scanner calls "sticky" so they don't disappear on small intraday dips

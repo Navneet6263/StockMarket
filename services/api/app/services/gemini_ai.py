@@ -203,10 +203,11 @@ def _build_prompt(
     return (
         "Act as a senior Indian equity swing-trading analyst. Use only the supplied JSON; "
         "do not invent news or fundamentals. Keep output short and practical for a trading dashboard. "
-        "Respect scanner levels; do not create new entry/target/stop prices. "
+        "Respect scanner levels; do not create new entry/target/stop prices. ALWAYS use '₹' or 'INR' for prices, NEVER use dollars ($). "
+        "If direction is 'bearish', consider SELL/SHORT actions instead of BUY. "
         "If marketMood is bearish, avoid aggressive fresh-buy wording unless evidence is very strong. "
         "Return valid compact JSON only with keys: "
-        "conviction integer 0-100, action one of BUY/WATCH/AVOID/WAIT_FOR_PULLBACK, "
+        "conviction integer 0-100, action one of BUY/SELL/SHORT/WATCH/AVOID/WAIT_FOR_PULLBACK, "
         "reason max 260 chars, risks array of 1-2 strings max 100 chars each, "
         "timeframe one of intraday/2-3 days/1 week/2 weeks, "
         "newsImpact positive/negative/neutral/unknown, tradePlan max 180 chars.\n"
@@ -326,7 +327,7 @@ def _bounded_int(value: Any, default: int) -> int:
 
 def _normalize_action(value: Any) -> str:
     action = str(value or "WATCH").strip().upper()
-    allowed = {"BUY", "WATCH", "AVOID", "WAIT_FOR_PULLBACK"}
+    allowed = {"BUY", "WATCH", "AVOID", "WAIT_FOR_PULLBACK", "SELL", "SHORT"}
     return action if action in allowed else "WATCH"
 
 

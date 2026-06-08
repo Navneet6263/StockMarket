@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Dict, List
+import os
 
 import numpy as np
 
@@ -151,7 +152,8 @@ class ScoringEngine:
         # Order Flow / Level 2 Iceberg Detection
         bid_ask = self._safe(snapshot, "bid_ask_ratio", 1.0)
         total_buy_qty = self._safe(snapshot, "total_buy_qty", 0)
-        if distance_to_resistance <= 2.5 and bid_ask >= 2.5 and total_buy_qty > 50000:
+        iceberg_threshold = int(os.getenv("ICEBERG_MAX_OI_THRESHOLD", "50000"))
+        if distance_to_resistance <= 2.5 and bid_ask >= 2.5 and total_buy_qty > iceberg_threshold:
             score += 4
             labels.append("ICEBERG_ACCUMULATION")
             labels.append("PRE_BREAKOUT_CONFIRMED")

@@ -144,6 +144,7 @@ class PerformanceTrackerService:
             "days_held":    None,
             "pnl":          None,
             "pnl_pct":      None,
+            "atr_pct":      alert.get("atr_pct") or alert.get("raw", {}).get("atr_pct", 2.5),
             "order_type":   "paper",   # upgraded to "live" by broker sync
         }
 
@@ -194,19 +195,36 @@ class PerformanceTrackerService:
 
                 exit_reason = None
 
-                # Trailing Stop Loss (Risk-Free at 1:2 RR)
+                # Trailing Stop Loss (ATR-based dynamic trailing)
                 if stop_loss and target1 and not exit_reason:
                     risk = abs(entry_price - float(stop_loss))
                     if risk > 0:
                         reward = (current_price - entry_price) if direction == "bullish" else (entry_price - current_price)
-                        if reward >= 1.5 * risk:  # At 1:1.5 or 1:2 RR, move SL to entry
-                            new_sl = entry_price
-                            # Update SL only if it's tightening
-                            if (direction == "bullish" and float(stop_loss) < new_sl) or \
-                               (direction == "bearish" and float(stop_loss) > new_sl):
-                                self.collection.update_one({"_id": pos["_id"]}, {"$set": {"stop_loss": new_sl}})
-                                pos["stop_loss"] = new_sl
-                                stop_loss = new_sl
+                        if reward >= 1.5 * risk:  # At 1:1.5 RR, start trailing
+                            atr_pct = pos.get("atr_pct", 2.5) / 100.0
+                            atr_value = current_price * atr_pct
+                            
+                            # Shift SL to Current Price - (1.5 * ATR)
+                            if direction == "bullish":
+                                new_sl = current_price - (1.5 * atr_value)
+                                # Only tighten, never loosen
+                                if new_sl > float(stop_loss):
+                                    self.collection.update_one({"_id": pos["_id"]}, {"$set": {"stop_loss": new_sl}})
+                                    pos["stop_loss"] = new_sl
+                                    stop_loss = new_sl
+                            else:
+                                new_sl = current_price + (1.5 * atr_value)
+                                # Only tighten, never loosen
+                                if new_sl < float(stop_loss):
+                                    self.collection.update_one({"_id": pos["_id"]}, {"$set": {"stop_loss": new_sl}})
+                                    pos["stop_loss"] = new_sl
+                                    stop_loss = new_sl
+                                    
+                # Option Premium 25% Auto-Cut Rule (if tracking option premium)
+                if pos.get("is_option") and not exit_reason:
+                    # Assuming entry_price is option premium
+                    if current_price <= entry_price * 0.75:
+                        exit_reason = "Option Premium 25% Auto-Cut"
 
                 # 1. Hard Stop Loss / Target
                 if direction == "bullish":

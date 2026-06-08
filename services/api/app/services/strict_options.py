@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
 from app.market_universe_config import FNO_STOCKS
 
+# God-Tier Options Rules - IV Crush Protection
+IV_CRUSH_BLOCK_THRESHOLD = float(os.getenv("IV_CRUSH_BLOCK_THRESHOLD", "60.0"))
+IV_CRUSH_WARNING_THRESHOLD = float(os.getenv("IV_CRUSH_WARNING_THRESHOLD", "40.0"))
+MIN_DELTA_FOR_OPTION_BUY = float(os.getenv("MIN_DELTA_FOR_OPTION_BUY", "0.45"))
+MAX_HV_PROXY_FOR_OPTION_BUY = float(os.getenv("MAX_HV_PROXY_FOR_OPTION_BUY", "60.0"))
 
 STRICT_OPTIONS_DISCLAIMER = (
     "Options are high risk. Scanner shows research-only option ideas only when strict gates pass; "
@@ -12,6 +18,26 @@ STRICT_OPTIONS_DISCLAIMER = (
 )
 
 FNO_SYMBOLS = {symbol.upper() for symbol in FNO_STOCKS}
+
+_dynamic_fno_symbols = None
+
+def is_fno_symbol(symbol: str) -> bool:
+    global _dynamic_fno_symbols
+    if _dynamic_fno_symbols is None:
+        try:
+            from app.services.broker_adapter import get_broker_adapter
+            adapter = get_broker_adapter()
+            if not adapter.token_df:
+                adapter._load_tokens()
+            if adapter.token_df:
+                fno = {row.get("name") for row in adapter.token_df if row.get("exch_seg") == "NFO"}
+                if fno:
+                    _dynamic_fno_symbols = {str(s).upper() for s in fno if s}
+            if not _dynamic_fno_symbols:
+                _dynamic_fno_symbols = FNO_SYMBOLS
+        except Exception:
+            _dynamic_fno_symbols = FNO_SYMBOLS
+    return symbol.upper() in _dynamic_fno_symbols
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -180,7 +206,7 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
 
     if not symbol:
         blockers.append("Missing symbol.")
-    elif symbol not in FNO_SYMBOLS:
+    elif not is_fno_symbol(symbol):
         blockers.append("Not in F&O universe; no stock option idea.")
     if direction not in {"bullish", "bearish"}:
         blockers.append("No clear direction.")
@@ -212,6 +238,19 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
     if stop_pct > 4.0:
         blockers.append("Underlying stop is too wide for option buying.")
 
+    # God-Tier IV Crush Protection - Block option buying when IV/HV too high
+    iv_percentile = _safe_float(item.get("iv_percentile") or item.get("hv_percentile"))
+    if iv_percentile and iv_percentile > IV_CRUSH_BLOCK_THRESHOLD:
+        blockers.append(f"IV Percentile ({iv_percentile:.0f}%) > {IV_CRUSH_BLOCK_THRESHOLD}% — SKIP option buying. IV crush risk.")
+    elif iv_percentile and iv_percentile > IV_CRUSH_WARNING_THRESHOLD:
+        blockers.append(f"IV Percentile ({iv_percentile:.0f}%) > {IV_CRUSH_WARNING_THRESHOLD}% — CAUTION: High IV crush risk.")
+
+    atr_pct = _safe_float(raw.get("atr_pct"))
+    hv_proxy = (atr_pct * 15.87) if atr_pct else 0.0
+    # Additional HV proxy check
+    if hv_proxy > MAX_HV_PROXY_FOR_OPTION_BUY:
+        blockers.append(f"HV Proxy ({hv_proxy:.1f}%) is too high. High risk of IV Crush.")
+
     ready_blockers = [reason for reason in blockers if "within 1% alert zone" not in reason]
     if not ready_blockers and trigger_crossed and volume_confirmed:
         status = "STRICT_READY"
@@ -236,17 +275,19 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
         confidence = round(score, 1)
 
     import datetime
-    today_weekday = datetime.datetime.now().weekday() # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+    today_weekday = datetime.datetime.now().weekday()
     if today_weekday in [2, 3]:
-        expiry_rule = "⚠️ THETA DANGER (Wed/Thu): DO NOT buy current week expiry. Strictly buy NEXT week's expiry to avoid zero-gamma trap."
+        expiry_rule = "⚠️ THETA DANGER (Wed/Thu): Option Engine auto-selected NEXT week's expiry to avoid zero-gamma trap."
     else:
-        expiry_rule = "Prefer current expiry ONLY if 3+ sessions remain. Otherwise shift to next week."
+        expiry_rule = "Option Engine auto-selected current expiry (3+ sessions remain)."
 
     target_rule = f"First underlying target near {_fmt_price(target)}." if target else "Book by price action; target unavailable."
     invalidation_rule = f"Exit option if underlying fails {_fmt_price(fail)} or if option premium loses 25% (Auto-Cut)."
     risk_rule = "Max premium risk 0.50% of capital. No averaging losing options."
-    
-    instrument_rule = f"Strictly {option_side} with Delta > 0.45 (ATM/ITM). Block if IV Percentile > 60% (Avoid IV Crush)."
+    instrument_rule = (
+        f"Strictly {option_side} with Delta > {MIN_DELTA_FOR_OPTION_BUY} (ATM/ITM). "
+        f"SKIP if IV Percentile > {IV_CRUSH_BLOCK_THRESHOLD}% (IV Crush protection)."
+    )
 
     return {
         "symbol": symbol,
