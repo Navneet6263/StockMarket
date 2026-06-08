@@ -6,7 +6,7 @@ import TradingChart from "./components/TradingChart";
 const TABS = [
   { id: "dashboard",   label: "Dashboard",       api: "/api/market/hot-picks" },
   { id: "live-action", label: "🔴 Live Action",  api: "/api/market/live-entries" },
-  { id: "hot-picks",   label: "Hot Picks",        api: "/api/market/hot-picks" },
+  { id: "hot-picks",   label: "🌟 God-Tier Scans",  api: "/api/market/hot-picks" },
   { id: "watchlist",   label: "Watchlist",         api: "/api/market/hot-picks" },
   { id: "base-radar",  label: "Base Formation",    api: "/api/market/hot-picks" },
   { id: "momentum",    label: "Momentum",           api: "/api/market/hot-picks" },
@@ -209,6 +209,42 @@ function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => voi
         {timeHorizon ? <span className="tag" style={{ color: "var(--yellow)", fontWeight: "bold" }}>⏳ Runs in: {timeHorizon}</span> : null}
         {patternLabels.slice(0, 2).map((label: string) => <span key={label} className="tag">{humanize(label)}</span>)}
       </div>
+      {tab === 'hot-picks' && (
+        <div className="god-tier-panel" style={{ background: "rgba(139, 92, 246, 0.1)", border: "1px solid var(--accent)", borderRadius: 8, padding: 12, marginTop: 12, marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700, marginBottom: 8 }}>
+            🛡️ God-Level Metrics
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {((item.raw?.tight_consolidation_pct ?? 100) < 4 || (item.raw?.bb_width_ratio ?? 1) < 0.15 || patternLabels.some((l: string) => l.toLowerCase().includes('squeeze') || l.toLowerCase().includes('base'))) && (
+              <span className="tag" style={{ background: "rgba(234, 179, 8, 0.2)", color: "#facc15", border: "1px solid rgba(250, 204, 21, 0.4)" }}>🌪️ VCP & Vol Dry-Up</span>
+            )}
+            {((item.raw?.relative_strength_delta_5d ?? 0) > 3 || (item.raw?.rs_rating ?? 0) > 70 || (item.raw?.relative_strength ?? 0) > 1) && (
+              <span className="tag" style={{ background: "rgba(52, 211, 153, 0.2)", color: "#34d399", border: "1px solid rgba(52, 211, 153, 0.4)" }}>💪 True Relative Strength</span>
+            )}
+            {(demandStatus === "strong_accumulation" || item.seller_pressure === "low" || smartMoneyRead?.toLowerCase().includes("accumulation")) && (
+              <span className="tag" style={{ background: "rgba(96, 165, 250, 0.2)", color: "#60a5fa", border: "1px solid rgba(96, 165, 250, 0.4)" }}>🧊 Iceberg / Accumulation</span>
+            )}
+            {((item.raw?.sector_momentum ?? 0) > 0 || item.raw?.sector_strength === "strong") && (
+              <span className="tag" style={{ background: "rgba(167, 139, 250, 0.2)", color: "#a78bfa", border: "1px solid rgba(167, 139, 250, 0.4)" }}>💸 Sector Rotation</span>
+            )}
+            {((item.raw?.iv_percentile ?? 0) > 80) ? (
+              <span className="tag" style={{ background: "rgba(244, 63, 94, 0.2)", color: "#f43f5e", border: "1px solid rgba(244, 63, 94, 0.4)" }}>🚫 IV Crush Risk</span>
+            ) : (item.raw?.options_activity === "bullish" || (item.raw?.put_oi_chg ?? 0) > (item.raw?.call_oi_chg ?? 0) * 1.5) ? (
+              <span className="tag" style={{ background: "rgba(52, 211, 153, 0.2)", color: "#34d399", border: "1px solid rgba(52, 211, 153, 0.4)" }}>🏦 Smart Put Writing</span>
+            ) : null}
+            
+            {/* Fallback if no specific rule matches heavily */}
+            {!((item.raw?.tight_consolidation_pct ?? 100) < 4 || (item.raw?.bb_width_ratio ?? 1) < 0.15 || patternLabels.some((l: string) => l.toLowerCase().includes('squeeze') || l.toLowerCase().includes('base'))) && 
+             !((item.raw?.relative_strength_delta_5d ?? 0) > 3 || (item.raw?.rs_rating ?? 0) > 70 || (item.raw?.relative_strength ?? 0) > 1) &&
+             !(demandStatus === "strong_accumulation" || item.seller_pressure === "low" || smartMoneyRead?.toLowerCase().includes("accumulation")) &&
+             !((item.raw?.sector_momentum ?? 0) > 0 || item.raw?.sector_strength === "strong") &&
+             !((item.raw?.iv_percentile ?? 0) > 80) &&
+             !(item.raw?.options_activity === "bullish" || (item.raw?.put_oi_chg ?? 0) > (item.raw?.call_oi_chg ?? 0) * 1.5) && (
+               <span className="tag" style={{ color: "var(--muted)", background: "rgba(255,255,255,0.05)", border: "1px dashed var(--border)" }}>⚙️ Institutional Engine Active</span>
+            )}
+          </div>
+        </div>
+      )}
       {hasAi ? (
         <div className="ai-insight">
           <div className="ai-insight-top">
@@ -783,15 +819,15 @@ export default function Page() {
         ws.onclose = () => {
           if (!pollInterval) {
             pollLiveEntries();
-            pollInterval = setInterval(pollLiveEntries, 3000);
+            pollInterval = setInterval(pollLiveEntries, 15000);
           }
-          setTimeout(connectWebSocket, 5000);
+          setTimeout(connectWebSocket, 10000);
         };
         ws.onerror = () => { ws?.close(); };
       } catch {
         if (!pollInterval) {
           pollLiveEntries();
-          pollInterval = setInterval(pollLiveEntries, 3000);
+          pollInterval = setInterval(pollLiveEntries, 15000);
         }
       }
     };
@@ -929,7 +965,7 @@ export default function Page() {
                 fontSize: 11,
                 fontWeight: 700,
                 padding: "1px 6px",
-                animation: "pulse 1s infinite",
+                animation: "pulse 2.5s infinite",
               }}>{liveEntryCount}</span>
             )}
           </button>
@@ -1004,7 +1040,7 @@ export default function Page() {
               <h2 className="section-title">{TABS.find(t => t.id === tab)?.label} ({liveItems.length} stocks)</h2>
               {loading ? (
                 <div className="stock-grid">
-                  {[1,2,3,4,5,6].map(i => <div key={i} className="stock-card" style={{ animation: "pulse 1.5s infinite", background: "var(--bg, #1a1a1a)" }}>
+                  {[1,2,3,4,5,6].map(i => <div key={i} className="stock-card" style={{ animation: "pulse 2.5s infinite", background: "var(--bg, #1a1a1a)" }}>
                     <div style={{ height: 120, background: "var(--border, #333)" }}></div>
                   </div>)}
                 </div>
