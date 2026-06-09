@@ -659,6 +659,37 @@ class OptionsAnalyzer:
         step = INDEX_META.get(symbol, {}).get("strike_step", 50)
         atm = int(round(spot / step) * step)
 
+        tech_signals, tech_direction, tech_score = self._technical_analysis(yf_symbol, spot)
+        
+        raw_conf = (tech_score / 35.0) * 100 if tech_score > 0 else 50
+        confidence = min(round(raw_conf * 0.85 + 15), 85) if tech_direction != "neutral" else 50
+        
+        option_action = "NO_TRADE"
+        if confidence >= CONFIDENCE_THRESHOLD:
+            option_action = "BUY_CE" if tech_direction == "bullish" else "BUY_PE" if tech_direction == "bearish" else "NO_TRADE"
+            
+        swing_prediction = {
+            "direction": tech_direction,
+            "confidence": confidence,
+            "option_action": option_action,
+            "signals": tech_signals + ["⚠️ Using Technical Fallback (NSE Option Chain unavailable)"],
+            "horizon_days": 10,
+            "vix": self._fetch_vix(),
+        }
+
+        recommendation = self._build_recommendation(
+            symbol=symbol,
+            direction=tech_direction,
+            confidence=confidence,
+            spot=spot,
+            atm=atm,
+            step=step,
+            swing=swing_prediction,
+            sr={"support": atm - (step * 5), "resistance": atm + (step * 5)},
+            max_pain=atm,
+            data_source="technical",
+        )
+
         return {
             "symbol": symbol,
             "label": INDEX_META.get(symbol, {}).get("label", symbol),
@@ -667,25 +698,14 @@ class OptionsAnalyzer:
             "pcr": 1.0,
             "max_pain": atm,
             "iv_proxy": 0.0,
-            "india_vix": self._fetch_vix(),
+            "india_vix": swing_prediction["vix"],
             "support": atm - (step * 5),
             "resistance": atm + (step * 5),
             "oi_change": {"call_change_oi": 0, "put_change_oi": 0, "bias": "neutral"},
-            "swing_prediction": {
-                "direction": "neutral",
-                "confidence": 0,
-                "option_action": "NO_TRADE",
-                "signals": ["⚠️ Live NSE option chain data unavailable — do not trade based on this"],
-                "horizon_days": 10,
-            },
-            "recommendation": {
-                "action": "NO_TRADE",
-                "reason": "⚠️ Live NSE data unavailable — Do NOT trade options based on this. Wait for live data.",
-                "confidence": 0,
-                "safe": False,
-            },
+            "swing_prediction": swing_prediction,
+            "recommendation": recommendation,
             "records": [],
-            "data_source": "fallback",
+            "data_source": "technical",
             "timestamp": datetime.now().isoformat(),
         }
 

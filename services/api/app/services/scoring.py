@@ -716,20 +716,24 @@ class ScoringEngine:
         elif direction == "bearish" and pattern_context["entry_trigger"] < price:
             entry_price = pattern_context["entry_trigger"]
 
-        # Cap stop loss to max 2.5x ATR to avoid unrealistic Risk/Reward
+        # Cap stop loss to max 3.5x ATR to avoid unrealistic Risk/Reward, but enforce min 1.5x ATR to avoid premature stop-outs
         atr_val = self._safe(snapshot, "atr") or (price * 0.02)
         if direction == "bullish":
-            if invalidation and invalidation < entry_price - (atr_val * 2.5):
-                invalidation = entry_price - (atr_val * 2.5)
+            if invalidation and invalidation < entry_price - (atr_val * 3.5):
+                invalidation = entry_price - (atr_val * 3.5)
+            if invalidation and invalidation > entry_price - (atr_val * 1.5):
+                invalidation = entry_price - (atr_val * 1.5)
             if invalidation and invalidation >= entry_price:
-                invalidation = entry_price - atr_val
+                invalidation = entry_price - (atr_val * 1.5)
             if pattern_stop and pattern_stop < entry_price:
                 invalidation = max(invalidation or 0, pattern_stop)
         elif direction == "bearish":
-            if invalidation and invalidation > entry_price + (atr_val * 2.5):
-                invalidation = entry_price + (atr_val * 2.5)
+            if invalidation and invalidation > entry_price + (atr_val * 3.5):
+                invalidation = entry_price + (atr_val * 3.5)
+            if invalidation and invalidation < entry_price + (atr_val * 1.5):
+                invalidation = entry_price + (atr_val * 1.5)
             if invalidation and invalidation <= entry_price:
-                invalidation = entry_price + atr_val
+                invalidation = entry_price + (atr_val * 1.5)
 
         stop_loss = invalidation
         stop_distance = abs(entry_price - stop_loss) if stop_loss else 0.0

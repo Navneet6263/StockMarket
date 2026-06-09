@@ -7,6 +7,7 @@ const TABS = [
   { id: "dashboard",   label: "Dashboard",       api: "/api/market/hot-picks" },
   { id: "live-action", label: "🔴 Live Action",  api: "/api/market/live-entries" },
   { id: "hot-picks",   label: "🌟 God-Tier Scans",  api: "/api/market/hot-picks" },
+  { id: "volume-boomers", label: "📦 5x Volume Boomers", api: "/api/market/hot-picks" },
   { id: "watchlist",   label: "Watchlist",         api: "/api/market/hot-picks" },
   { id: "base-radar",  label: "Base Formation",    api: "/api/market/hot-picks" },
   { id: "momentum",    label: "Momentum",           api: "/api/market/hot-picks" },
@@ -751,7 +752,26 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
 // ── Extract items from API data ──────────────────────────────────────────────
 function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
-  if (tab === "dashboard" || tab === "hot-picks") return data.hotPicks || data.top_opportunities || [];
+  if (tab === "dashboard") return data.hotPicks || data.top_opportunities || [];
+  if (tab === "hot-picks") {
+    const items = data.hotPicks || data.top_opportunities || [];
+    return items.filter((item: any) => {
+      const raw = item.raw || {};
+      const patternLabels = item.patternLabels || [];
+      const demandStatus = item.demandStatus || "";
+      const smartMoneyRead = item.smartMoneyRead || "";
+      
+      const hasVCP = (raw.tight_consolidation_pct ?? 100) < 4 || (raw.bb_width_ratio ?? 1) < 0.15 || patternLabels.some((l: string) => l.toLowerCase().includes('squeeze') || l.toLowerCase().includes('base'));
+      const hasRS = (raw.relative_strength_delta_5d ?? 0) > 3 || (raw.rs_rating ?? 0) > 70 || (raw.relative_strength ?? 0) > 1;
+      const hasIceberg = demandStatus === "strong_accumulation" || item.seller_pressure === "low" || smartMoneyRead.toLowerCase().includes("accumulation");
+      const hasSector = (raw.sector_momentum ?? 0) > 0 || raw.sector_strength === "strong";
+      const hasOptions = (raw.options_activity === "bullish" || (raw.put_oi_chg ?? 0) > (raw.call_oi_chg ?? 0) * 1.5);
+      
+      // Keep only if it has at least one strong God-Level metric AND score > 70
+      return (hasVCP || hasRS || hasIceberg || hasSector || hasOptions) && (item.confidence ?? item.score ?? 0) >= 70;
+    });
+  }
+  if (tab === "volume-boomers") return (data.hotPicks || data.top_opportunities || []).filter((x: any) => (x.relative_volume ?? x.raw?.relative_volume ?? 1) >= 5);
   if (tab === "live-action") return data.entries || data.liveAction || [];
   if (tab === "traps") return data.trap_signals || [];
   if (tab === "pbs") return data.pbsRadar || [];
@@ -901,6 +921,9 @@ export default function Page() {
     : activeFilter === "bearish" ? allLiveItems.filter((x: any) => x.direction === "bearish")
     : activeFilter === "breakout" ? allLiveItems.filter((x: any) => x.entry_label?.includes("BREAKOUT") || x.has_breakout)
     : activeFilter === "high-conf" ? allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80)
+    : activeFilter === "tomorrow" ? allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("tomorrow"))
+    : activeFilter === "1-2-days" ? allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2"))
+    : activeFilter === "anytime" ? allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("any time") || s.includes("anytime"); })
     : allLiveItems;
 
   const mood = summary?.marketMood || data?.marketMood || "loading";
@@ -1019,6 +1042,9 @@ export default function Page() {
                   { key: "bearish",   label: "📉 Bearish",       count: allLiveItems.filter((x: any) => x.direction === "bearish").length },
                   { key: "breakout",  label: "⚡ Breakout",      count: allLiveItems.filter((x: any) => x.entry_label?.includes("BREAKOUT") || x.has_breakout).length },
                   { key: "high-conf", label: "🎯 High Confidence", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
+                  { key: "tomorrow",  label: "🌅 Tomorrow",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("tomorrow")).length },
+                  { key: "1-2-days",  label: "⏳ 1-2 Days",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2")).length },
+                  { key: "anytime",   label: "🔥 Anytime",       count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("any time") || s.includes("anytime"); }).length },
                 ] as { key: string; label: string; count: number }[]).map(f => (
                   <button
                     key={f.key}
