@@ -110,7 +110,7 @@ function IndexTickerBar() {
 }
 
 // ── Stock Card ───────────────────────────────────────────────────────────────
-function StockCard({ item, onSelect }: { item: any; onSelect: (s: string) => void }) {
+function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) => void; tab?: string }) {
   if (item.entryRule && item.instrumentRule) {
     return (
       <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: item.status === "STRICT_READY" ? "var(--green)" : "var(--orange)" }}>
@@ -1072,7 +1072,7 @@ export default function Page() {
                 </div>
               ) : liveItems.length ? (
                 <div className="stock-grid">
-                  {liveItems.map((item: any, i: number) => <StockCard key={item.symbol || i} item={item} onSelect={setSelectedSymbol} />)}
+                  {liveItems.map((item: any, i: number) => <StockCard key={item.symbol || i} item={item} onSelect={setSelectedSymbol} tab={tab} />)}
                 </div>
               ) : (
                 <p className="empty-msg">No stocks found in this category right now.</p>
