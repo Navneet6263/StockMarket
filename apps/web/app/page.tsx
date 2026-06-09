@@ -7,7 +7,7 @@ const TABS = [
   { id: "dashboard",   label: "Dashboard",       api: "/api/market/hot-picks" },
   { id: "live-action", label: "🔴 Live Action",  api: "/api/market/live-entries" },
   { id: "hot-picks",   label: "🌟 God-Tier Scans",  api: "/api/market/hot-picks" },
-  { id: "volume-boomers", label: "📦 5x Volume Boomers", api: "/api/market/hot-picks" },
+  { id: "volume-boomers", label: "📦 3x+ Volume Boomers", api: "/api/market/hot-picks" },
   { id: "watchlist",   label: "Watchlist",         api: "/api/market/hot-picks" },
   { id: "base-radar",  label: "Base Formation",    api: "/api/market/hot-picks" },
   { id: "momentum",    label: "Momentum",           api: "/api/market/hot-picks" },
@@ -771,7 +771,7 @@ function extractItems(tab: string, data: any): any[] {
       return (hasVCP || hasRS || hasIceberg || hasSector || hasOptions) && (item.confidence ?? item.score ?? 0) >= 70;
     });
   }
-  if (tab === "volume-boomers") return (data.hotPicks || data.top_opportunities || []).filter((x: any) => (x.relative_volume ?? x.raw?.relative_volume ?? 1) >= 5);
+  if (tab === "volume-boomers") return (data.hotPicks || data.top_opportunities || []).filter((x: any) => (x.relative_volume ?? x.raw?.relative_volume ?? 1) >= 3);
   if (tab === "live-action") return data.entries || data.liveAction || [];
   if (tab === "traps") return data.trap_signals || [];
   if (tab === "pbs") return data.pbsRadar || [];
