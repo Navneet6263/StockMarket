@@ -161,6 +161,7 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
   const fallbackReason = item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || "";
   const timeHorizon = item.timeHorizon || item.pre_breakout_timeframe || item.timeframe || item.raw?.pre_breakout_timeframe || "";
   const isHighTrap = trapRisk === "high" || item.trap_risk === "high" || item.bull_trap?.bull_trap_detected || (item.trap_warnings && item.trap_warnings.length > 0);
+  const relVol = item.relative_volume ?? item.raw?.relative_volume ?? 0;
 
   return (
     <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: isHighTrap ? "var(--red)" : "var(--border)" }}>
@@ -203,7 +204,12 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
           color: '#fff',
           fontWeight: 'bold'
         }}>🎯 {fmt(item.confidence ?? item.score, 0)}%</span> : null}
-        {item.relative_volume ? <span className="tag">📦 {fmt(item.relative_volume, 1)}x vol</span> : null}
+        {relVol > 0 ? <span className="tag" style={{
+          background: relVol >= 5 ? 'var(--orange)' : relVol >= 3 ? 'var(--green)' : 'transparent',
+          color: relVol >= 3 ? '#fff' : 'inherit',
+          fontWeight: relVol >= 3 ? 'bold' : 'normal',
+          border: relVol >= 3 ? 'none' : '1px solid var(--border)'
+        }}>{relVol >= 5 ? '🚀' : relVol >= 3 ? '🔥' : '📦'} {fmt(relVol, 1)}X VOL</span> : null}
         {item.entry_quality ? <span className="tag">{humanize(item.entry_quality)} entry</span> : null}
         {item.seller_pressure ? <span className="tag">{humanize(item.seller_pressure)} sellers</span> : null}
         {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking</span> : null}
@@ -923,6 +929,7 @@ export default function Page() {
     : activeFilter === "high-conf" ? allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80)
     : activeFilter === "tomorrow" ? allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("tomorrow"))
     : activeFilter === "1-2-days" ? allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2"))
+    : activeFilter === "3-4-days" ? allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-4") || s.includes("3 to 4") || s.includes("3 - 4"); })
     : activeFilter === "anytime" ? allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("any time") || s.includes("anytime"); })
     : allLiveItems;
 
@@ -1044,6 +1051,7 @@ export default function Page() {
                   { key: "high-conf", label: "🎯 High Confidence", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
                   { key: "tomorrow",  label: "🌅 Tomorrow",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("tomorrow")).length },
                   { key: "1-2-days",  label: "⏳ 1-2 Days",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2")).length },
+                  { key: "3-4-days",  label: "📆 3-4 Days",      count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-4") || s.includes("3 to 4") || s.includes("3 - 4"); }).length },
                   { key: "anytime",   label: "🔥 Anytime",       count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("any time") || s.includes("anytime"); }).length },
                 ] as { key: string; label: string; count: number }[]).map(f => (
                   <button
