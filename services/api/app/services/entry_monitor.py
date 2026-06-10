@@ -158,6 +158,7 @@ class EntryMonitor:
                 "confidence": item.get("confidence") or item.get("score"),
                 "rr": item.get("risk_reward") or item.get("rr"),
                 "time_horizon": item.get("pre_breakout_timeframe") or item.get("timeHorizon") or "",
+                "relative_volume": item.get("relative_volume") or item.get("raw", {}).get("relative_volume"),
             }
 
         with self._lock:
@@ -198,6 +199,7 @@ class EntryMonitor:
             "confidence": watched["confidence"],
             "rr": watched["rr"],
             "timeHorizon": watched["time_horizon"],
+            "relative_volume": watched["relative_volume"],
             "detected_at": datetime.now(timezone.utc).isoformat(),
             "detected_at_epoch": now,
             "label": label,
