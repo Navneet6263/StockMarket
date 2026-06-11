@@ -9,7 +9,7 @@ export default function AuthOverlay({ children }: { children: React.ReactNode })
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    const auth = localStorage.getItem("auth_navneet");
+    const auth = localStorage.getItem("auth_navneet_v2");
     if (auth !== "true") {
       setIsAuth(false);
     }
@@ -18,8 +18,8 @@ export default function AuthOverlay({ children }: { children: React.ReactNode })
 
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
-    if (username.trim() === "Navneet@6263" && password === "Navneet") {
-      localStorage.setItem("auth_navneet", "true");
+    if (username.trim() === "7004023078" && password === "7004023078") {
+      localStorage.setItem("auth_navneet_v2", "true");
       setIsAuth(true);
       setError(false);
     } else {
