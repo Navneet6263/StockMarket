@@ -119,8 +119,12 @@ def analyze_nifty_for_options(nifty_frame: pd.DataFrame) -> Dict:
             breakout_reasons.append(f"RSI {rsi:.0f} — strong but not overbought")
 
         if bb_squeeze:
-            breakout_score += 10
-            breakout_reasons.append("Bollinger squeeze — expansion coming")
+            # Only credit squeeze in the direction the trend is already leaning,
+            # not both — avoids cancelling out the directional edge
+            if latest_close >= ema_20:  # Trend leans bullish
+                breakout_score += 10
+                breakout_reasons.append("Bollinger squeeze above EMA — bullish expansion likely")
+            # else: squeeze in downtrend gets credit in breakdown section below
 
         # ── BREAKDOWN DETECTION (PE Signal) ───────────────────────────────────
         breakdown_score = 0
@@ -150,8 +154,10 @@ def analyze_nifty_for_options(nifty_frame: pd.DataFrame) -> Dict:
             breakdown_reasons.append(f"RSI {rsi:.0f} — weak but not oversold")
 
         if bb_squeeze:
-            breakdown_score += 10
-            breakdown_reasons.append("Bollinger squeeze — expansion coming")
+            # Only credit squeeze in the breakdown direction if trend leans bearish
+            if latest_close < ema_20:  # Trend leans bearish
+                breakdown_score += 10
+                breakdown_reasons.append("Bollinger squeeze below EMA — bearish expansion likely")
 
         # ── DECISION ──────────────────────────────────────────────────────────
         if breakout_score >= 60 and breakout_score > breakdown_score:

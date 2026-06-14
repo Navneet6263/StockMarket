@@ -162,6 +162,12 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
   const timeHorizon = item.timeHorizon || item.pre_breakout_timeframe || item.timeframe || item.raw?.pre_breakout_timeframe || "";
   const isHighTrap = trapRisk === "high" || item.trap_risk === "high" || item.bull_trap?.bull_trap_detected || (item.trap_warnings && item.trap_warnings.length > 0);
   const relVol = item.relative_volume ?? item.raw?.relative_volume ?? 0;
+  const sb = item.score_breakdown || item.raw?.score_breakdown || {};
+  const volStreak = sb.volume_streak || 0;
+  const volBuilding = sb.vol_building || false;
+  const stealthAccum = sb.stealth_accumulation || false;
+  const volAccel = sb.volume_acceleration || 1;
+  const volPriceDivergence = sb.vol_price_divergence || false;
 
   return (
     <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: isHighTrap ? "var(--red)" : "var(--border)" }}>
@@ -210,6 +216,10 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
           fontWeight: relVol >= 3 ? 'bold' : 'normal',
           border: relVol >= 3 ? 'none' : '1px solid var(--border)'
         }}>{relVol >= 5 ? '🚀' : relVol >= 3 ? '🔥' : '📦'} {fmt(relVol, 1)}X VOL</span> : null}
+        {volBuilding && relVol < 3 ? <span className="tag" style={{ background: '#10b981', color: '#fff', fontWeight: 'bold' }}>📈 VOL BUILDING {volStreak}d</span> : null}
+        {stealthAccum ? <span className="tag" style={{ background: '#8b5cf6', color: '#fff', fontWeight: 'bold' }}>🕵️ STEALTH BUY</span> : null}
+        {volAccel >= 1.5 && !volBuilding && !stealthAccum ? <span className="tag" style={{ background: '#f59e0b', color: '#fff', fontWeight: 'bold' }}>⚡ VOL ACCELERATING</span> : null}
+        {volPriceDivergence && !stealthAccum ? <span className="tag" style={{ background: '#6366f1', color: '#fff', fontWeight: 'bold' }}>🔍 SMART LOADING</span> : null}
         {item.entry_quality ? <span className="tag">{humanize(item.entry_quality)} entry</span> : null}
         {item.seller_pressure ? <span className="tag">{humanize(item.seller_pressure)} sellers</span> : null}
         {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking</span> : null}

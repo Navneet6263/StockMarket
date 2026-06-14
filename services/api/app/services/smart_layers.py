@@ -109,7 +109,11 @@ def enrich_signal(
         classification = "base_formation_radar"
         blocked_reason = None
         action_override = None
-    elif abs(float(signal.get("change_pct") or 0)) >= 3 or float(signal.get("relative_volume") or 1) >= 1.8:
+    elif (
+        float(signal.get("change_pct") or 0) >= 3
+        or float(signal.get("relative_volume") or 1) >= 1.8
+    ) and signal.get("direction") != "bearish":
+        # Only positive/bullish momentum — avoid labelling crashes as momentum
         classification = "momentum_radar"
         blocked_reason = None
         action_override = None

@@ -176,6 +176,15 @@ def detect_chart_pattern_setup(
     accumulation = cmf >= 0.04 or obv_slope > 0
     squeeze = bb_width_ratio <= 0.9 or atr_expansion <= 1.0
 
+    # ── NEW: Volume Intelligence features ──
+    volume_trend_5d = _latest(feature_frame, "volume_trend_5d", 1.0)
+    volume_streak = int(_latest(feature_frame, "volume_streak", 0))
+    volume_acceleration = _latest(feature_frame, "volume_acceleration", 1.0)
+    stealth_accumulation = bool(_latest(feature_frame, "stealth_accumulation", 0.0))
+    volume_breakout_ratio = _latest(feature_frame, "volume_breakout_ratio", 1.0)
+    vol_price_divergence = bool(_latest(feature_frame, "vol_price_divergence", 0.0))
+    vol_building = volume_streak >= 3 or (volume_trend_5d >= 1.3 and relative_volume >= 1.2)
+
     intraday_breakout = False
     intraday_volume_ratio = 1.0
     if intraday_frame is not None and not intraday_frame.empty and len(intraday_frame) >= 20:
@@ -493,5 +502,12 @@ def detect_chart_pattern_setup(
             "higher_lows": higher_lows,
             "volume_dryup": volume_dryup,
             "squeeze": squeeze,
+            "volume_trend_5d": round(volume_trend_5d, 2),
+            "volume_streak": volume_streak,
+            "volume_acceleration": round(volume_acceleration, 2),
+            "stealth_accumulation": stealth_accumulation,
+            "volume_breakout_ratio": round(volume_breakout_ratio, 2),
+            "vol_price_divergence": vol_price_divergence,
+            "vol_building": vol_building,
         },
     }

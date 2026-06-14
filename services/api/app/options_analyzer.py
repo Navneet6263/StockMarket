@@ -264,21 +264,29 @@ class OptionsAnalyzer:
         ce_ltp = rec.get("CE", {}).get("lastPrice", 0)
         pe_ltp = rec.get("PE", {}).get("lastPrice", 0)
         premium = ce_ltp + pe_ltp
-        return round((premium / spot) / (0.04 ** 0.5), 3) if spot > 0 else 0.0
+        # Use 21 trading days (~1 month) as default DTE for IV proxy
+        dte_years = 21 / 252
+        return round((premium / spot) / (dte_years ** 0.5), 3) if spot > 0 else 0.0
 
     # ── Support / Resistance ───────────────────────────────────────────────────
 
     def _support_resistance(self, records: list, spot: float) -> dict:
-        below, above = [], []
+        below_put, above_call = [], []
         for r in records:
             s = r.get("strikePrice", 0)
             if not s:
                 continue
-            oi = r.get("PE", {}).get("openInterest", 0) + r.get("CE", {}).get("openInterest", 0)
-            (below if s < spot else above).append((s, oi))
+            # Support = max PUT OI below spot (put writers defend these levels)
+            # Resistance = max CALL OI above spot (call writers defend these levels)
+            put_oi = r.get("PE", {}).get("openInterest", 0)
+            call_oi = r.get("CE", {}).get("openInterest", 0)
+            if s < spot:
+                below_put.append((s, put_oi))
+            else:
+                above_call.append((s, call_oi))
 
-        support = max(below, key=lambda x: x[1]) if below else (spot - 200, 0)
-        resistance = max(above, key=lambda x: x[1]) if above else (spot + 200, 0)
+        support = max(below_put, key=lambda x: x[1]) if below_put else (spot - 200, 0)
+        resistance = max(above_call, key=lambda x: x[1]) if above_call else (spot + 200, 0)
         return {
             "support": int(support[0]),
             "support_oi": int(support[1]),

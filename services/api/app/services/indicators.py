@@ -54,6 +54,40 @@ class IndicatorEngine:
         features["relative_volume"] = volume / volume_avg_20
         features["volume_dryup"] = (volume / volume_avg_20.replace(0, np.nan) <= 0.8).astype(int)
 
+        # ── NEW: Volume Intelligence (Early Buildup Detection) ──
+        volume_avg_5 = volume.rolling(5).mean()
+        volume_avg_10 = volume.rolling(10).mean()
+
+        # 1. Volume Trend (5-day): Is volume trending up over last 5 days?
+        features["volume_trend_5d"] = volume_avg_5 / volume_avg_10.replace(0, np.nan)
+
+        # 2. Volume Streak: How many consecutive days volume > average?
+        above_avg = (volume > volume_avg_20).astype(int)
+        streak = above_avg.copy()
+        for i in range(1, len(streak)):
+            if streak.iloc[i] == 1:
+                streak.iloc[i] = streak.iloc[i - 1] + 1
+        features["volume_streak"] = streak
+
+        # 3. Volume Acceleration: Is volume speed increasing? (5d avg vs 10d avg ratio)
+        features["volume_acceleration"] = volume_avg_5 / volume_avg_10.replace(0, np.nan)
+
+        # 4. Stealth Accumulation: Volume rising but price flat (operator quietly loading)
+        price_flat = (close.pct_change(5).abs() * 100 <= 3.0)  # price moved < 3% in 5 days
+        vol_rising = (volume_avg_5 > volume_avg_20 * 1.2)  # volume 20%+ above average
+        features["stealth_accumulation"] = (price_flat & vol_rising).astype(int)
+
+        # 5. Volume Breakout Ratio: Today vs max of last 5 days
+        vol_max_5 = volume.rolling(5).max().shift(1)
+        features["volume_breakout_ratio"] = volume / vol_max_5.replace(0, np.nan)
+
+        # 6. Vol-Price Divergence: Volume rising but price not (smart money loading)
+        vol_change_5d = (volume_avg_5 / volume_avg_20.replace(0, np.nan)) - 1  # volume change ratio
+        price_change_5d = close.pct_change(5).abs()
+        features["vol_price_divergence"] = (
+            (vol_change_5d >= 0.2) & (price_change_5d <= 0.03)
+        ).astype(int)
+
         typical_price = (high + low + close) / 3
         rolling_vwap = (typical_price * volume).rolling(20).sum() / volume.rolling(20).sum()
         features["rolling_vwap"] = rolling_vwap

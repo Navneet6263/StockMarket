@@ -396,12 +396,12 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
     }
     raw_score = sum(breakdown.values())
     
-    # Inject Sector Strength +/- 20 Bonus
+    # Inject Sector Strength bonus — capped at ±8 to avoid over-promotion/demotion
     global_category = signal.get("globalSectorCategory", "neutral")
     if global_category == "top_3":
-        raw_score = min(raw_score + 20, 100)
+        raw_score = min(raw_score + 8, 100)
     elif global_category == "bottom_3":
-        raw_score = max(raw_score - 20, 0)
+        raw_score = max(raw_score - 8, 0)
         
     score = max(0, min(100, raw_score))
     if confidence:

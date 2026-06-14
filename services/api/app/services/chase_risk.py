@@ -66,6 +66,12 @@ def classify_chase_risk(signal: dict[str, Any]) -> dict[str, Any]:
         allow_buy_call = True
         hard_chase_risk = False  # Override the block
         reason = "Strong move is still valid because VWAP holds, volume remains strong, and risk/reward is acceptable."
+
+    # Resolve contradiction: VALID_BREAKOUT + PROFIT_BOOKING_RISK together is confusing
+    # If both exist, acknowledge the breakout but suggest partial booking
+    if "VALID_BREAKOUT" in labels and next_day_profit_booking_risk:
+        labels = [l for l in labels if l != "PROFIT_BOOKING_RISK"]
+        reason = "Breakout is valid with strong volume, but the move is large — consider booking partial profits and trailing the rest."
     elif hard_chase_risk:
         labels.append("AVOID_LATE_ENTRY")
 

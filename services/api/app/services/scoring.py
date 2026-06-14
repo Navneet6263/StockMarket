@@ -630,7 +630,14 @@ class ScoringEngine:
                 evidence_confidence = float(historical.get("win_rate", 0) * 100)
                 confidence = (model_confidence * 0.72) + (evidence_confidence * 0.28)
                 confidence_note = "Confidence blends live model alignment with historical hit-rate evidence."
-                if historical.get("false_positive_rate", 0) > 0.45:
+                fpr = historical.get("false_positive_rate", 0)
+                if fpr > 0.55:
+                    # >55% false positive rate: significant penalty + block buy
+                    confidence = max(confidence - 12, 38)
+                    risk_factors.append("Historical false positives are very high (>55%) — system recommends WATCH only.")
+                elif fpr > 0.45:
+                    # >45% false positive rate: moderate penalty
+                    confidence = max(confidence - 6, 38)
                     risk_factors.append("Historical false positives are elevated for similar setups.")
             elif signal_count > 0:
                 evidence_confidence = float(historical.get("win_rate", 0) * 100)

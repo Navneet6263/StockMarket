@@ -803,9 +803,34 @@ class MarketHubService:
             key=lambda item: (item["relative_volume"], item["intraday_volume_ratio"], item["move_quality"]),
             reverse=True,
         ))
+
+        # NEW: Catch early volume buildups (stealth accumulation, vol building)
+        vol_buildup_stocks = self._unique_signals(sorted(
+            [
+                item for item in results
+                if item["relative_volume"] >= 1.2
+                and not item.get("is_pre_breakout")
+                and item["symbol"] not in {v["symbol"] for v in volume_ranked}
+                and (
+                    item.get("score_breakdown", {}).get("vol_building")
+                    or item.get("score_breakdown", {}).get("stealth_accumulation")
+                    or item.get("score_breakdown", {}).get("volume_streak", 0) >= 3
+                    or item.get("score_breakdown", {}).get("vol_price_divergence")
+                )
+            ],
+            key=lambda item: (
+                item.get("score_breakdown", {}).get("volume_streak", 0),
+                item["relative_volume"],
+                item["move_quality"],
+            ),
+            reverse=True,
+        ))
+        # Merge: big volume first, then early buildups
+        all_volume = volume_ranked + vol_buildup_stocks
+
         unusual_volume = self._fill_signal_bucket(
-            [item for item in volume_ranked if item["symbol"] not in surfaced],
-            volume_ranked,
+            [item for item in all_volume if item["symbol"] not in surfaced],
+            all_volume,
             500,
         )
 
