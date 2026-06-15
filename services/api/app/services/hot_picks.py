@@ -882,6 +882,13 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         return priority, _safe_float(item.get("accumulationScore"))
 
     base_items.sort(key=base_sort_key, reverse=True)
+
+    # Build 3x+ Volume Boomers
+    volume_boomers = [
+        item for item in mapped
+        if _safe_float(item.get("relative_volume", item.get("raw", {}).get("relative_volume", 1.0))) >= 3.0
+    ]
+    volume_boomers.sort(key=lambda x: _safe_float(x.get("relative_volume", x.get("raw", {}).get("relative_volume", 1.0))), reverse=True)
     strict_options = build_strict_options_response(
         scan,
         [
@@ -957,6 +964,7 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
             "strictOptionsWatch": strict_options["summary"]["watchOnly"],
         },
         "hotPicks": hot,
+        "volumeBoomers": volume_boomers,
         "watchlist": watchlist,
         "momentumRadar": momentum,
         "catalystRadar": catalyst_radar,

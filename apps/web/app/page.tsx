@@ -787,7 +787,7 @@ function extractItems(tab: string, data: any): any[] {
       return (hasVCP || hasRS || hasIceberg || hasSector || hasOptions) && (item.confidence ?? item.score ?? 0) >= 70;
     });
   }
-  if (tab === "volume-boomers") return (data.hotPicks || data.top_opportunities || []).filter((x: any) => (x.relative_volume ?? x.raw?.relative_volume ?? 1) >= 3);
+  if (tab === "volume-boomers") return data.volumeBoomers || (data.hotPicks || data.top_opportunities || []).filter((x: any) => (x.relative_volume ?? x.raw?.relative_volume ?? 1) >= 3);
   if (tab === "live-action") return data.entries || data.liveAction || [];
   if (tab === "traps") return data.trap_signals || [];
   if (tab === "pbs") return data.pbsRadar || [];
