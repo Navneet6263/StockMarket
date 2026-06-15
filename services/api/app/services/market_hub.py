@@ -798,7 +798,8 @@ class MarketHubService:
             [
                 item for item in results
                 if (item["relative_volume"] >= 1.6 or item["intraday_volume_ratio"] >= 1.4)
-                and not item.get("is_pre_breakout")
+                # Allow high-volume pre-breakout stocks (3x+) — they deserve to be seen
+                and (not item.get("is_pre_breakout") or item["relative_volume"] >= 3.0)
             ],
             key=lambda item: (item["relative_volume"], item["intraday_volume_ratio"], item["move_quality"]),
             reverse=True,
@@ -809,7 +810,7 @@ class MarketHubService:
             [
                 item for item in results
                 if item["relative_volume"] >= 1.2
-                and not item.get("is_pre_breakout")
+                and (not item.get("is_pre_breakout") or item["relative_volume"] >= 2.0)
                 and item["symbol"] not in {v["symbol"] for v in volume_ranked}
                 and (
                     item.get("score_breakdown", {}).get("vol_building")
