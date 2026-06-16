@@ -252,6 +252,16 @@ export default function PerformancePage() {
   // Filter history by time
   const filteredHistory = useMemo(() => {
     if (filter === "all") return history;
+    
+    if (filter === "today") {
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      return history.filter(p => {
+         const entryTime = new Date(p.entry_date).getTime();
+         return entryTime >= startOfToday.getTime();
+      });
+    }
+
     const cutoff = Date.now() - (filter === "week" ? 7 : 30) * 86400000;
     return history.filter(p => p.exit_date && new Date(p.exit_date).getTime() >= cutoff);
   }, [history, filter]);
@@ -339,11 +349,11 @@ export default function PerformancePage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
             <h2 style={{ margin: 0 }}>Closed Trades ({filteredHistory.length})</h2>
             <div style={{ display: "flex", gap: 8 }}>
-              {["all", "month", "week"].map(f => (
+              {["all", "month", "week", "today"].map(f => (
                 <button key={f} className="refresh-btn"
                   onClick={() => setFilter(f)}
                   style={{ fontWeight: filter === f ? 700 : 400, background: filter === f ? "var(--green)" : undefined, color: filter === f ? "#000" : undefined }}>
-                  {f === "all" ? "All Time" : f === "month" ? "This Month" : "This Week"}
+                  {f === "all" ? "All Time" : f === "month" ? "This Month" : f === "week" ? "This Week" : "Today"}
                 </button>
               ))}
               <button className="refresh-btn" onClick={exportCsv}>⬇ CSV</button>
