@@ -145,6 +145,16 @@ class StockPredictor:
             close.diff().abs().rolling(10).sum() + 1e-6
         )
 
+        # ADVANCED FEATURES (User Request: "fakeouts, volume without movement")
+        # Volume Spike but no price movement (Accumulation/Distribution warning)
+        features["volume_divergence"] = features["volume_spike"] * (abs(features["price_change"]) < 0.005).astype(int)
+        
+        # Failed Breakdown (Bear Trap): Price dipped below 20-day low but closed higher
+        features["failed_breakdown"] = ((low < prev_low_20) & (close > prev_low_20)).astype(int)
+        
+        # Failed Breakout (Bull Trap): Price spiked above 20-day high but closed lower
+        features["failed_breakout"] = ((high > prev_high_20) & (close < prev_high_20)).astype(int)
+
         rolling_peak = close.cummax()
         features["drawdown"] = (close - rolling_peak) / rolling_peak.replace(0, np.nan)
 

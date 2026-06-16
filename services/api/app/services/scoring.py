@@ -10,9 +10,15 @@ from app.services.demand_supply import analyze_demand_supply
 from app.services.entry_timing import analyze_entry_timing
 from app.services.lifecycle import build_lifecycle_advice
 from app.services.trap_detector import full_trap_analysis
-
+from app.services.finnhub_data import fetch_news_sentiment
+import joblib
+import pandas as pd
 
 class ScoringEngine:
+    def __init__(self):
+        self._model_cache = {}
+        self._model_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".models")
+
     def _safe(self, snapshot: Dict, key: str, default: float = 0.0) -> float:
         value = snapshot.get(key, default)
         if value is None or isinstance(value, bool):
@@ -437,6 +443,7 @@ class ScoringEngine:
         symbol: str,
         snapshot: Dict,
         backtest: Dict | None = None,
+        df: pd.DataFrame | None = None,
         *,
         calibrate: bool = True,
     ) -> Dict:
@@ -934,6 +941,66 @@ class ScoringEngine:
             or bool(entry_timing.get("attention_only"))
         )
 
+        ai_probability = probability
+        news_sentiment = "neutral"
+        news_headlines = []
+        
+        if df is not None and len(df) >= 50:
+            model_path = os.path.join(self._model_dir, "master_ai_model.pkl")
+            if os.path.exists(model_path):
+                try:
+                    if "master" not in self._model_cache:
+                        self._model_cache["master"] = joblib.load(model_path)
+                    model = self._model_cache["master"]
+                    features = model.prepare_features(df)
+                    if not features.empty:
+                        last_row = features.iloc[-1:].copy()
+                        # Master model expects 'is_bullish_setup'
+                        last_row['is_bullish_setup'] = 1 if direction == 'bullish' else 0
+                        
+                        prob = model.model.predict_proba(last_row)[0][1]
+                        ai_probability = round(float(prob), 4)
+                        
+                        ai_insight = None
+                        if ai_probability > 0.75:
+                            tags.append("ai_highly_bullish")
+                            ai_notes = ["🤖 **Master AI Analysis**: I have scanned the entire historical chart."]
+                            
+                            if 'failed_breakdown' in last_row and int(last_row['failed_breakdown'].iloc[0]) == 1:
+                                ai_notes.append("It recently showed a false breakdown to trap sellers (Bear Trap), but refused to fall further.")
+                            if 'volume_divergence' in last_row and int(last_row['volume_divergence'].iloc[0]) == 1:
+                                ai_notes.append("Massive volume is building up silently without the price moving, indicating strong institutional accumulation.")
+                            if 'rsi_oversold' in last_row and int(last_row['rsi_oversold'].iloc[0]) == 1:
+                                ai_notes.append("The chart is heavily oversold and primed for a violent reversal.")
+                                
+                            ai_notes.append(f"Based on pattern similarities across our database, I am **{ai_probability*100:.1f}% confident** that this will run hard from here.")
+                            ai_insight = " ".join(ai_notes)
+                            reasons.insert(0, ai_insight)
+                            
+                        elif ai_probability < 0.3:
+                            tags.append("ai_highly_bearish")
+                            ai_notes = ["🤖 **Master AI Warning**: I have scanned the historical chart."]
+                            if 'failed_breakout' in last_row and int(last_row['failed_breakout'].iloc[0]) == 1:
+                                ai_notes.append("It just faked a breakout to trap buyers (Bull Trap) and is facing heavy supply.")
+                            ai_notes.append(f"My model shows only a **{ai_probability*100:.1f}% chance** of success. Avoid fresh entries.")
+                            ai_insight = " ".join(ai_notes)
+                            risk_factors.insert(0, ai_insight)
+                            
+                except Exception as e:
+                    pass
+        
+        try:
+            news_data = fetch_news_sentiment(symbol)
+            if news_data and news_data.get("available"):
+                news_sentiment = news_data.get("newsSentiment", "neutral")
+                news_headlines = news_data.get("headlines", [])
+                if news_sentiment == "bullish":
+                    tags.append("bullish_news")
+                elif news_sentiment == "bearish":
+                    tags.append("bearish_news")
+        except Exception:
+            pass
+
         return {
             "symbol": symbol.upper(),
             "direction": direction,
@@ -944,7 +1011,10 @@ class ScoringEngine:
             "evidence_confidence": round(evidence_confidence, 1) if evidence_confidence is not None else None,
             "historical_evidence_status": evidence_status,
             "confidence_note": confidence_note,
-            "probability": probability,
+            "probability": ai_probability,
+            "ai_insight": ai_insight,
+            "news_sentiment": news_sentiment,
+            "news_headlines": news_headlines,
             "move_quality": move_quality,
             "expected_move_pct": round(expected_move_pct, 2),
             **pattern_context,

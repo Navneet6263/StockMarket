@@ -131,15 +131,28 @@ def fetch_news_sentiment(symbol: str) -> Dict:
 
 
 def _simple_sentiment(headline: str) -> str:
-    """Basic keyword sentiment when Finnhub doesn't provide it."""
-    h = headline.lower()
-    bullish = ["surge", "jump", "rally", "beat", "profit", "growth", "upgrade", "buy", "strong", "record", "high"]
-    bearish = ["fall", "drop", "crash", "loss", "downgrade", "sell", "weak", "cut", "decline", "miss"]
-    if any(w in h for w in bullish):
-        return "positive"
-    if any(w in h for w in bearish):
-        return "negative"
-    return "neutral"
+    """VADER sentiment analysis for Finnhub headlines."""
+    try:
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+        analyzer = SentimentIntensityAnalyzer()
+        scores = analyzer.polarity_scores(headline)
+        compound = scores['compound']
+        if compound >= 0.05:
+            return "positive"
+        elif compound <= -0.05:
+            return "negative"
+        else:
+            return "neutral"
+    except ImportError:
+        logger.warning("vaderSentiment not installed. Falling back to keyword sentiment.")
+        h = headline.lower()
+        bullish = ["surge", "jump", "rally", "beat", "profit", "growth", "upgrade", "buy", "strong", "record", "high"]
+        bearish = ["fall", "drop", "crash", "loss", "downgrade", "sell", "weak", "cut", "decline", "miss"]
+        if any(w in h for w in bullish):
+            return "positive"
+        if any(w in h for w in bearish):
+            return "negative"
+        return "neutral"
 
 
 # ── Earnings Calendar ─────────────────────────────────────────────────────────

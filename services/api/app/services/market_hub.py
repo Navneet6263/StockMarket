@@ -376,7 +376,7 @@ class MarketHubService:
         snapshot = self.indicators.build_snapshot(symbol, live_frame, feature_frame, intraday_frame)
         snapshot["advanced_chart_pattern"] = detect_chart_pattern_setup(live_frame, feature_frame, intraday_frame)
         backtest = self.backtest.evaluate(symbol, frame, benchmark_frame) if with_backtest else {}
-        signal = self.scoring.evaluate(symbol, snapshot, backtest if with_backtest else None)
+        signal = self.scoring.evaluate(symbol, snapshot, backtest if with_backtest else None, df=frame)
         
         # --- GTF Strategy Integration ---
         try:
