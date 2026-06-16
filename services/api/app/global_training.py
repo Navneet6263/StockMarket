@@ -20,8 +20,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("global_training")
 
 from pymongo import MongoClient
+from dotenv import load_dotenv
 
 def fetch_historical_setups():
+    load_dotenv()
     mongo_uri = os.getenv("MONGO_URL") or os.getenv("MONGO_URI") or "mongodb://localhost:27017"
     db_name = os.getenv("MONGO_DB_NAME", "stock_predictor_ml")
     logger.info(f"Connecting to MongoDB: {db_name}")
