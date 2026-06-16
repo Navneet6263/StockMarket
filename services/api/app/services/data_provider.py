@@ -301,9 +301,9 @@ class MarketDataService:
         last_index = live_frame.index[-1]
 
         raw_price = quote.get("price")
-        if raw_price is None:
+        if raw_price is None or float(raw_price) == 0.0:
             raw_price = live_frame.at[last_index, "Close"]
-        if raw_price is None:
+        if raw_price is None or float(raw_price) == 0.0:
             return live_frame
 
         raw_volume = quote.get("volume")

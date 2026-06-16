@@ -27,6 +27,8 @@ from app.services.breakout_radar import build_breakout_radar
 from app.services.chart_patterns import detect_chart_pattern_setup
 from app.services.telegram_market_alerts import get_telegram_market_alerts
 from app.services.zone_detector import ZoneDetector
+from app.services.options_chain import LiveOptionsChainService
+from app.services.angelone_live import get_angelone_live
 
 
 logger = logging.getLogger(__name__)
@@ -375,6 +377,33 @@ class MarketHubService:
         feature_frame = self.indicators.build_feature_frame(live_frame, benchmark_frame)
         snapshot = self.indicators.build_snapshot(symbol, live_frame, feature_frame, intraday_frame)
         snapshot["advanced_chart_pattern"] = detect_chart_pattern_setup(live_frame, feature_frame, intraday_frame)
+        
+        # --- Inject F&O Options Chain Data ---
+        try:
+            opt_data = LiveOptionsChainService()._calculate_snapshot(symbol)
+            if opt_data and "pcr" in opt_data:
+                snapshot["pcr"] = opt_data.get("pcr", 1.0)
+                snapshot["total_ce_oi"] = opt_data.get("total_ce_oi", 0)
+                snapshot["total_pe_oi"] = opt_data.get("total_pe_oi", 0)
+                opt_price = float(quote.get("price") or live_frame["Close"].iloc[-1]) if quote else float(live_frame["Close"].iloc[-1])
+                if opt_price == 0.0:
+                    opt_price = float(live_frame["Close"].iloc[-1])
+                snapshot["options_iv_pct"] = LiveOptionsChainService()._calculate_iv_percentile(symbol, opt_price, 30)
+                snapshot["is_fno"] = True
+        except Exception as e:
+            pass
+            
+        # --- Inject Live Order Book Depth ---
+        try:
+            feed = get_angelone_live().feed
+            if feed and symbol in feed._prices:
+                live_tick = feed._prices[symbol]
+                snapshot["bid_ask_ratio"] = live_tick.get("bid_ask_ratio", 1.0)
+                snapshot["total_buy_qty"] = live_tick.get("total_buy_qty", 0)
+                snapshot["total_sell_qty"] = live_tick.get("total_sell_qty", 0)
+        except Exception as e:
+            pass
+
         backtest = self.backtest.evaluate(symbol, frame, benchmark_frame) if with_backtest else {}
         signal = self.scoring.evaluate(symbol, snapshot, backtest if with_backtest else None, df=frame)
         
@@ -384,7 +413,9 @@ class MarketHubService:
             zone_df.columns = [c.lower() for c in zone_df.columns]
             gtf_zones = self.zone_detector.detect_zones(zone_df, max_lookback=200)
             demand_zones = [z for z in gtf_zones if z["type"] == "demand"]
-            current_price = float(quote.get("price") if quote else live_frame["Close"].iloc[-1])
+            current_price = float(quote.get("price") or live_frame["Close"].iloc[-1]) if quote else float(live_frame["Close"].iloc[-1])
+            if current_price == 0.0:
+                current_price = float(live_frame["Close"].iloc[-1])
             
             in_demand = False
             forming_demand = False
@@ -955,6 +986,11 @@ class MarketHubService:
                     "risk_reward": item.get("risk_reward") or 0,
                     "current_price": item.get("current_price"),
                     "pre_breakout_timeframe": item.get("pre_breakout_timeframe") or item.get("time_horizon"),
+                    "probability": item.get("probability"),
+                    "ai_insight": item.get("ai_insight"),
+                    "is_fno": item.get("is_fno"),
+                    "pcr": item.get("pcr"),
+                    "bid_ask_ratio": item.get("bid_ask_ratio"),
                 })
 
 

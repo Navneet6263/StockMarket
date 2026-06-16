@@ -98,6 +98,11 @@ export type MarketSignal = {
   ema20_distance_pct?: number;
   vwap_distance_pct?: number;
   is_pre_breakout?: boolean;
+  pcr?: number | null;
+  bid_ask_ratio?: number | null;
+  is_fno?: boolean;
+  options_iv_pct?: number | null;
+  ai_insight?: string | null;
   setup_type?: string;
   signal_stage?: string;
   entry_trigger?: number;

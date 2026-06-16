@@ -84,6 +84,16 @@ export default function OpportunityCard({ item, active, onSelect }: OpportunityC
             {humanize(tag)}
           </span>
         ))}
+        {item.is_fno && item.pcr && (
+          <span className="chip" style={{ background: item.pcr > 1.2 ? "rgba(52,211,153,0.1)" : item.pcr < 0.8 ? "rgba(251,113,133,0.1)" : "", color: item.pcr > 1.2 ? "#34d399" : item.pcr < 0.8 ? "#fb7185" : "#94a3b8" }}>
+            PCR: {item.pcr.toFixed(2)}
+          </span>
+        )}
+        {item.bid_ask_ratio && (
+          <span className="chip" style={{ background: item.bid_ask_ratio > 1.5 ? "rgba(52,211,153,0.1)" : item.bid_ask_ratio < 0.6 ? "rgba(251,113,133,0.1)" : "", color: item.bid_ask_ratio > 1.5 ? "#34d399" : item.bid_ask_ratio < 0.6 ? "#fb7185" : "#94a3b8" }}>
+            {item.bid_ask_ratio > 1 ? `${item.bid_ask_ratio.toFixed(1)}x Buyers` : `${(1/item.bid_ask_ratio).toFixed(1)}x Sellers`}
+          </span>
+        )}
       </div>
 
       <div className="micro-copy">

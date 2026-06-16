@@ -117,6 +117,14 @@ export default function StockDetailPanel({
           <BulletPanel title="Why It Is Flagged" items={detail.explanation.why_it_is_flagged || detail.signals.reasons} />
           <BulletPanel title="What Is Strong" items={detail.explanation.what_is_strong || []} />
           <BulletPanel title="What Is Weak" items={detail.explanation.what_is_weak || detail.signals.weaknesses} />
+          {signal.ai_insight && (
+            <div className="terminal-card soft" style={{ borderLeft: "4px solid #3b82f6" }}>
+              <div className="mono-label" style={{ color: "#3b82f6" }}>Master AI Insight</div>
+              <p className="detail-summary" style={{ fontStyle: "italic", lineHeight: 1.6 }}>
+                {signal.ai_insight.split("**").map((part, i) => i % 2 === 1 ? <strong key={i}>{part}</strong> : part)}
+              </p>
+            </div>
+          )}
           <BulletPanel title="Watch Next" items={detail.explanation.watch_next || []} />
         </div>
       </div>
