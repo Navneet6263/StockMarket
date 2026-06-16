@@ -19,20 +19,35 @@ from app.core.settings import get_settings
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("global_training")
 
-def fetch_historical_setups(db_path: str):
-    logger.info(f"Connecting to DB: {db_path}")
-    conn = sqlite3.connect(db_path)
+from pymongo import MongoClient
+
+def fetch_historical_setups():
+    mongo_uri = os.getenv("MONGO_URL") or os.getenv("MONGO_URI") or "mongodb://localhost:27017"
+    db_name = os.getenv("MONGO_DB_NAME", "stock_predictor_ml")
+    logger.info(f"Connecting to MongoDB: {db_name}")
+    
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+    trade_positions = db["trade_positions"]
     
     # We only care about setups that are closed with a conclusive outcome
-    query = """
-    SELECT symbol, direction, detected_at, status 
-    FROM tracked_setups 
-    WHERE status IN ('passed', 'failed')
-    """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    cursor = trade_positions.find({
+        "status": {"$in": ["target_hit", "stop_loss_hit", "time_exit", "closed"]}
+    })
     
-    logger.info(f"Fetched {len(df)} conclusive setups from DB.")
+    rows = []
+    for doc in cursor:
+        rows.append({
+            "symbol": doc.get("symbol"),
+            "direction": doc.get("direction", "bullish"),
+            "detected_at": doc.get("entry_date") or doc.get("created_at"),
+            "status": doc.get("status")
+        })
+        
+    client.close()
+    
+    df = pd.DataFrame(rows)
+    logger.info(f"Fetched {len(df)} conclusive setups from MongoDB.")
     return df
 
 def build_global_dataset(setups_df, data_provider):
@@ -89,7 +104,7 @@ def build_global_dataset(setups_df, data_provider):
                 
             # Define Label (Target)
             # We want the AI to predict if a setup will hit its target.
-            is_success = 1 if status == 'passed' else 0
+            is_success = 1 if status in ['target_hit', 'passed'] else 0
             
             # Add context feature so the model knows if we are looking for a long or short
             feature_row = feature_row.copy()
@@ -112,8 +127,8 @@ def train_global_model():
     settings = get_settings()
     data_provider = MarketDataService(settings)
     
-    # 1. Fetch DB records
-    setups_df = fetch_historical_setups(settings.tracked_setup_db_path)
+    # 1. Fetch DB records from MongoDB
+    setups_df = fetch_historical_setups()
     
     # 2. Build Dataset
     X, y = build_global_dataset(setups_df, data_provider)
