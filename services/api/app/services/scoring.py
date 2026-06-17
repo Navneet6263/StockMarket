@@ -430,6 +430,8 @@ class ScoringEngine:
                 "trap_warnings": trap_data.get("trap_warnings", []),
                 "institutional_buying": trap_data.get("institutional", {}).get("is_institutional_buying", False),
                 "institutional_selling": trap_data.get("institutional", {}).get("is_institutional_selling", False),
+                "smart_shakeout": trap_data.get("smart_shakeout", {}).get("is_shakeout", False),
+                "shakeout_reasons": trap_data.get("smart_shakeout", {}).get("shakeout_reasons", []),
             }
         except Exception as e:
             return {
@@ -902,12 +904,15 @@ class ScoringEngine:
         if continuation.get("is_momentum_continuation"):
             tags.extend(["momentum_continuation", "re_entry_setup"])
 
+        trap_fields = self._build_trap_fields(snapshot, direction)
+
         entry_blocks_fresh_buy = (
             direction == "bullish"
             and (
                 entry_timing.get("entry_quality") in {"poor", "avoid"}
                 or bool(demand_supply.get("blockFreshEntry"))
             )
+            and not trap_fields.get("smart_shakeout")
         )
         live_pattern_ready = bool(
             direction == "bullish"
@@ -943,6 +948,14 @@ class ScoringEngine:
         else:
             signal_stage = "WATCH"
             action = "WATCH"
+
+        if trap_fields.get("smart_shakeout"):
+            signal_stage = "SHAKEOUT_RETEST"
+            action = "BUY_ON_SUPPORT"
+            tags.append("operator_shakeout")
+            tags.append("smart_money_absorption")
+            reasons.extend(trap_fields.get("shakeout_reasons", []))
+            confidence = min(confidence + 15.0, 95.0)
         historical_sample_count = int(historical.get("sample_count", historical.get("signal_count", 0)) or 0)
         historical_win_rate = float(historical.get("win_rate", 0) or 0)
         historically_validated = historical_sample_count >= 30 and historical_win_rate >= 0.60
@@ -1047,6 +1060,13 @@ class ScoringEngine:
                             ai_notes.append(f"My model shows only a **{ai_probability*100:.1f}% chance** of success. Avoid fresh entries.")
                             ai_insight = " ".join(ai_notes)
                             risk_factors.insert(0, ai_insight)
+                            
+                            # CRITICAL FIX: If AI is extremely bearish, penalize the main technical confidence 
+                            # so this stock doesn't show up with 90%+ in the main UI/Dashboard.
+                            if direction == 'bullish':
+                                confidence = max(38.0, confidence - 25.0)
+                            elif direction == 'bearish':
+                                confidence = max(38.0, confidence - 25.0)
                             
                 except Exception as e:
                     pass
@@ -1219,5 +1239,5 @@ class ScoringEngine:
             "bullish_score": round(bullish, 1),
             "bearish_score": round(bearish, 1),
             "historical_context": historical,
-            **self._build_trap_fields(snapshot, direction),
+            **trap_fields,
         }

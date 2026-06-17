@@ -509,7 +509,62 @@ def detect_institutional_footprint(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. COMPLETE TRAP ANALYSIS (combines all above)
+# 5. SMART SHAKEOUT (FOMO PULLBACK) DETECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def detect_smart_shakeout(
+    price: float,
+    high: float,
+    prev_close: float,
+    volume_ratio: float,
+    vwap: float,
+    ema_20: float,
+    bid_ask_ratio: float,
+) -> Dict:
+    """
+    Operator Shakeout (Liquidity Grab) detect karta hai.
+    
+    Conditions:
+    1. FOMO Surge: Intraday high > 5% se upar gaya tha.
+    2. Rejection Wick: High se price 2.5% ya zyada gir chuka hai.
+    3. Volume: Volume bhayankar high hai (> 2.0x).
+    4. Support Hold: Price abhi bhi VWAP aur 20-EMA ke upar safe zone me hai.
+    5. Smart Logic: Girte hue market me Bid/Ask ratio acha hai (yani institutional buyers are catching the dip).
+    """
+    reasons = []
+    
+    if price <= 0 or prev_close <= 0 or high <= 0:
+        return {"is_shakeout": False, "shakeout_reasons": []}
+        
+    fomo_surge_pct = ((high - prev_close) / prev_close) * 100
+    pullback_from_high_pct = ((high - price) / price) * 100
+    
+    is_fomo_surge = fomo_surge_pct >= 5.0
+    is_deep_pullback = pullback_from_high_pct >= 2.5
+    is_high_volume = volume_ratio >= 1.8
+    is_holding_support = price >= vwap * 0.995 and (ema_20 == 0 or price >= ema_20)
+    is_smart_bidding = bid_ask_ratio >= 1.2  # More buyers stepping in on the dip
+    
+    if is_fomo_surge and is_deep_pullback and is_high_volume and is_holding_support:
+        if is_smart_bidding:
+            reasons.append(
+                f"Smart Shakeout: Stock surged {fomo_surge_pct:.1f}% but pulled back {pullback_from_high_pct:.1f}%. "
+                f"Volume is high ({volume_ratio:.1f}x) and Bid/Ask is bullish ({bid_ask_ratio:.1f}x) while holding VWAP support. "
+                "Institutions are absorbing weak hands."
+            )
+            return {"is_shakeout": True, "shakeout_reasons": reasons, "shakeout_confidence": "high"}
+        else:
+            reasons.append(
+                f"Possible Shakeout: Stock pulled back {pullback_from_high_pct:.1f}% after a {fomo_surge_pct:.1f}% surge on high volume. "
+                "Holding VWAP, but awaiting stronger bid-depth confirmation."
+            )
+            return {"is_shakeout": True, "shakeout_reasons": reasons, "shakeout_confidence": "medium"}
+            
+    return {"is_shakeout": False, "shakeout_reasons": []}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. COMPLETE TRAP ANALYSIS (combines all above)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dict:
@@ -577,17 +632,39 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
             iv_percentile=_safe(options_data.get("iv_percentile"), 50.0),
         )
 
+    # Smart Shakeout Check
+    shakeout = detect_smart_shakeout(
+        price=price,
+        high=high,
+        prev_close=prev_close,
+        volume_ratio=volume_ratio,
+        vwap=_safe(signal.get("rolling_vwap") or signal.get("vwap")),
+        ema_20=_safe(signal.get("ema_20")),
+        bid_ask_ratio=_safe(signal.get("bid_ask_ratio"), 1.0),
+    )
+
     # Aggregate trap risk
     trap_score = 0
     all_warnings = []
 
     if bull_trap["bull_trap_detected"]:
-        trap_score += bull_trap["bull_trap_score"]
-        all_warnings.extend(bull_trap["bull_trap_reason"])
+        if shakeout["is_shakeout"]:
+            # OVERRIDE: The bull trap is actually a smart shakeout!
+            bull_trap["bull_trap_detected"] = False
+            bull_trap["bull_trap_reason"] = ["Bull Trap signal overridden: Identified as a Smart Money Shakeout / Retest."]
+            all_warnings.extend(shakeout["shakeout_reasons"])
+        else:
+            trap_score += bull_trap["bull_trap_score"]
+            all_warnings.extend(bull_trap["bull_trap_reason"])
 
     if inst["is_institutional_selling"]:
-        trap_score += abs(inst["institutional_score"])
-        all_warnings.extend(inst["institutional_warnings"])
+        # Soften institutional selling warning if it's a shakeout
+        if shakeout["is_shakeout"] and shakeout["shakeout_confidence"] == "high":
+            trap_score += abs(inst["institutional_score"]) * 0.3
+            all_warnings.append("Institutional selling footprint detected, but overridden by Shakeout Absorption.")
+        else:
+            trap_score += abs(inst["institutional_score"])
+            all_warnings.extend(inst["institutional_warnings"])
 
     if options_analysis and options_analysis["options_bias"] == "bearish":
         trap_score += 20
@@ -626,6 +703,9 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
     if inst["is_institutional_buying"] and trap_risk in ("none", "low"):
         entry_advice += " Institutional buying confirmed — higher conviction entry."
 
+    if shakeout["is_shakeout"]:
+        entry_advice = "🎯 Operator Shakeout detected. Weak hands are being flushed. BUY on support hold (VWAP/EMA) when volume dries up."
+
     return {
         "trap_risk": trap_risk,
         "trap_score": trap_score,
@@ -635,4 +715,5 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
         "bull_trap": bull_trap,
         "institutional": inst,
         "options": options_analysis,
+        "smart_shakeout": shakeout,
     }

@@ -100,7 +100,7 @@ export default function StockDetailPanel({
 
       <div className="stat-grid">
         <Stat label="Bias" value={humanize(signal.direction)} tone={toneForDirection(signal.direction)} />
-        <Stat label="Confidence" value={`${fmt(signal.confidence, 0)}%`} />
+        <Stat label="Confidence" value={`${signal.probability ? 'AI ' + fmt(signal.probability * 100, 0) : fmt(signal.confidence, 0)}%`} />
         <Stat label="Risk" value={humanize(signal.risk_level)} tone={toneForRisk(signal.risk_level)} />
         <Stat label="Chart Pattern" value={humanize(signal.setup_type || signal.setup_label)} />
         <Stat label="Expected Move" value={`${(signal.expected_move_pct ?? 0) > 0 ? "+" : ""}${fmt(signal.expected_move_pct, 2)}%`} tone={toneForDirection(signal.direction)} />
