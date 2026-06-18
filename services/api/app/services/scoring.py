@@ -970,9 +970,7 @@ class ScoringEngine:
             failure_flags += 1
             failure_reasons.append("Entry is overextended/chasing.")
 
-        if nifty_trend == "BEARISH" and direction == "bullish":
-            failure_flags += 1
-            failure_reasons.append("Hostile Market Regime (Nifty Bearish).")
+
 
         if stop_loss and price and ((abs(price - stop_loss) / price) * 100 > 8.0):
             failure_flags += 1
