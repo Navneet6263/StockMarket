@@ -144,6 +144,14 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
     trigger_text = _fmt_price(trigger)
     fail_text = _fmt_price(fail)
 
+    if action == "AVOID" or signal.get("signal_stage") == "RISK_REJECTED" or signal.get("trap_risk") in {"high", "medium"} or signal.get("bull_trap", {}).get("bull_trap_detected"):
+        return {
+            "biasLabel": "TRAP / FALSE SIGNAL",
+            "entryStatus": "FALSE (Trap Detected)",
+            "tradeDecision": "Warning! This setup triggered the risk gatekeeper (Trap/Operator Risk). Avoid entry.",
+            "confirmationText": "System actively rejected this stock to protect capital.",
+        }
+
     if direction == "bearish":
         if trigger:
             return {
@@ -423,6 +431,10 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
         soft_reasons.append("overextended")
     if score < 40:
         rejection_reasons.append("score_below_40")
+
+    is_trap = signal.get("action") == "AVOID" or signal.get("signal_stage") == "RISK_REJECTED" or signal.get("trap_risk") in {"high", "medium"}
+    if is_trap:
+        rejection_reasons.append("high_trap_risk")
 
     clean_risk = bool(invalidation and (not risk_reward or risk_reward >= 1.0) and not chart["overextended"])
     return {
@@ -736,6 +748,7 @@ def _all_signals(scan: dict[str, Any]) -> list[dict[str, Any]]:
         *(scan.get("momentumRadar") or []),
         *(scan.get("avoid") or []),
         *(scan.get("avoid_risky") or []),
+        *(scan.get("trap_signals") or []),
         *(scan.get("top_rejected") or []),
     ]
     seen: set[str] = set()
