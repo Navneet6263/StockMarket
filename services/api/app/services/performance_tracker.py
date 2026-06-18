@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sqlite3
 from datetime import datetime, timezone, timedelta
 
 from pymongo import MongoClient
@@ -78,6 +79,36 @@ class PerformanceTrackerService:
         # ensure indexes exist
         self.collection.create_index([("symbol", 1), ("status", 1)])
         self.collection.create_index([("entry_date", -1)])
+
+        # SQLite for LLM Training Logs
+        self.sqlite_db_path = os.path.join(os.path.dirname(__file__), "..", "..", "llm_training_trades.sqlite3")
+        self._init_sqlite()
+
+    def _init_sqlite(self):
+        try:
+            with sqlite3.connect(self.sqlite_db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS closed_trades (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT NOT NULL,
+                        entry_price REAL,
+                        exit_price REAL,
+                        entry_date TEXT,
+                        exit_date TEXT,
+                        direction TEXT,
+                        setup_type TEXT,
+                        confidence REAL,
+                        pnl_pct REAL,
+                        exit_reason TEXT,
+                        exit_candle TEXT,
+                        days_held INTEGER
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_symbol_date ON closed_trades (symbol, exit_date)")
+                conn.commit()
+        except Exception as e:
+            logger.error("[SQLITE] Init failed: %s", e)
 
     # ── Save new trade when BUY alert fires ────────────────────────────────────
 
@@ -292,6 +323,27 @@ class PerformanceTrackerService:
                 "pnl_pct":     round(pnl_pct, 2),
             }}
         )
+        
+        # Save to SQLite for LLM Training
+        try:
+            with sqlite3.connect(self.sqlite_db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO closed_trades (
+                        symbol, entry_price, exit_price, entry_date, exit_date, 
+                        direction, setup_type, confidence, pnl_pct, exit_reason, 
+                        exit_candle, days_held
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    pos["symbol"], round(entry_price, 2), round(exit_price, 2),
+                    pos["entry_date"], datetime.now(timezone.utc).isoformat(),
+                    direction, pos.get("setup_type", ""), float(pos.get("confidence") or 0),
+                    round(pnl_pct, 2), reason, exit_candle, days_held
+                ))
+                conn.commit()
+        except Exception as e:
+            logger.error("[SQLITE] Failed to save trade %s: %s", pos["symbol"], e)
+
         logger.info("[PERFORMANCE] Closed %s @ ₹%.2f | reason: %s | candle: %s | PnL: ₹%.2f (%.1f%%) | %d days",
                     pos["symbol"], exit_price, reason, exit_candle, pnl, pnl_pct, days_held)
 

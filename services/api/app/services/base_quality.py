@@ -109,6 +109,24 @@ def score_base_quality(frame: pd.DataFrame) -> Dict:
             score += 7
             reasons.append("Volume is declining during consolidation.")
 
+        # ── 7. POINT 9: Operator / Low-Liquidity Isolation ───────────────────
+        operator_risk = False
+        operator_warnings = []
+        
+        avg_traded_value = vol_avg * price
+        if avg_traded_value < 5_00_00_000:  # < 5 Cr average traded value
+            operator_risk = True
+            operator_warnings.append("Low liquidity: Average traded value < 5 Cr.")
+            
+        # Detect circuits (High == Low and price moved significantly)
+        circuit_days = int(((window["High"] == window["Low"]) & (window["Close"].pct_change().abs() > 0.045)).sum())
+        if circuit_days >= 2:
+            operator_risk = True
+            operator_warnings.append(f"Operator Risk: {circuit_days} circuit limit days detected in base.")
+
+        if operator_risk:
+            score = 0  # Destroy base score
+
         score = min(score, 100)
 
         # ── Pattern type ──────────────────────────────────────────────────────
@@ -148,6 +166,8 @@ def score_base_quality(frame: pd.DataFrame) -> Dict:
             "baseReason": "; ".join(reasons[:4]) or "Base evidence is limited.",
             "baseLookbackCandles": BASE_LOOKBACK,
             "baseAvailable": True,
+            "operator_risk": operator_risk,
+            "operator_warnings": operator_warnings,
         }
 
     except Exception as exc:

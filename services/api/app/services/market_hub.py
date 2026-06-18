@@ -719,6 +719,10 @@ class MarketHubService:
                 and not item.get("overextended_fresh_entry", False)
                 and item.get("setup_stage") not in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
                 and item.get("risk_reward", 0) >= 1.0
+                and item.get("action") != "AVOID"
+                and item.get("signal_stage") != "RISK_REJECTED"
+                and item.get("trap_risk") not in {"high", "medium"}
+                and not item.get("bull_trap", {}).get("bull_trap_detected")
             ],
             key=lambda item: (
                 is_live_pattern_ready(item),

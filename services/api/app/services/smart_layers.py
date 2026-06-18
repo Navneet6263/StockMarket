@@ -93,7 +93,16 @@ def enrich_signal(
     direction = signal.get("direction", "neutral")
     action = signal.get("action", "WATCH")
 
-    if buy_blocked and action in {"BUY", "REENTRY_BUY"}:
+    if action == "AVOID" or signal.get("signal_stage") == "RISK_REJECTED":
+        classification = "blocked_buy"
+        risk_list = signal.get("risk_factors", [])
+        blocked_reason = risk_list[0] if risk_list else "Rejected by mandatory pre-check or trap logic."
+        action_override = "AVOID"
+    elif base.get("operator_risk"):
+        classification = "blocked_buy"
+        blocked_reason = base.get("operator_warnings", ["Operator Risk: Illiquid or highly manipulated."])[0]
+        action_override = "AVOID"
+    elif buy_blocked and action in {"BUY", "REENTRY_BUY"}:
         classification = "blocked_buy"
         blocked_reason = market_context.get("blockedReason", "Market breadth weak; fresh buy calls blocked.")
         action_override = "WATCH"

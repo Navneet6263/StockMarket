@@ -53,6 +53,7 @@ class IndicatorEngine:
         features["volume_avg_20"] = volume_avg_20
         features["relative_volume"] = volume / volume_avg_20
         features["volume_dryup"] = (volume / volume_avg_20.replace(0, np.nan) <= 0.8).astype(int)
+        features["avg_traded_value_20d"] = (close * volume).rolling(20).mean()
 
         # ── NEW: Volume Intelligence (Early Buildup Detection) ──
         volume_avg_5 = volume.rolling(5).mean()
@@ -128,8 +129,12 @@ class IndicatorEngine:
 
         resistance_20 = high.rolling(20).max().shift(1)
         support_20 = low.rolling(20).min().shift(1)
+        resistance_50 = high.rolling(50).max().shift(1)
+        support_50 = low.rolling(50).min().shift(1)
         features["resistance_20"] = resistance_20
         features["support_20"] = support_20
+        features["resistance_50"] = resistance_50
+        features["support_50"] = support_50
         features["breakout_20"] = (close > resistance_20).astype(int)
         features["breakdown_20"] = (close < support_20).astype(int)
         features["distance_to_resistance_pct"] = ((resistance_20 - close) / close.replace(0, np.nan)) * 100
@@ -143,6 +148,15 @@ class IndicatorEngine:
         features["close_location"] = ((close - low) / candle_range).clip(0, 1)
         features["upper_wick_pct"] = ((high - np.maximum(open_, close)) / candle_range).clip(0, 1)
         features["lower_wick_pct"] = ((np.minimum(open_, close) - low) / candle_range).clip(0, 1)
+        features["breakout_close_confirmed"] = ((close > resistance_20) & (features["close_location"] >= 0.55)).astype(int)
+        daily_range_pct = ((high - low) / close.replace(0, np.nan)) * 100
+        circuit_like = (
+            (features["change_pct"].abs() >= 4.5)
+            & (daily_range_pct <= 1.2)
+            & ((features["close_location"] >= 0.90) | (features["close_location"] <= 0.10))
+        ).astype(int)
+        features["circuit_like_session"] = circuit_like
+        features["circuit_like_count_20d"] = circuit_like.rolling(20).sum()
 
         direction = np.sign(close.diff()).fillna(0.0)
         obv = (direction * volume.fillna(0)).cumsum()
@@ -198,11 +212,16 @@ class IndicatorEngine:
     def build_intraday_snapshot(self, intraday_frame: pd.DataFrame | None) -> Dict:
         if intraday_frame is None or intraday_frame.empty or len(intraday_frame) < 20:
             return {
+                "intraday_data_available": False,
                 "intraday_change_pct": 0.0,
                 "intraday_vwap_distance_pct": 0.0,
                 "intraday_volume_ratio": 1.0,
                 "intraday_above_vwap": False,
                 "intraday_breakout": False,
+                "intraday_sustain_breakout": False,
+                "intraday_vwap_hold": False,
+                "intraday_successful_retest": False,
+                "intraday_close_location": 0.5,
             }
 
         frame = intraday_frame.dropna(subset=["Close"]).copy()
@@ -214,13 +233,33 @@ class IndicatorEngine:
         cumulative_vwap = (typical * volume).cumsum() / volume.cumsum()
         volume_ratio = volume.iloc[-1] / volume.rolling(20).mean().iloc[-1]
         prior_high = high.rolling(20).max().shift(1).iloc[-1]
+        prior_high_for_sustain = high.iloc[:-1].tail(20).max() if len(high) > 1 else prior_high
+        candle_range = max(float(high.iloc[-1] - low.iloc[-1]), 0.0001)
+        close_location = (float(close.iloc[-1]) - float(low.iloc[-1])) / candle_range
+        sustain_breakout = (
+            pd.notna(prior_high_for_sustain)
+            and len(close) >= 2
+            and bool(close.iloc[-1] > prior_high_for_sustain)
+            and bool(close.iloc[-2] > prior_high_for_sustain)
+        )
+        successful_retest = (
+            pd.notna(prior_high_for_sustain)
+            and bool(low.iloc[-1] <= prior_high_for_sustain * 1.003)
+            and bool(close.iloc[-1] > prior_high_for_sustain)
+            and close_location >= 0.50
+        )
 
         return {
+            "intraday_data_available": True,
             "intraday_change_pct": round(((close.iloc[-1] / close.iloc[0]) - 1) * 100, 4),
             "intraday_vwap_distance_pct": round(((close.iloc[-1] - cumulative_vwap.iloc[-1]) / cumulative_vwap.iloc[-1]) * 100, 4),
             "intraday_volume_ratio": round(float(volume_ratio) if pd.notna(volume_ratio) else 1.0, 4),
             "intraday_above_vwap": bool(close.iloc[-1] > cumulative_vwap.iloc[-1]),
             "intraday_breakout": bool(close.iloc[-1] > prior_high) if pd.notna(prior_high) else False,
+            "intraday_sustain_breakout": sustain_breakout,
+            "intraday_vwap_hold": bool(close.iloc[-1] >= cumulative_vwap.iloc[-1] * 0.998),
+            "intraday_successful_retest": successful_retest,
+            "intraday_close_location": round(float(np.clip(close_location, 0, 1)), 4),
         }
 
     def build_pre_breakout_training_labels(
@@ -275,4 +314,56 @@ class IndicatorEngine:
         snapshot["near_resistance"] = bool((snapshot.get("distance_to_resistance_pct") or 99) <= 1.2)
         snapshot["near_support"] = bool((snapshot.get("distance_to_support_pct") or 99) <= 1.2)
         snapshot["delivery_available"] = snapshot.get("delivery_ratio") is not None
+        snapshot["recent_candles"] = self._recent_candles(frame, limit=5)
+        close_confirmed = bool(snapshot.get("breakout_close_confirmed"))
+        intraday_available = bool(snapshot.get("intraday_data_available"))
+        intraday_acceptance = bool(
+            snapshot.get("intraday_sustain_breakout")
+            and snapshot.get("intraday_vwap_hold")
+        )
+        snapshot["breakout_acceptance"] = bool(
+            close_confirmed
+            and snapshot.get("above_vwap")
+            and (intraday_acceptance if intraday_available else False)
+        )
+        snapshot["breakout_acceptance_reason"] = (
+            "daily_close_intraday_sustain_vwap"
+            if snapshot["breakout_acceptance"]
+            else "needs_close_sustain_vwap_retest"
+        )
         return snapshot
+
+    def _recent_candles(self, frame: pd.DataFrame, limit: int = 5) -> list[Dict]:
+        if frame.empty:
+            return []
+        candles: list[Dict] = []
+        rows = frame.tail(limit)
+        for idx, row in rows.iterrows():
+            try:
+                open_ = float(row["Open"])
+                high = float(row["High"])
+                low = float(row["Low"])
+                close = float(row["Close"])
+                volume = float(row.get("Volume") or 0)
+                prev_close = None
+                pos = frame.index.get_loc(idx)
+                if isinstance(pos, int) and pos > 0:
+                    prev_close = float(frame["Close"].iloc[pos - 1])
+                candle_range = max(high - low, 0.0001)
+                candles.append(
+                    {
+                        "date": idx.isoformat() if hasattr(idx, "isoformat") else str(idx),
+                        "open": open_,
+                        "high": high,
+                        "low": low,
+                        "close": close,
+                        "volume": volume,
+                        "change_pct": ((close - prev_close) / prev_close * 100) if prev_close else 0.0,
+                        "close_location": float(np.clip((close - low) / candle_range, 0, 1)),
+                        "upper_wick_pct": float(np.clip((high - max(open_, close)) / candle_range, 0, 1)),
+                        "lower_wick_pct": float(np.clip((min(open_, close) - low) / candle_range, 0, 1)),
+                    }
+                )
+            except Exception:
+                continue
+        return candles

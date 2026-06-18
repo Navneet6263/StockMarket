@@ -567,6 +567,129 @@ def detect_smart_shakeout(
 # 6. COMPLETE TRAP ANALYSIS (combines all above)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def detect_bull_trap_sequence(signal: Dict) -> Dict:
+    """Detect the real 2-3 candle bull-trap sequence, not just one failed wick."""
+    resistance = _safe(signal.get("resistance_20") or signal.get("resistance"))
+    candles = signal.get("recent_candles") or []
+    if resistance <= 0 or len(candles) < 2:
+        return {"bull_trap_sequence_detected": False, "sequence_score": 0, "sequence_reasons": []}
+
+    recent = candles[-3:] if len(candles) >= 3 else candles[-2:]
+    push = any(_safe(c.get("high")) > resistance * 1.001 for c in recent[:-1])
+    weak_breakout_close = any(
+        _safe(c.get("high")) > resistance * 1.001
+        and (
+            _safe(c.get("close")) <= resistance * 1.003
+            or _safe(c.get("upper_wick_pct")) >= 0.35
+            or _safe(c.get("close_location"), 0.5) <= 0.55
+        )
+        for c in recent[:-1]
+    )
+    latest = recent[-1]
+    failed_hold = (
+        _safe(latest.get("close")) <= resistance * 1.002
+        or _safe(latest.get("close_location"), 0.5) <= 0.45
+    )
+    volumes = [_safe(c.get("volume")) for c in candles if _safe(c.get("volume")) > 0]
+    latest_volume = _safe(latest.get("volume"))
+    avg_volume = sum(volumes[:-1]) / max(len(volumes[:-1]), 1) if len(volumes) > 1 else latest_volume
+    high_volume = latest_volume > 0 and avg_volume > 0 and latest_volume >= avg_volume * 1.25
+    no_follow_through = _safe(latest.get("change_pct")) <= 0.5 or _safe(latest.get("close")) < _safe(recent[-2].get("close"))
+
+    score = 0
+    reasons: list[str] = []
+    if push:
+        score += 20
+        reasons.append("Price pushed above resistance in the recent candle sequence.")
+    if weak_breakout_close:
+        score += 30
+        reasons.append("Breakout candle had weak close or upper-wick rejection.")
+    if failed_hold:
+        score += 30
+        reasons.append("Next candle failed to hold the breakout level.")
+    if high_volume and no_follow_through:
+        score += 25
+        reasons.append("Volume expanded but price did not follow through.")
+
+    return {
+        "bull_trap_sequence_detected": score >= 60,
+        "sequence_score": score,
+        "sequence_reasons": reasons,
+    }
+
+
+def analyze_volume_quality(signal: Dict) -> Dict:
+    """Separate genuine participation from distribution / absorption volume."""
+    volume_ratio = _safe(signal.get("relative_volume"), 1.0)
+    close_location = _safe(signal.get("close_location"), 0.5)
+    upper_wick_pct = _safe(signal.get("upper_wick_pct"))
+    change_pct = _safe(signal.get("change_pct"))
+    gap_pct = _safe(signal.get("gap_pct"))
+    score = 0
+    warnings: list[str] = []
+    positives: list[str] = []
+
+    if volume_ratio >= 1.5 and upper_wick_pct >= 0.35:
+        score += 25
+        warnings.append("High volume with a large upper wick suggests selling into strength.")
+    if volume_ratio >= 1.5 and close_location <= 0.30:
+        score += 25
+        warnings.append("High volume candle closed near the low, showing seller control.")
+    if volume_ratio >= 2.0 and abs(change_pct) <= 0.5:
+        score += 20
+        warnings.append("High volume without net price progress suggests absorption.")
+    if gap_pct >= 2.0 and volume_ratio >= 1.8 and close_location <= 0.45:
+        score += 25
+        warnings.append("Gap-up with heavy volume and weak close can be operator exit.")
+    if volume_ratio >= 1.2 and close_location >= 0.65 and upper_wick_pct <= 0.25 and change_pct >= 0:
+        positives.append("Volume expanded with a strong close and limited upper wick.")
+
+    status = "trap_volume" if score >= 35 else "genuine_volume" if positives else "neutral_volume"
+    return {
+        "volume_quality": status,
+        "trap_volume_detected": score >= 35,
+        "volume_quality_score": score,
+        "volume_warnings": warnings,
+        "volume_positives": positives,
+    }
+
+
+def detect_delivery_trap(signal: Dict) -> Dict:
+    delivery_available = bool(signal.get("delivery_available"))
+    if not delivery_available:
+        return {
+            "delivery_data_available": False,
+            "delivery_trap_detected": False,
+            "delivery_flag": "unavailable",
+            "delivery_warnings": ["Delivery data unavailable; institutional confirmation cannot be claimed."],
+            "delivery_score": 0,
+        }
+
+    delivery_ratio = _safe(signal.get("delivery_ratio"))
+    change_pct = _safe(signal.get("change_pct"))
+    close_location = _safe(signal.get("close_location"), 0.5)
+    score = 0
+    warnings: list[str] = []
+    flag = "normal"
+
+    if delivery_ratio <= 0.25 and change_pct >= 2.0:
+        score += 35
+        flag = "speculation_risk"
+        warnings.append("Large up move with low delivery points to speculative intraday buying.")
+    if delivery_ratio >= 0.55 and (change_pct <= -0.5 or close_location <= 0.35):
+        score += 35
+        flag = "distribution_risk"
+        warnings.append("High delivery with price weakness can indicate distribution or forced selling.")
+
+    return {
+        "delivery_data_available": True,
+        "delivery_trap_detected": score >= 35,
+        "delivery_flag": flag,
+        "delivery_warnings": warnings,
+        "delivery_score": score,
+    }
+
+
 def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dict:
     """
     Ek signal ke liye complete trap analysis karo.
@@ -605,6 +728,16 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
         candle_body_pct=candle_body_pct,
         upper_wick_pct=upper_wick_pct,
     )
+    bull_trap_sequence = detect_bull_trap_sequence(signal)
+    order_book_trap = detect_order_book_trap(
+        bid_quantity=_safe(signal.get("total_buy_qty")),
+        ask_quantity=_safe(signal.get("total_sell_qty")),
+        price_change_pct=change_pct,
+        volume_ratio=volume_ratio,
+        close_location=close_location,
+    )
+    volume_quality = analyze_volume_quality(signal)
+    delivery_trap = detect_delivery_trap(signal)
 
     # Institutional footprint
     inst = detect_institutional_footprint(
@@ -648,14 +781,24 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
     all_warnings = []
 
     if bull_trap["bull_trap_detected"]:
-        if shakeout["is_shakeout"]:
-            # OVERRIDE: The bull trap is actually a smart shakeout!
-            bull_trap["bull_trap_detected"] = False
-            bull_trap["bull_trap_reason"] = ["Bull Trap signal overridden: Identified as a Smart Money Shakeout / Retest."]
-            all_warnings.extend(shakeout["shakeout_reasons"])
-        else:
-            trap_score += bull_trap["bull_trap_score"]
-            all_warnings.extend(bull_trap["bull_trap_reason"])
+        trap_score += bull_trap["bull_trap_score"]
+        all_warnings.extend(bull_trap["bull_trap_reason"])
+
+    if bull_trap_sequence["bull_trap_sequence_detected"]:
+        trap_score += bull_trap_sequence["sequence_score"]
+        all_warnings.extend(bull_trap_sequence["sequence_reasons"])
+
+    if order_book_trap["trap_detected"]:
+        trap_score += order_book_trap["trap_score"]
+        all_warnings.extend(order_book_trap["trap_reason"])
+
+    if volume_quality["trap_volume_detected"]:
+        trap_score += volume_quality["volume_quality_score"]
+        all_warnings.extend(volume_quality["volume_warnings"])
+
+    if delivery_trap["delivery_trap_detected"]:
+        trap_score += delivery_trap["delivery_score"]
+        all_warnings.extend(delivery_trap["delivery_warnings"])
 
     if inst["is_institutional_selling"]:
         # Soften institutional selling warning if it's a shakeout
@@ -703,7 +846,7 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
     if inst["is_institutional_buying"] and trap_risk in ("none", "low"):
         entry_advice += " Institutional buying confirmed — higher conviction entry."
 
-    if shakeout["is_shakeout"]:
+    if shakeout["is_shakeout"] and not bull_trap["bull_trap_detected"] and not bull_trap_sequence["bull_trap_sequence_detected"]:
         entry_advice = "🎯 Operator Shakeout detected. Weak hands are being flushed. BUY on support hold (VWAP/EMA) when volume dries up."
 
     return {

@@ -251,6 +251,24 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
     if hv_proxy > MAX_HV_PROXY_FOR_OPTION_BUY:
         blockers.append(f"HV Proxy ({hv_proxy:.1f}%) is too high. High risk of IV Crush.")
 
+    # POINT 8: Options-Specific Trap Gating (Strict Live Data Required)
+    chain_data = item.get("options_chain_snapshot", {})
+    if not chain_data:
+        blockers.append("Live options chain data unavailable (Fallback mode). Option buying blocked.")
+    else:
+        dte = _safe_float(chain_data.get("days_to_expiry"))
+        if dte < 2.0:
+            blockers.append(f"DTE ({dte}) is too low. Expiry day gamma/theta trap risk.")
+        
+        spread = _safe_float(chain_data.get("bid_ask_spread_pct"))
+        if spread > 5.0:
+            blockers.append(f"Bid-Ask spread ({spread}%) is too wide. Slippage risk.")
+            
+        vol = _safe_float(chain_data.get("volume"))
+        oi = _safe_float(chain_data.get("open_interest"))
+        if vol < 1000 or oi < 2000:
+            blockers.append("Insufficient option liquidity (Volume/OI too low).")
+
     ready_blockers = [reason for reason in blockers if "within 1% alert zone" not in reason]
     if not ready_blockers and trigger_crossed and volume_confirmed:
         status = "STRICT_READY"

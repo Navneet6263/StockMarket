@@ -939,15 +939,57 @@ class ScoringEngine:
         elif chase.get("overextended_fresh_entry") or chase.get("chase_risk"):
             signal_stage = "AVOID_CHASE"
             action = "WAIT_FOR_PULLBACK"
-        elif "breakout" in tags or "breakdown" in tags:
-            signal_stage = "CONFIRMED_BREAKOUT"
-            action = "BUY" if direction == "bullish" else "SELL"
+        elif "breakout" in tags:
+            # POINT 2: Breakout Acceptance over Crossing
+            if price and resistance and price > resistance * 1.002 and snapshot.get("above_vwap") and close_location >= 0.5:
+                signal_stage = "CONFIRMED_BREAKOUT"
+                action = "BUY"
+            else:
+                signal_stage = "WATCH_FOR_ACCEPTANCE"
+                action = "WATCH"
+                reasons.append("Breakout crossed resistance but lacks VWAP hold or strong close. Wait for acceptance.")
+        elif "breakdown" in tags:
+            signal_stage = "CONFIRMED_BREAKDOWN"
+            action = "SELL"
         elif pattern_context["pattern_score"] >= 3:
             signal_stage = "PATTERN_FORMING"
             action = "WATCH"
         else:
             signal_stage = "WATCH"
             action = "WATCH"
+
+        # POINT 1 & 10: Mandatory Failure Pre-Check & Hard Trap Rejection
+        failure_flags = 0
+        failure_reasons = []
+
+        if trap_fields.get("trap_risk") in {"high", "medium"} or trap_fields.get("bull_trap", {}).get("bull_trap_detected"):
+            failure_flags += 2  # Hard fail
+            failure_reasons.append("High Trap Risk / Bull Trap Detected.")
+
+        if chase.get("chase_risk") or chase.get("overextended_fresh_entry"):
+            failure_flags += 1
+            failure_reasons.append("Entry is overextended/chasing.")
+
+        if nifty_trend == "BEARISH" and direction == "bullish":
+            failure_flags += 1
+            failure_reasons.append("Hostile Market Regime (Nifty Bearish).")
+
+        if stop_loss and price and ((abs(price - stop_loss) / price) * 100 > 8.0):
+            failure_flags += 1
+            failure_reasons.append("Stop-loss is too wide (>8%), unrealistic for swing.")
+
+        if not trap_fields.get("delivery_data_available", True) and direction == "bullish":
+            confidence = min(confidence, 80.0)
+            if relative_volume > 2.0:
+                failure_flags += 1
+                failure_reasons.append("High volume move without delivery confirmation (Speculation Risk).")
+
+        if failure_flags >= 2 and action in {"BUY", "SELL", "REENTRY_BUY"}:
+            action = "AVOID"
+            signal_stage = "RISK_REJECTED"
+            tags.append("risk_rejected")
+            risk_factors.insert(0, "MANDATORY PRE-CHECK FAILED: " + " | ".join(failure_reasons))
+            confidence = min(confidence, 60.0)
 
         if trap_fields.get("smart_shakeout"):
             signal_stage = "SHAKEOUT_RETEST"
