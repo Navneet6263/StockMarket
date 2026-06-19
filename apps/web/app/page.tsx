@@ -6,6 +6,7 @@ import TradingChart from "./components/TradingChart";
 const TABS = [
   { id: "dashboard",   label: "Dashboard",       api: "/api/market/hot-picks" },
   { id: "live-action", label: "🔴 Live Action",  api: "/api/market/live-entries" },
+  { id: "ai-98",       label: "🤖 AI 98% Club",   api: "/api/market/hot-picks" },
   { id: "hot-picks",   label: "🌟 God-Tier Scans",  api: "/api/market/hot-picks" },
   { id: "volume-boomers", label: "📦 3x+ Volume Boomers", api: "/api/market/hot-picks" },
   { id: "watchlist",   label: "Watchlist",         api: "/api/market/hot-picks" },
@@ -769,6 +770,14 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
 function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
   if (tab === "dashboard") return data.hotPicks || data.top_opportunities || [];
+  if (tab === "ai-98") {
+    const items = data.hotPicks || data.top_opportunities || [];
+    return items.filter((item: any) => {
+      const confidence = item.confidence ?? item.score ?? 0;
+      const aiProb = item.raw?.probability ?? item.probability ?? 0;
+      return confidence > 92 && aiProb >= 0.98;
+    });
+  }
   if (tab === "hot-picks") {
     const items = data.hotPicks || data.top_opportunities || [];
     return items.filter((item: any) => {
@@ -939,8 +948,7 @@ export default function Page() {
     : activeFilter === "high-conf" ? allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80)
     : activeFilter === "tomorrow" ? allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("tomorrow"))
     : activeFilter === "1-2-days" ? allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2"))
-    : activeFilter === "3-4-days" ? allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-4") || s.includes("3 to 4") || s.includes("3 - 4"); })
-    : activeFilter === "anytime" ? allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("any time") || s.includes("anytime"); })
+    : activeFilter === "3-5-days" ? allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-5") || s.includes("3 to 5") || s.includes("3 - 5"); })
     : allLiveItems;
 
   const mood = summary?.marketMood || data?.marketMood || "loading";
@@ -1061,8 +1069,7 @@ export default function Page() {
                   { key: "high-conf", label: "🎯 High Confidence", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
                   { key: "tomorrow",  label: "🌅 Tomorrow",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("tomorrow")).length },
                   { key: "1-2-days",  label: "⏳ 1-2 Days",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2")).length },
-                  { key: "3-4-days",  label: "📆 3-4 Days",      count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-4") || s.includes("3 to 4") || s.includes("3 - 4"); }).length },
-                  { key: "anytime",   label: "🔥 Anytime",       count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("any time") || s.includes("anytime"); }).length },
+                  { key: "3-5-days",  label: "📆 3-5 Days",      count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-5") || s.includes("3 to 5") || s.includes("3 - 5"); }).length },
                 ] as { key: string; label: string; count: number }[]).map(f => (
                   <button
                     key={f.key}
