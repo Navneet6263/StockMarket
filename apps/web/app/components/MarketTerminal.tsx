@@ -148,6 +148,23 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
   const trapRisk = pick.trapRisk || demand.trapRisk;
   return (
     <article className={`hot-pick-card ${compact ? "is-compact" : ""}`}>
+      {pick.sectorBadge ? (
+        <div style={{ 
+          background: "linear-gradient(90deg, #ff8a00, #e52e71)", 
+          color: "white", 
+          padding: "4px 10px", 
+          borderRadius: "6px", 
+          fontSize: "0.85rem", 
+          fontWeight: "bold", 
+          marginBottom: "10px", 
+          display: "inline-block", 
+          boxShadow: "0 0 10px rgba(229, 46, 113, 0.5)",
+          textTransform: "uppercase",
+          letterSpacing: "0.5px"
+        }}>
+          {pick.sectorBadge}
+        </div>
+      ) : null}
       <div className="hot-card-top">
         <div>
           <div className="symbol-line">

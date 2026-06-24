@@ -276,6 +276,7 @@ export type HotPick = {
   direction: "bullish" | "bearish" | "neutral";
   confidence: number;
   score?: number;
+  sectorBadge?: string;
   scoreBreakdown?: {
     breakoutSupportResistance?: number;
     chartSetup?: number;

@@ -175,6 +175,14 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
             "confirmationText": "Wait for price to break the range before deciding up or down.",
         }
 
+    if action == "WAIT_FOR_PULLBACK" or "VALID_BREAKOUT_BUT_EXTENDED" in (signal.get("trade_labels") or []):
+        return {
+            "biasLabel": "Bullish (Extended)",
+            "entryStatus": "Wait for Proper Pullback",
+            "tradeDecision": "Price is overextended. Do NOT chase the rally! Wait for a solid pullback to the moving average (VWAP/20-EMA) or wait for a fresh base to form.",
+            "confirmationText": f"Only buy on a clear dip near {fail_text} or when structural support is established.",
+        }
+
     if _has_late_entry_risk(signal):
         seller_pressure = _display_label(signal.get("seller_pressure"), "elevated")
         profit_risk = _display_label(signal.get("profit_booking_risk"), "elevated")
@@ -190,6 +198,16 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
             "entryStatus": "Wait for pullback",
             "tradeDecision": decision[:260],
             "confirmationText": f"Only reconsider on pullback/retest or a strong hold above {trigger_text}. Risk below {fail_text}.",
+        }
+        
+    tags = signal.get("tags", []) or []
+    is_at_pullback = "ema_hold" in tags or "support_bounce" in tags
+    if is_at_pullback and action not in {"AVOID", "WAIT_FOR_PULLBACK"} and direction == "bullish":
+        return {
+            "biasLabel": "Pullback Support Holding",
+            "entryStatus": "✅ Level Reached (Buy)",
+            "tradeDecision": f"Stock has pulled back perfectly and is holding its base/EMA. Excellent entry level here. Risk below {fail_text}.",
+            "confirmationText": f"Bounce from base is active. Setup fails below {fail_text}.",
         }
 
     if action in {"BUY", "REENTRY_BUY"} or (price and trigger and price >= trigger):
@@ -520,6 +538,7 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "invalidation": _fmt_price(signal.get("invalidation") or stop),
         "reason": reason[:520],
         "whyItCanMove": reason[:520],
+        "sectorBadge": f"🔥 BIG MONEY IN {str(signal.get('sector') or 'SECTOR').upper()}" if signal.get("globalSectorCategory") == "top_3" else None,
         "risk": risk_items[0] if risk_items else f"{signal.get('risk_level', 'medium').title()} risk. Respect the invalidation level.",
         "riskLevel": signal.get("risk_level", "medium"),
         "timeHorizon": signal.get("timeframe_label") or "swing",
