@@ -686,8 +686,22 @@ class ScoringEngine:
         pcr = float(snapshot.get("pcr", 1.0))
         bid_ask_ratio = float(snapshot.get("bid_ask_ratio", 1.0))
         is_fno = snapshot.get("is_fno", False)
+        
+        options_chain = snapshot.get("options_chain_snapshot", {})
+        highest_ce = options_chain.get("highest_ce_strike")
+        highest_pe = options_chain.get("highest_pe_strike")
+        
+        # CVD (Cumulative Volume Delta) Approximation
+        # High money flow (CMF) + positive OBV slope + tight price range = Absorption
+        cvd_rising = (cmf >= 0.15) and (obv_slope > 0) and (tight_consolidation_pct <= 5.0)
+        cvd_falling = (cmf <= -0.15) and (obv_slope < 0) and (tight_consolidation_pct <= 5.0)
 
         if direction == "bullish":
+            if cvd_rising:
+                confidence += 8.0
+                tags.append("cvd_absorption")
+                reasons.insert(0, "🟢 CVD Absorption Detected: Institutions are actively absorbing all supply here. Cumulative Volume Delta is highly positive despite flat price. Ready for markup.")
+                
             if is_fno and pcr > 1.2:
                 confidence += 5.0
                 reasons.append(f"Options Chain shows strong Put writing (PCR: {pcr:.2f}), confirming smart money support.")
@@ -695,14 +709,28 @@ class ScoringEngine:
                 confidence -= 5.0
                 risk_factors.append(f"Bearish Options Chain (PCR: {pcr:.2f}) contradicts bullish chart setup.")
             
-            if bid_ask_ratio > 1.5:
+            if bid_ask_ratio >= 15.0:
+                confidence += 15.0
+                tags.append("100_percent_buyers")
+                reasons.insert(0, "🚀 100% BUYERS (LOCKED): Order book is completely filled with buyers and NO sellers. Massive blast expected.")
+            elif bid_ask_ratio > 1.5:
                 confidence += 3.0
                 reasons.append(f"Heavy buy-side depth ({bid_ask_ratio:.1f}x buyers) in live order book.")
             elif bid_ask_ratio < 0.4:
                 confidence -= 5.0
                 risk_factors.append(f"Order book is bearish ({1/bid_ask_ratio:.1f}x sellers), fakeout risk possible.")
                 
+            # Demote generic "kachra" technicals (fakeouts without real money flow)
+            if confidence >= 88 and bid_ask_ratio < 1.2 and relative_volume < 1.5:
+                confidence -= 12.0
+                risk_factors.append("Generic technical breakout without massive institutional volume or order book support. High risk of fakeout/trap.")
+                
         elif direction == "bearish":
+            if cvd_falling:
+                confidence += 8.0
+                tags.append("cvd_distribution")
+                reasons.insert(0, "🔴 CVD Distribution Detected: Institutions are stealthily distributing shares. Cumulative Volume Delta is highly negative. Support will break soon.")
+                
             if is_fno and pcr < 0.8:
                 confidence += 5.0
                 reasons.append(f"Options Chain shows heavy Call writing (PCR: {pcr:.2f}), confirming resistance.")
@@ -710,7 +738,11 @@ class ScoringEngine:
                 confidence -= 5.0
                 risk_factors.append(f"Bullish Options Chain (PCR: {pcr:.2f}) contradicts bearish chart setup.")
                 
-            if bid_ask_ratio < 0.6:
+            if bid_ask_ratio <= 0.05:
+                confidence += 15.0
+                tags.append("100_percent_sellers")
+                reasons.insert(0, "🩸 100% SELLERS (LOCKED): Order book is completely filled with sellers. Freefall expected.")
+            elif bid_ask_ratio < 0.6:
                 confidence += 3.0
                 reasons.append(f"Heavy sell-side depth ({1/bid_ask_ratio:.1f}x sellers) in live order book.")
             elif bid_ask_ratio > 2.5:
@@ -723,10 +755,28 @@ class ScoringEngine:
 
         if direction == "bullish":
             expected_move_pct = historical.get("avg_win_pct") or max(0.8, atr_pct * 1.05)
-            invalidation = self._safe(snapshot, "support_20") or self._safe(snapshot, "ema_20")
+            
+            # Options Magnet Logic (Target)
+            if is_fno and highest_ce and price < highest_ce:
+                target_pct = ((highest_ce - price) / price) * 100
+                if 2.0 <= target_pct <= 12.0:
+                    expected_move_pct = max(expected_move_pct, target_pct)
+                    reasons.insert(0, f"🧲 Institutional Magnet Detected: Massive Call OI wall at INR {highest_ce}. Shorts are trapped, expect a pull towards this liquidity pool.")
+
+            # Widen the stoploss to be 1% below the structural support to prevent 15-minute pullback hunting
+            base_sl = self._safe(snapshot, "support_20") or self._safe(snapshot, "ema_20")
+            if is_fno and highest_pe and highest_pe < price:
+                pe_sl_pct = ((price - highest_pe) / price) * 100
+                if pe_sl_pct <= 6.0:  # If put wall is within 6%, it's a great stoploss
+                    base_sl = highest_pe
+                    reasons.insert(1, f"🛡️ Institutional Floor: Heavy Put writing at INR {highest_pe} provides rock-solid support.")
+            
+            invalidation = base_sl * 0.99 if base_sl else price * 0.98
+            
         elif direction == "bearish":
             expected_move_pct = -(historical.get("avg_win_pct") or max(0.8, atr_pct * 1.05))
-            invalidation = self._safe(snapshot, "resistance_20") or self._safe(snapshot, "ema_20")
+            base_sl = self._safe(snapshot, "resistance_20") or self._safe(snapshot, "ema_20")
+            invalidation = base_sl * 1.01 if base_sl else price * 1.02
         else:
             expected_move_pct = 0.0
             invalidation = self._safe(snapshot, "ema_20") or price
@@ -1057,49 +1107,74 @@ class ScoringEngine:
                         
                         ai_insight = None
                         if ai_probability > 0.75:
-                            tags.append("ai_highly_bullish")
-                            ai_notes = ["🤖 **Master AI Analysis**: I have scanned the entire historical chart."]
-                            
-                            if 'failed_breakdown' in last_row and int(last_row['failed_breakdown'].iloc[0]) == 1:
-                                ai_notes.append("It recently showed a false breakdown to trap sellers (Bear Trap), but refused to fall further.")
-                            if 'volume_divergence' in last_row and int(last_row['volume_divergence'].iloc[0]) == 1:
-                                ai_notes.append("Massive volume is building up silently without the price moving, indicating strong institutional accumulation.")
-                            if 'rsi_oversold' in last_row and int(last_row['rsi_oversold'].iloc[0]) == 1:
-                                ai_notes.append("The chart is heavily oversold and primed for a violent reversal.")
+                            if direction == 'bullish':
+                                tags.append("ai_highly_bullish")
+                                ai_notes = ["🤖 **Master AI Analysis**: I have scanned the entire historical chart."]
                                 
-                            # F&O and Order Book Narrative
-                            if snapshot.get("is_fno"):
-                                pcr_val = float(snapshot.get("pcr", 1.0))
-                                if pcr_val > 1.2:
-                                    ai_notes.append(f"Options Chain confirms smart money is aggressively writing Puts (PCR: {pcr_val:.2f}), creating a solid floor.")
-                            
-                            bar = float(snapshot.get("bid_ask_ratio", 1.0))
-                            if bar > 1.5:
-                                ai_notes.append(f"Live Market Depth shows {bar:.1f}x more Buyers than Sellers, indicating aggressive institutional buying.")
+                                if 'failed_breakdown' in last_row and int(last_row['failed_breakdown'].iloc[0]) == 1:
+                                    ai_notes.append("It recently showed a false breakdown to trap sellers (Bear Trap), but refused to fall further.")
+                                if 'volume_divergence' in last_row and int(last_row['volume_divergence'].iloc[0]) == 1:
+                                    ai_notes.append("Massive volume is building up silently without the price moving, indicating strong institutional accumulation.")
+                                if 'rsi_oversold' in last_row and int(last_row['rsi_oversold'].iloc[0]) == 1:
+                                    ai_notes.append("The chart is heavily oversold and primed for a violent reversal.")
+                                    
+                                if snapshot.get("is_fno"):
+                                    pcr_val = float(snapshot.get("pcr", 1.0))
+                                    if pcr_val > 1.2:
+                                        ai_notes.append(f"Options Chain confirms smart money is aggressively writing Puts (PCR: {pcr_val:.2f}), creating a solid floor.")
                                 
-                            ai_notes.append(f"Based on pattern similarities across our database, I am **{ai_probability*100:.1f}% confident** that this will run hard from here.")
+                                bar = float(snapshot.get("bid_ask_ratio", 1.0))
+                                if bar > 1.5:
+                                    ai_notes.append(f"Live Market Depth shows {bar:.1f}x more Buyers than Sellers, indicating aggressive institutional buying.")
+                                    
+                                ai_notes.append(f"Based on pattern similarities across our database, I am **{ai_probability*100:.1f}% confident** that this will run hard from here.")
+                            else:
+                                tags.append("ai_highly_bearish")
+                                ai_notes = ["🤖 **Master AI Analysis**: I have scanned the entire historical chart."]
+                                
+                                if 'failed_breakout' in last_row and int(last_row['failed_breakout'].iloc[0]) == 1:
+                                    ai_notes.append("It just faked a breakout to trap buyers (Bull Trap) and is facing heavy supply.")
+                                    
+                                if snapshot.get("is_fno"):
+                                    pcr_val = float(snapshot.get("pcr", 1.0))
+                                    if pcr_val < 0.8:
+                                        ai_notes.append(f"Options Chain confirms heavy Call writing (PCR: {pcr_val:.2f}), creating a massive resistance wall.")
+                                
+                                bar = float(snapshot.get("bid_ask_ratio", 1.0))
+                                if bar < 0.6:
+                                    ai_notes.append(f"Live Market Depth shows {1/bar:.1f}x more Sellers than Buyers, indicating aggressive dumping.")
+                                elif bar > 1.5:
+                                    ai_notes.append(f"Live Market Depth shows {bar:.1f}x more Buyers than Sellers. In a bearish setup, this often indicates retail buyers getting trapped.")
+                                    
+                                ai_notes.append(f"Based on pattern similarities across our database, I am **{ai_probability*100:.1f}% confident** that this will face a sharp sell-off from here.")
+
                             ai_insight = " ".join(ai_notes)
                             reasons.insert(0, ai_insight)
                             
                         elif ai_probability < 0.3:
-                            tags.append("ai_highly_bearish")
-                            ai_notes = ["🤖 **Master AI Warning**: I have scanned the historical chart."]
-                            if 'failed_breakout' in last_row and int(last_row['failed_breakout'].iloc[0]) == 1:
-                                ai_notes.append("It just faked a breakout to trap buyers (Bull Trap) and is facing heavy supply.")
+                            if direction == 'bullish':
+                                tags.append("ai_highly_bearish")
+                                ai_notes = ["🤖 **Master AI Warning**: I have scanned the historical chart."]
+                                if 'failed_breakdown' in last_row and int(last_row['failed_breakdown'].iloc[0]) == 1:
+                                    ai_notes.append("It just faked a breakout to trap buyers (Bull Trap) and is facing heavy supply.")
+                                    
+                                if snapshot.get("is_fno"):
+                                    pcr_val = float(snapshot.get("pcr", 1.0))
+                                    if pcr_val < 0.8:
+                                        ai_notes.append(f"Options Chain confirms heavy Call writing (PCR: {pcr_val:.2f}), creating a massive resistance wall.")
                                 
-                            # Bearish F&O Narrative
-                            if snapshot.get("is_fno"):
-                                pcr_val = float(snapshot.get("pcr", 1.0))
-                                if pcr_val < 0.8:
-                                    ai_notes.append(f"Options Chain confirms heavy Call writing (PCR: {pcr_val:.2f}), creating a massive resistance wall.")
-                            
-                            bar = float(snapshot.get("bid_ask_ratio", 1.0))
-                            if bar < 0.6:
-                                ai_notes.append(f"Live Market Depth shows {1/bar:.1f}x more Sellers than Buyers, indicating aggressive dumping.")
+                                bar = float(snapshot.get("bid_ask_ratio", 1.0))
+                                if bar < 0.6:
+                                    ai_notes.append(f"Live Market Depth shows {1/bar:.1f}x more Sellers than Buyers, indicating aggressive dumping.")
+                                    
+                                ai_notes.append(f"My model shows only a **{ai_probability*100:.1f}% chance** of success. Avoid fresh entries.")
+                            else:
+                                tags.append("ai_highly_bullish")
+                                ai_notes = ["🤖 **Master AI Warning**: I have scanned the historical chart."]
+                                ai_notes.append(f"My model shows only a **{ai_probability*100:.1f}% chance** of this bearish setup working. This might actually reverse and go up. Avoid shorting.")
                                 
-                            ai_notes.append(f"My model shows only a **{ai_probability*100:.1f}% chance** of success. Avoid fresh entries.")
                             ai_insight = " ".join(ai_notes)
-                            risk_factors.insert(0, ai_insight)
+                            reasons.insert(0, ai_insight)
                             
                             # CRITICAL FIX: If AI is extremely bearish, penalize the main technical confidence 
                             # so this stock doesn't show up with 90%+ in the main UI/Dashboard.

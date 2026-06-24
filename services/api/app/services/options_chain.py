@@ -263,12 +263,27 @@ class LiveOptionsChainService:
         except Exception:
             pass
 
+        highest_ce_oi = 0
+        highest_pe_oi = 0
+        highest_ce_strike = 0
+        highest_pe_strike = 0
+
+        for s in strikes:
+            if s["ce_oi"] > highest_ce_oi:
+                highest_ce_oi = s["ce_oi"]
+                highest_ce_strike = s["strike"]
+            if s["pe_oi"] > highest_pe_oi:
+                highest_pe_oi = s["pe_oi"]
+                highest_pe_strike = s["strike"]
+
         return {
             "type": "OPTIONS_SNAPSHOT",
             "symbol": symbol,
             "expiry": expiry_str,
             "pcr": round(pcr, 2),
             "max_pain": max_pain,
+            "highest_ce_strike": highest_ce_strike,
+            "highest_pe_strike": highest_pe_strike,
             "spot_price": spot_price,
             "days_to_expiry": days_to_expiry,
             "theta_risk": days_to_expiry <= 2,
@@ -343,7 +358,21 @@ class LiveOptionsChainService:
             try:
                 meta = self._resolve_nearest_expiry(symbol)
                 self._chain_meta[symbol] = meta
-                get_angelone_live().feed._add_symbols([tm["symbol"] for tm in meta["token_map"].values()])
+                symbols_to_add = [tm["symbol"] for tm in meta["token_map"].values()]
+                
+                if os.getenv("FYERS_ACCESS_TOKEN"):
+                    from app.services.fyers_adapter import get_fyers_feed
+                    fyers = get_fyers_feed()
+                    if self._on_tick not in fyers._subscribers:
+                        fyers.subscribe(self._on_tick)
+                    fyers_symbols = [f"NSE:{s}" for s in symbols_to_add]
+                    if not fyers._running:
+                        fyers.start(fyers_symbols)
+                    else:
+                        fyers.subscribe_symbols(fyers_symbols)
+                else:
+                    get_angelone_live().feed._add_symbols(symbols_to_add)
+                    
                 get_angelone_live().feed._add_symbols([symbol])
             except Exception as e:
                 logger.error(f"Failed to resolve expiry for {symbol}: {e}")
