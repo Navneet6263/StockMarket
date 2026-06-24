@@ -57,21 +57,21 @@ def classify_chase_risk(signal: dict[str, Any]) -> dict[str, Any]:
         labels.append("PROFIT_BOOKING_RISK")
         reason = "High chance of profit booking tomorrow. Use trailing stop if already holding."
 
-    # Allow momentum breakouts to pass if volume is strong and it holds VWAP
+    # Do NOT override hard_chase_risk just because volume is strong. 
+    # Strong volume on extended candles usually leads to a 10-15 minute shakeout (pullback).
     valid_after_move = bool(strong_volume and above_vwap and not exhaustion_risk)
     if valid_after_move and hard_chase_risk:
-        labels.append("VALID_BREAKOUT")
-        action = "VALID_BREAKOUT"
-        attention_only = False
-        allow_buy_call = True
-        hard_chase_risk = False  # Override the block
-        reason = "Strong move is still valid because VWAP holds, volume remains strong, and risk/reward is acceptable."
+        labels.append("VALID_BREAKOUT_BUT_EXTENDED")
+        action = "WAIT_FOR_PULLBACK"
+        attention_only = True
+        allow_buy_call = False
+        reason = "Valid breakout with strong volume, but price is extended. Wait for a pullback to VWAP/EMA to avoid stoploss hunting."
 
-    # Resolve contradiction: VALID_BREAKOUT + PROFIT_BOOKING_RISK together is confusing
-    # If both exist, acknowledge the breakout but suggest partial booking
-    if "VALID_BREAKOUT" in labels and next_day_profit_booking_risk:
+    if next_day_profit_booking_risk:
         labels = [l for l in labels if l != "PROFIT_BOOKING_RISK"]
-        reason = "Breakout is valid with strong volume, but the move is large — consider booking partial profits and trailing the rest."
+        labels.append("PROFIT_BOOKING_RISK")
+        if "VALID_BREAKOUT_BUT_EXTENDED" in labels:
+            reason = "Valid breakout but extended, AND high chance of profit booking tomorrow. Definitely wait for pullback or avoid."
     elif hard_chase_risk:
         labels.append("AVOID_LATE_ENTRY")
 
