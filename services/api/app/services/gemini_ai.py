@@ -123,11 +123,8 @@ def _cache_key(
     fingerprint = {
         "symbol": symbol.upper(),
         "direction": technical.get("direction"),
-        "confidenceBucket": int(float(technical.get("confidence") or 0) // 5) * 5,
+        "confidenceBucket": int(float(technical.get("confidence") or 0) // 10) * 10,  # Broader 10-point buckets
         "setup": technical.get("setup_label") or technical.get("setup_type"),
-        "trigger": _rounded_level(technical.get("entry_trigger") or technical.get("safe_entry_price")),
-        "target": _rounded_level(technical.get("target_1") or technical.get("target_price")),
-        "stop": _rounded_level(technical.get("stop_loss") or technical.get("invalidation")),
         "news": news.get("newsSentiment"),
         "earningsNear": earnings.get("earningsNear"),
         "insider": insider.get("signal"),

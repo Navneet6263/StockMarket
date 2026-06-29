@@ -143,6 +143,31 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
 
     trigger_text = _fmt_price(trigger)
     fail_text = _fmt_price(fail)
+    labels = signal.get("trade_labels", []) or []
+
+    if "DISTRIBUTION_DUMP" in labels:
+        return {
+            "biasLabel": "🔴 DISTRIBUTION DUMP",
+            "entryStatus": "DO NOT BUY",
+            "tradeDecision": "Massive volume but price is completely rejected from the top (long upper wick). High probability of institutional profit booking/dump.",
+            "confirmationText": "Wait for dust to settle. Heavy supply pressure.",
+        }
+    
+    if "INSTITUTIONAL_ABSORPTION" in labels:
+        return {
+            "biasLabel": "🟢 INSTITUTIONAL ABSORPTION",
+            "entryStatus": "READY TO FIRE",
+            "tradeDecision": "Price is pulling back on shrinking volume while OBV/CMF is rising. Institutions are stealthily absorbing all supply. Excellent entry.",
+            "confirmationText": f"Setup fails below {fail_text}.",
+        }
+
+    if "VALID_BREAKOUT" in labels:
+        return {
+            "biasLabel": "🚀 FRESH BREAKOUT CONFIRMED",
+            "entryStatus": "Ready above trigger",
+            "tradeDecision": "Massive volume pushing price to a strong close above VWAP. No overextension detected. High probability genuine breakout.",
+            "confirmationText": f"Breakout active above {trigger_text}. Failed below {fail_text}.",
+        }
 
     if action == "AVOID" or signal.get("signal_stage") == "RISK_REJECTED" or signal.get("trap_risk") in {"high", "medium"} or signal.get("bull_trap", {}).get("bull_trap_detected"):
         return {

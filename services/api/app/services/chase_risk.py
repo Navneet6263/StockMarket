@@ -29,7 +29,16 @@ def classify_chase_risk(signal: dict[str, Any]) -> dict[str, Any]:
     multi_day_overextension = abs(return_20d) >= 28 or abs(return_5d) >= 14
     far_from_mean = abs(ema20_distance_pct) >= 8 or abs(vwap_distance_pct) >= 5
     exhaustion_risk = overextended and extended_candle
-    hard_chase_risk = strong_move or multi_day_overextension or far_from_mean or exhaustion_risk
+    
+    obv_slope = float(signal.get("obv_slope") or 0)
+    cmf = float(signal.get("cmf") or 0)
+    
+    is_distribution_dump = strong_volume and close_location < 0.45 and (obv_slope <= 0 or cmf < 0)
+    is_institutional_absorption = (change_pct < 1.5) and (relative_volume < 1.5) and (obv_slope > 0 or cmf > 0.1) and (abs(ema20_distance_pct) < 3.0 or abs(vwap_distance_pct) < 2.0)
+    genuine_fresh_breakout = strong_volume and above_vwap and close_location >= 0.70 and not multi_day_overextension and not exhaustion_risk
+    
+    hard_chase_risk = (strong_move or multi_day_overextension or far_from_mean or exhaustion_risk)
+
     next_day_profit_booking_risk = abs(change_pct) >= 8 or abs(return_20d) >= 30 or abs(return_5d) >= 15
 
     labels: list[str] = []
@@ -37,8 +46,29 @@ def classify_chase_risk(signal: dict[str, Any]) -> dict[str, Any]:
     reason = "Setup is early enough for normal scanner evaluation."
     attention_only = False
     allow_buy_call = direction in {"bullish", "bearish"}
-
-    if hard_chase_risk:
+    
+    if is_distribution_dump:
+        labels = ["DISTRIBUTION_DUMP"]
+        action = "AVOID"
+        attention_only = True
+        allow_buy_call = False
+        reason = "Massive volume but price rejected from the top (long upper wick). High probability of institutional profit booking/dump."
+        hard_chase_risk = True
+    elif is_institutional_absorption:
+        labels = ["INSTITUTIONAL_ABSORPTION"]
+        action = "BUY"
+        attention_only = False
+        allow_buy_call = True
+        reason = "Price is pulling back/flat with dry volume, but OBV/CMF is rising. Institutions are stealthily absorbing supply."
+        hard_chase_risk = False
+    elif genuine_fresh_breakout:
+        labels = ["VALID_BREAKOUT"]
+        action = "BUY"
+        attention_only = False
+        allow_buy_call = True
+        reason = "Strong fresh breakout with high volume and solid close. Valid entry."
+        hard_chase_risk = False
+    elif hard_chase_risk:
         labels.append("CHASE_RISK")
         labels.append("WAIT_FOR_PULLBACK")
         action = "WAIT_FOR_PULLBACK"
@@ -56,7 +86,7 @@ def classify_chase_risk(signal: dict[str, Any]) -> dict[str, Any]:
     if next_day_profit_booking_risk:
         labels.append("PROFIT_BOOKING_RISK")
         reason = "High chance of profit booking tomorrow. Use trailing stop if already holding."
-
+        
     # Do NOT override hard_chase_risk just because volume is strong. 
     # Strong volume on extended candles usually leads to a 10-15 minute shakeout (pullback).
     valid_after_move = bool(strong_volume and above_vwap and not exhaustion_risk)
