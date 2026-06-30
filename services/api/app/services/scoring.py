@@ -440,6 +440,128 @@ class ScoringEngine:
                 "trap_warnings": [f"Trap detection failed: {e}"]
             }
 
+    def _detect_obv_divergence(self, snapshot: Dict) -> Dict:
+        """Detect OBV divergence vs price action.
+
+        Returns a dict with:
+          - bullish_divergence: True if price making lower lows but OBV
+            making higher lows (stealth accumulation)
+          - bearish_divergence: True if price making higher highs but OBV
+            making lower highs (stealth distribution)
+        """
+        obv_slope = self._safe(snapshot, "obv_slope")
+        return_5d = self._safe(snapshot, "return_5d")
+        return_20d = self._safe(snapshot, "return_20d")
+        close_location = self._safe(snapshot, "close_location", 0.5)
+        higher_lows = bool(snapshot.get("higher_lows"))
+
+        # Bullish divergence: price is weak / making lower lows but OBV
+        # slope is positive, meaning volume on up-days outweighs down-days.
+        # Additional confirmation: higher_lows structure or close near the
+        # high of the day (buyers stepping in).
+        bullish_divergence = (
+            return_5d < -2.0
+            and return_20d < 0.0
+            and obv_slope > 0
+            and (higher_lows or close_location >= 0.5)
+        )
+
+        # Bearish divergence: price is strong / making higher highs but OBV
+        # slope is negative, meaning smart money is distributing into
+        # strength.  Additional confirmation: close near the low of the
+        # day (sellers pressing).
+        bearish_divergence = (
+            return_5d > 2.0
+            and return_20d > 0.0
+            and obv_slope < 0
+            and close_location <= 0.5
+        )
+
+        return {
+            "bullish_divergence": bullish_divergence,
+            "bearish_divergence": bearish_divergence,
+        }
+
+    def _analyze_candle_story(self, snapshot: Dict) -> Dict:
+        """Sequential candle / multi-day pattern analysis.
+
+        Reads the last 10-15 days of price action (via return_5d, return_20d,
+        change_pct, relative_volume, close_location, and EMA/support fields)
+        to detect higher-level narratives:
+
+        1. Trap-then-Breakout  (bullish)
+        2. Pullback-to-Base    (bullish re-entry)
+        3. Climax-then-Fade    (bearish distribution)
+
+        Returns a dict with pattern name, direction, and reason string.
+        """
+        return_5d = self._safe(snapshot, "return_5d")
+        return_20d = self._safe(snapshot, "return_20d")
+        change_pct = self._safe(snapshot, "change_pct")
+        relative_volume = self._safe(snapshot, "relative_volume", 1.0)
+        close_location = self._safe(snapshot, "close_location", 0.5)
+        distance_to_support = self._safe(snapshot, "distance_to_support_pct", 99.0)
+        ema_hold = (
+            bool(snapshot.get("price_above_ema20"))
+            or bool(snapshot.get("price_above_ema50"))
+        )
+
+        pattern = None
+        direction = "neutral"
+        reason = ""
+
+        # 1. Trap-then-Breakout:
+        #    Stock dropped sharply over 5 days but is NOW recovering with
+        #    volume confirmation on the current session.
+        if (
+            return_5d < -5.0
+            and change_pct > 0
+            and relative_volume > 1.2
+        ):
+            pattern = "trap_then_breakout"
+            direction = "bullish"
+            reason = (
+                "Price dropped sharply over 5 days but is reversing today "
+                "with above-average volume — classic shakeout-then-reversal."
+            )
+
+        # 2. Pullback-to-Base:
+        #    Stock ran big over 20 days, pulled back over 5 days, but is
+        #    still holding near EMA support or structural support.
+        elif (
+            return_20d > 15.0
+            and return_5d < -3.0
+            and (ema_hold or distance_to_support < 3.0)
+        ):
+            pattern = "pullback_to_base"
+            direction = "bullish"
+            reason = (
+                "Strong 20-day rally pulled back but is holding near EMA / "
+                "support — healthy re-entry zone for continuation."
+            )
+
+        # 3. Climax-then-Fade:
+        #    Stock ran hard in 5 days with high volume but is NOW fading
+        #    with a weak close location, suggesting exhaustion/distribution.
+        elif (
+            return_5d > 10.0
+            and relative_volume > 1.2
+            and change_pct < 0
+            and close_location < 0.4
+        ):
+            pattern = "climax_then_fade"
+            direction = "bearish"
+            reason = (
+                "Explosive 5-day rally is fading today with a weak close "
+                "near the low — climax top / distribution pattern."
+            )
+
+        return {
+            "candle_story_pattern": pattern,
+            "candle_story_direction": direction,
+            "candle_story_reason": reason,
+        }
+
     def evaluate(
         self,
         symbol: str,
@@ -582,10 +704,34 @@ class ScoringEngine:
         if upper_wick_pct >= 0.35 and snapshot.get("near_resistance"):
             add_bear(3, "breakout", "Upper wick rejection suggests supply near resistance.")
 
-        if cmf >= 0.1 and obv_slope > 0:
-            add_bull(8, "volume", "Accumulation signals are positive through CMF and OBV.", "accumulation")
-        elif cmf <= -0.1 and obv_slope < 0:
-            add_bear(8, "volume", "Distribution pressure is visible through CMF and OBV.", "distribution")
+        # Gradient CMF scoring: stronger money flow earns proportionally more points
+        if cmf >= 0.30 and obv_slope > 0:
+            add_bull(12, "volume", f"Massive institutional money flow (CMF {cmf:.2f}) confirmed by rising OBV.", "accumulation")
+        elif cmf >= 0.15 and obv_slope > 0:
+            add_bull(8, "volume", f"Strong money flow (CMF {cmf:.2f}) with positive OBV slope.", "accumulation")
+        elif cmf >= 0.05 and obv_slope > 0:
+            add_bull(5, "volume", f"Moderate accumulation (CMF {cmf:.2f}) with supportive OBV.", "accumulation")
+        elif cmf <= -0.30 and obv_slope < 0:
+            add_bear(12, "volume", f"Massive institutional distribution (CMF {cmf:.2f}) confirmed by falling OBV.", "distribution")
+        elif cmf <= -0.15 and obv_slope < 0:
+            add_bear(8, "volume", f"Strong distribution pressure (CMF {cmf:.2f}) with negative OBV slope.", "distribution")
+        elif cmf <= -0.05 and obv_slope < 0:
+            add_bear(5, "volume", f"Moderate distribution (CMF {cmf:.2f}) with weak OBV.", "distribution")
+
+        # --- OBV Divergence Detection ---
+        obv_divergence = self._detect_obv_divergence(snapshot)
+        if obv_divergence["bullish_divergence"]:
+            add_bull(10, "volume", "OBV divergence: price is making lower lows but OBV is making higher lows — stealth accumulation.", "obv_bullish_divergence")
+        if obv_divergence["bearish_divergence"]:
+            add_bear(10, "volume", "OBV divergence: price is making higher highs but OBV is making lower highs — stealth distribution.", "obv_bearish_divergence")
+
+        # --- Sequential Candle Story Analysis ---
+        candle_story = self._analyze_candle_story(snapshot)
+        if candle_story["candle_story_pattern"]:
+            if candle_story["candle_story_direction"] == "bullish":
+                add_bull(8, "breakout", candle_story["candle_story_reason"], candle_story["candle_story_pattern"])
+            elif candle_story["candle_story_direction"] == "bearish":
+                add_bear(8, "breakout", candle_story["candle_story_reason"], candle_story["candle_story_pattern"])
 
         if snapshot.get("delivery_available") and delivery_spike >= 1.2:
             if change_pct >= 0:
