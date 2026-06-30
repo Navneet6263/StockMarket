@@ -237,7 +237,15 @@ class LiveOptionsChainService:
                 s["pe_greeks"] = {"iv": 0.0, "delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
 
         pcr = (total_pe_oi / total_ce_oi) if total_ce_oi > 0 else 1.0
+        
+        # Phase 3.1: Stock-specific PCR interpretation
+        pcr_interpretation = "neutral"
+        if pcr > 1.5:
+            pcr_interpretation = "bullish"
+        elif pcr < 0.8:
+            pcr_interpretation = "bearish"
 
+        # Phase 3.4: Max Pain Calculation
         max_pain = 0
         min_loss = float('inf')
 
@@ -281,6 +289,9 @@ class LiveOptionsChainService:
             "symbol": symbol,
             "expiry": expiry_str,
             "pcr": round(pcr, 2),
+            "pcr_interpretation": pcr_interpretation,
+            "total_ce_oi": total_ce_oi,
+            "total_pe_oi": total_pe_oi,
             "max_pain": max_pain,
             "highest_ce_strike": highest_ce_strike,
             "highest_pe_strike": highest_pe_strike,
