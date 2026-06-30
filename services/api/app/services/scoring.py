@@ -622,6 +622,7 @@ class ScoringEngine:
         tight_consolidation_pct = self._safe(snapshot, "tight_consolidation_pct", 99.0)
         distance_to_resistance_pct = self._safe(snapshot, "distance_to_resistance_pct", 99.0)
         distance_to_support_pct = self._safe(snapshot, "distance_to_support_pct", 99.0)
+        resistance = self._safe(snapshot, "resistance_20")
         bb_width_ratio = self._safe(snapshot, "bb_width_ratio", 1.0)
         advanced_pattern = snapshot.get("advanced_chart_pattern") or {}
         advanced_pattern_score = self._safe(advanced_pattern, "score")
