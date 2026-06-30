@@ -24,10 +24,11 @@ def classify_chase_risk(signal: dict[str, Any]) -> dict[str, Any]:
     ema20_distance_pct = ((current_price - ema_20) / ema_20 * 100) if current_price and ema_20 else 0.0
     vwap_distance_pct = ((current_price - rolling_vwap) / rolling_vwap * 100) if current_price and rolling_vwap else 0.0
     extended_candle = abs(change_pct) >= 3.0 and (close_location >= 0.78 or close_location <= 0.22)
-    overextended = (direction == "bullish" and rsi >= 74) or (direction == "bearish" and rsi <= 26)
+    overextended = (direction == "bullish" and rsi >= 76) or (direction == "bearish" and rsi <= 24)
     strong_move = abs(change_pct) >= 5 or abs(gap_pct) >= 3
-    multi_day_overextension = abs(return_20d) >= 28 or abs(return_5d) >= 14
-    far_from_mean = abs(ema20_distance_pct) >= 8 or abs(vwap_distance_pct) >= 5
+    # RELAXED: Was 14/28, now 20/35 - allows pullback-to-base setups
+    multi_day_overextension = abs(return_20d) >= 35 or abs(return_5d) >= 20
+    far_from_mean = abs(ema20_distance_pct) >= 10 or abs(vwap_distance_pct) >= 6
     exhaustion_risk = overextended and extended_candle
     
     obv_slope = float(signal.get("obv_slope") or 0)
@@ -39,7 +40,8 @@ def classify_chase_risk(signal: dict[str, Any]) -> dict[str, Any]:
     
     hard_chase_risk = (strong_move or multi_day_overextension or far_from_mean or exhaustion_risk)
 
-    next_day_profit_booking_risk = abs(change_pct) >= 8 or abs(return_20d) >= 30 or abs(return_5d) >= 15
+    # RELAXED: Was 8%/15%, now 10%/18% to allow more genuine breakouts
+    next_day_profit_booking_risk = abs(change_pct) >= 10 or abs(return_20d) >= 35 or abs(return_5d) >= 18
 
     labels: list[str] = []
     action = "EARLY_ENTRY"

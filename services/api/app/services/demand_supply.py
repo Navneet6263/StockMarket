@@ -131,7 +131,9 @@ def analyze_demand_supply(snapshot: Dict[str, Any], *, direction: str) -> Dict[s
     if direction == "bullish" and near_resistance and not breakout and high_volume:
         trap_score += 16
         trap_reasons.append("price is advertised near resistance before confirmation")
-    if rsi >= 74 or return_5d >= 12 or return_20d >= 28:
+    # RELAXED: Was RSI 74 / return_5d 12 / return_20d 28
+    # Now: RSI 76 / return_5d 15 / return_20d 32 - more room for genuine moves
+    if rsi >= 76 or return_5d >= 15 or return_20d >= 32:
         trap_score += 16
         trap_reasons.append("move is extended before fresh entry")
     if breakdown and lower_wick >= 0.35:

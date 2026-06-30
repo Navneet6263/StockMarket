@@ -27,6 +27,7 @@ from app.services.breakout_radar import build_breakout_radar
 from app.services.chart_patterns import detect_chart_pattern_setup
 from app.services.telegram_market_alerts import get_telegram_market_alerts
 from app.services.zone_detector import ZoneDetector
+from app.services.candle_story import analyze_candle_story
 from app.services.options_chain import LiveOptionsChainService
 from app.services.angelone_live import get_angelone_live
 
@@ -378,6 +379,13 @@ class MarketHubService:
         snapshot = self.indicators.build_snapshot(symbol, live_frame, feature_frame, intraday_frame)
         snapshot["advanced_chart_pattern"] = detect_chart_pattern_setup(live_frame, feature_frame, intraday_frame)
         
+        # --- CANDLE STORY ANALYSIS (Sequential Pattern Recognition) ---
+        try:
+            candle_story = analyze_candle_story(live_frame, snapshot)
+            snapshot.update(candle_story)  # Merge story fields into snapshot
+        except Exception as e:
+            logger.warning("Candle story analysis failed for %s: %s", symbol, e)
+        
         # --- Inject F&O Options Chain Data ---
         try:
             opt_data = LiveOptionsChainService()._calculate_snapshot(symbol)
@@ -714,15 +722,13 @@ class MarketHubService:
             [
                 item for item in results
                 if item["direction"] != "neutral" 
-                and item.get("allow_buy_call", True)
-                and not item.get("attention_only", False)
-                and not item.get("overextended_fresh_entry", False)
-                and item.get("setup_stage") not in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
-                and item.get("risk_reward", 0) >= 1.0
                 and item.get("action") != "AVOID"
                 and item.get("signal_stage") != "RISK_REJECTED"
-                and item.get("trap_risk") not in {"high", "medium"}
                 and not item.get("bull_trap", {}).get("bull_trap_detected")
+                and item.get("setup_stage") not in {"DISTRIBUTION_DUMP"}
+                # REMOVED: attention_only, overextended_fresh_entry, allow_buy_call gates
+                # These were killing valid breakouts, absorption setups, and pullback bases
+                # The scoring engine and hot_picks will handle the nuanced classification
             ],
             key=lambda item: (
                 is_live_pattern_ready(item),
@@ -1128,39 +1134,29 @@ class MarketHubService:
                 
             quote = discovery.get("symbol_meta", {}).get(symbol)
             
-            # FAST PRE-FILTER
+            # FAST PRE-FILTER — Only drop truly untradeable stocks
+            # IMPORTANT: Do NOT drop breakout stocks or tight consolidation stocks here.
+            # Those are the highest-potential setups. Let the scoring engine evaluate them properly.
             if self.settings.enable_prefilter:
                 try:
                     last_close = float(quote.get("price") if quote and quote.get("price") else frame['Close'].iloc[-1])
-                    # Price must be between 50 and 5000
-                    if not (50 <= last_close <= 5000):
+                    # Price must be between 20 and 50000 (widened to include penny stocks and expensive stocks)
+                    if not (20 <= last_close <= 50000):
                         with filter_lock:
                             pre_filter_dropped += 1
                         return None
                         
-                    # Volume > 20-day average * 0.5
+                    # Volume: Only drop if volume is nearly ZERO (< 10% of 20-day avg)
+                    # Old rule (< 50%) was killing silent base / accumulation stocks
                     recent_vol_20d = float(frame['Volume'].tail(20).mean())
                     last_vol = float(quote.get("volume") if quote and quote.get("volume") else frame['Volume'].iloc[-1])
-                    if last_vol <= recent_vol_20d * 0.5:
+                    if recent_vol_20d > 0 and last_vol <= recent_vol_20d * 0.10:
                         with filter_lock:
                             pre_filter_dropped += 1
                         return None
                         
-                    # Not more than 6% above entry level (using previous close)
-                    prev_close = float(frame['Close'].iloc[-2]) if len(frame) > 1 else last_close
-                    change_pct = (last_close - prev_close) / prev_close * 100
-                    if change_pct > 6.0:
-                        with filter_lock:
-                            pre_filter_dropped += 1
-                        return None
-                    
-                    # Last 5 candles not completely flat (must have > 0.5% range)
-                    high_5d = float(frame['High'].tail(5).max())
-                    low_5d = float(frame['Low'].tail(5).min())
-                    if (high_5d - low_5d) / max(low_5d, 1) < 0.005:
-                        with filter_lock:
-                            pre_filter_dropped += 1
-                        return None
+                    # REMOVED: change > 6% filter — breakout stocks MUST be evaluated, not killed
+                    # REMOVED: 5-day range < 0.5% filter — tight consolidation (squeeze) stocks are the best setups
                         
                 except Exception:
                     pass # Fall through if parse fails
