@@ -1134,30 +1134,42 @@ class MarketHubService:
                 
             quote = discovery.get("symbol_meta", {}).get(symbol)
             
-            # FAST PRE-FILTER — Only drop truly untradeable stocks
-            # IMPORTANT: Do NOT drop breakout stocks or tight consolidation stocks here.
-            # Those are the highest-potential setups. Let the scoring engine evaluate them properly.
+            # SMART PRE-FILTER — Block truly dead/untradeable stocks only
+            # Breakout stocks (>6% change) → PASS (evaluate them!)
+            # Tight squeeze stocks (<0.5% range) → PASS (best setups!)  
+            # Silent base / low volume → PASS if volume > 25% of avg
+            # Dead stocks (zero volume, ultra-flat 20 days) → DROP
             if self.settings.enable_prefilter:
                 try:
                     last_close = float(quote.get("price") if quote and quote.get("price") else frame['Close'].iloc[-1])
-                    # Price must be between 20 and 50000 (widened to include penny stocks and expensive stocks)
-                    if not (20 <= last_close <= 50000):
+                    # Price must be between 30 and 25000
+                    if not (30 <= last_close <= 25000):
                         with filter_lock:
                             pre_filter_dropped += 1
                         return None
                         
-                    # Volume: Only drop if volume is nearly ZERO (< 10% of 20-day avg)
-                    # Old rule (< 50%) was killing silent base / accumulation stocks
+                    # Volume: Drop if volume is nearly dead (< 25% of 20-day avg)
+                    # This is relaxed from old 50% but strict enough to drop truly dead stocks
                     recent_vol_20d = float(frame['Volume'].tail(20).mean())
                     last_vol = float(quote.get("volume") if quote and quote.get("volume") else frame['Volume'].iloc[-1])
-                    if recent_vol_20d > 0 and last_vol <= recent_vol_20d * 0.10:
+                    if recent_vol_20d > 0 and last_vol <= recent_vol_20d * 0.25:
+                        with filter_lock:
+                            pre_filter_dropped += 1
+                        return None
+
+                    # Drop stocks that haven't moved AT ALL in 20 days (truly dead, not squeeze)
+                    # A squeeze has <0.5% 5-day range but often has > 2% 20-day range
+                    high_20d = float(frame['High'].tail(20).max())
+                    low_20d = float(frame['Low'].tail(20).min())
+                    if low_20d > 0 and (high_20d - low_20d) / low_20d < 0.015:
                         with filter_lock:
                             pre_filter_dropped += 1
                         return None
                         
-                    # REMOVED: change > 6% filter — breakout stocks MUST be evaluated, not killed
-                    # REMOVED: 5-day range < 0.5% filter — tight consolidation (squeeze) stocks are the best setups
-                        
+                    # NOTE: We intentionally do NOT block:
+                    # - Stocks with change > 6% (breakout candidates)
+                    # - Stocks with 5-day range < 0.5% (squeeze/base candidates)
+
                 except Exception:
                     pass # Fall through if parse fails
 
