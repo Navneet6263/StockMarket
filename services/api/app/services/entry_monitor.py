@@ -144,10 +144,10 @@ class EntryMonitor:
             entry = _entry_level(item)
             if not entry:
                 continue
-            # Skip stocks that have already gone way too far (> 6% above entry) to avoid trap losses
+            # Include ALL scanner-qualified stocks regardless of how far they have moved.
+            # The chart was already validated — we show it. The alert will say FLYING/CHASE
+            # if it has run far, so the user gets the full picture with context.
             current = _safe_float(item.get("current_price") or item.get("price"))
-            if current and current > entry * 1.06:
-                continue
             new_watched[sym] = {
                 "entry": entry,
                 "stop": _stop_loss(item),
