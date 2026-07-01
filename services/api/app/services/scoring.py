@@ -629,6 +629,22 @@ class ScoringEngine:
         advanced_pattern_late = bool(advanced_pattern.get("late_entry_risk"))
         advanced_pattern_stage = str(advanced_pattern.get("stage") or "")
 
+        # --- F&O Options Brain (Phase C) ---
+        is_fno = snapshot.get("is_fno", False)
+        pcr = snapshot.get("pcr", 1.0)
+        total_ce_oi = snapshot.get("total_ce_oi", 0)
+        total_pe_oi = snapshot.get("total_pe_oi", 0)
+        
+        if is_fno and (total_ce_oi > 0 or total_pe_oi > 0):
+            if pcr > 1.5:
+                add_bull(8, "momentum", f"Strong Bullish PCR ({pcr:.2f}): Heavy Put Writing detected.", "high_pcr")
+            elif pcr < 0.6:
+                add_bear(8, "momentum", f"Strong Bearish PCR ({pcr:.2f}): Heavy Call Writing detected.", "low_pcr")
+            elif pcr > 1.0:
+                add_bull(3, "momentum", f"Mildly Bullish PCR ({pcr:.2f}).")
+            elif pcr < 0.8:
+                add_bear(3, "momentum", f"Mildly Bearish PCR ({pcr:.2f}).")
+
         if snapshot.get("price_above_ema20") and snapshot.get("price_above_ema50"):
             add_bull(12, "trend", "Price is holding above the 20 and 50 EMA.", "trend_up")
         elif not snapshot.get("price_above_ema20") and not snapshot.get("price_above_ema50"):

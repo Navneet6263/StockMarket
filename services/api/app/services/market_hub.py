@@ -25,6 +25,7 @@ from app.services.setup_tracker import SetupTrackerService
 from app.services.nifty_context_analyzer import analyze_nifty_context, stock_nifty_alignment_score
 from app.services.breakout_radar import build_breakout_radar
 from app.services.chart_patterns import detect_chart_pattern_setup
+from app.services.sector_strength import rank_global_sectors
 from app.services.telegram_market_alerts import get_telegram_market_alerts
 from app.services.zone_detector import ZoneDetector
 from app.services.candle_story import analyze_candle_story
@@ -1014,6 +1015,28 @@ class MarketHubService:
             except Exception:
                 pass
 
+        # Phase A: Build sector rotation data
+        try:
+            global_sectors = rank_global_sectors(results)
+            top_sectors = [{"sector": s, **d} for s, d in global_sectors.items() if d["category"] == "top_3"]
+            bottom_sectors = [{"sector": s, **d} for s, d in global_sectors.items() if d["category"] == "bottom_3"]
+            
+            market_flow = "neutral"
+            if len(top_sectors) > len(bottom_sectors):
+                market_flow = "inflow"
+            elif len(bottom_sectors) > len(top_sectors):
+                market_flow = "outflow"
+
+            sector_rotation = {
+                "top_sectors": top_sectors,
+                "bottom_sectors": bottom_sectors,
+                "market_flow": market_flow,
+                "total_mapped": len(global_sectors)
+            }
+        except Exception as e:
+            logger.error(f"Error computing sector rotation: {e}")
+            sector_rotation = {"top_sectors": [], "bottom_sectors": [], "market_flow": "neutral", "total_mapped": 0}
+
         # ── Breakout Radar ("1-2 din mein fatne wale") ───────────────────────
         # Use all scanned signals (not just top_opportunities) to find pre-breakout setups
         breakout_radar_picks = build_breakout_radar(
@@ -1087,6 +1110,7 @@ class MarketHubService:
                 "nifty_regime": nifty_context.get("nifty_regime", "unknown"),
                 "market_score": nifty_context.get("market_score", 50),
             },
+            "sector_rotation": sector_rotation,
             "all_entry_levels": all_entry_levels,
         }
 

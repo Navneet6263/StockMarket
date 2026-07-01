@@ -171,11 +171,27 @@ def build_nifty_option_gate(scan: dict[str, Any]) -> dict[str, Any]:
         side = "neutral"
         status = "BLOCKED"
         message = "Nifty gate is not strict enough for fresh option buying."
+    master_trade = None
+    if bearish and pcr is not None and pcr < 0.7:
+        master_trade = {
+            "symbol": "NIFTY",
+            "type": "BUY PUT (PE)",
+            "reason": f"Heavy Call Writing (PCR: {pcr:.2f}) + Bearish Market Breadth. Money is flowing OUT of the market.",
+            "confidence": "HIGH"
+        }
+    elif bullish and pcr is not None and pcr > 1.3:
+        master_trade = {
+            "symbol": "NIFTY",
+            "type": "BUY CALL (CE)",
+            "reason": f"Heavy Put Writing (PCR: {pcr:.2f}) + Bullish Market Breadth. Money is flowing INTO the market.",
+            "confidence": "HIGH"
+        }
 
     return {
         "status": status,
         "side": side,
         "message": message,
+        "masterTrade": master_trade,
         "niftyBias": bias_text,
         "niftyRegime": regime,
         "marketScore": round(market_score, 1),

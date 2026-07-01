@@ -428,6 +428,12 @@ export type StrictOptionsResponse = {
     pcr?: number | null;
     pcrSignal?: string;
     dataAvailable?: boolean;
+    masterTrade?: {
+      symbol: string;
+      type: string;
+      reason: string;
+      confidence: string;
+    } | null;
   };
   radar: StrictOptionIdea[];
   blocked: StrictOptionIdea[];
@@ -477,6 +483,12 @@ export type HotPicksResponse = {
   catalystRadar?: HotPick[];
   baseFormationRadar?: BaseFormationPick[];
   strictOptions?: StrictOptionsResponse;
+  sectorRotation?: {
+    market_flow: "inflow" | "outflow" | "neutral" | string;
+    total_mapped: number;
+    top_sectors: Array<{ sector: string; avg_return: number; rank: number }>;
+    bottom_sectors: Array<{ sector: string; avg_return: number; rank: number }>;
+  };
   rejectionSummary?: {
     totalRejected: number;
     countsByReason: Record<string, number>;

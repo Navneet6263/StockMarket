@@ -323,6 +323,19 @@ function StrictOptionsPanel({ data }: { data?: HotPicksResponse["strictOptions"]
 
       <div className="decision-strip">{data.niftyGate.message}</div>
 
+      {data.niftyGate.masterTrade && (
+        <div className="hot-pick-card" style={{ marginBottom: "1.5rem", border: `1px solid ${data.niftyGate.masterTrade.type.includes("CALL") ? "#10b981" : "#ef4444"}`, background: `linear-gradient(to right, ${data.niftyGate.masterTrade.type.includes("CALL") ? "rgba(16, 185, 129, 0.1)" : "rgba(239, 68, 68, 0.1)"}, transparent)` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <span style={{ fontSize: "1.5rem" }}>{data.niftyGate.masterTrade.type.includes("CALL") ? "🚀" : "⚠️"}</span>
+              <h3 style={{ margin: 0, fontSize: "1.2rem", color: data.niftyGate.masterTrade.type.includes("CALL") ? "#10b981" : "#ef4444" }}>MASTER TRADE: {data.niftyGate.masterTrade.symbol} {data.niftyGate.masterTrade.type}</h3>
+            </div>
+            <span className="mode-badge active" style={{ backgroundColor: data.niftyGate.masterTrade.type.includes("CALL") ? "rgba(16, 185, 129, 0.2)" : "rgba(239, 68, 68, 0.2)", color: data.niftyGate.masterTrade.type.includes("CALL") ? "#10b981" : "#ef4444" }}>CONFIDENCE: {data.niftyGate.masterTrade.confidence}</span>
+          </div>
+          <p style={{ margin: 0, fontSize: "0.95rem", color: "rgba(255, 255, 255, 0.8)" }}>{data.niftyGate.masterTrade.reason}</p>
+        </div>
+      )}
+
       <div className="watch-pick-grid">
         {data.radar.map((idea) => <StrictOptionCard key={`${idea.symbol}-${idea.side}`} idea={idea} />)}
         {!data.radar.length ? (
@@ -596,6 +609,40 @@ export default function MarketTerminal({ mode = "dashboard" }: MarketTerminalPro
         <StatCard label="Base Formation" value={hotPicks?.summary.baseFormation ?? hotPicks?.baseFormationRadar?.length ?? 0} tone="#60a5fa" />
         <StatCard label="Strict Options" value={(hotPicks?.summary.strictOptionsReady ?? 0) + (hotPicks?.summary.strictOptionsWatch ?? 0)} tone="#fbbf24" />
       </section>
+
+      {hotPicks?.sectorRotation && (
+        <section className="dashboard-band" style={{ marginBottom: "1.5rem" }}>
+          <div className="section-heading" style={{ marginBottom: "0.5rem" }}>
+            <div>
+              <p className="eyebrow">Money Flow</p>
+              <h2>Sector Rotation</h2>
+            </div>
+            <div className={`mode-badge ${hotPicks.sectorRotation.market_flow === "inflow" ? "active" : ""}`} style={{ backgroundColor: hotPicks.sectorRotation.market_flow === "inflow" ? "rgba(16, 185, 129, 0.2)" : "rgba(239, 68, 68, 0.2)", color: hotPicks.sectorRotation.market_flow === "inflow" ? "#10b981" : "#ef4444", padding: "4px 8px", borderRadius: "4px", fontSize: "0.85rem", fontWeight: "bold" }}>
+              {hotPicks.sectorRotation.market_flow === "inflow" ? "💰 Market Inflow" : "⚠️ Market Outflow"}
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <div className="hot-pick-card" style={{ padding: "1rem" }}>
+              <h3 style={{ color: "#10b981", fontSize: "1rem", marginBottom: "0.75rem", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: "0.5rem" }}>Top 3 Inflow Sectors</h3>
+              {hotPicks.sectorRotation.top_sectors.map(s => (
+                <div key={s.sector} style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
+                  <span><span style={{color: "rgba(255,255,255,0.5)", marginRight: "8px"}}>#{s.rank}</span>{s.sector}</span>
+                  <strong style={{ color: "#10b981" }}>+{s.avg_return}%</strong>
+                </div>
+              ))}
+            </div>
+            <div className="hot-pick-card" style={{ padding: "1rem" }}>
+              <h3 style={{ color: "#ef4444", fontSize: "1rem", marginBottom: "0.75rem", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: "0.5rem" }}>Top 3 Outflow Sectors</h3>
+              {hotPicks.sectorRotation.bottom_sectors.map(s => (
+                <div key={s.sector} style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem", fontSize: "0.95rem" }}>
+                  <span><span style={{color: "rgba(255,255,255,0.5)", marginRight: "8px"}}>#{s.rank}</span>{s.sector}</span>
+                  <strong style={{ color: "#ef4444" }}>{s.avg_return}%</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       {selectedSymbol ? (
         <StockDetailPanel
