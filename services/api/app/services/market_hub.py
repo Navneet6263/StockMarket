@@ -69,11 +69,12 @@ class MarketHubService:
             logger.info("market pattern background scanner started interval_sec=%s", self.settings.scan_interval_sec)
             while not self.background_scan_stop.is_set():
                 try:
-                    if not self._last_success_is_usable():
-                        self._start_background_refresh(force_refresh=True)
+                    # Always trigger a refresh — if scan is already running the lock will block it cleanly
+                    self._start_background_refresh(force_refresh=True)
                 except Exception:
                     logger.exception("market pattern background scanner tick failed")
-                self.background_scan_stop.wait(max(30, self.settings.scan_interval_sec))
+                # Wait for scan_interval_sec between attempts — minimum 60s to not spam yfinance
+                self.background_scan_stop.wait(max(60, self.settings.scan_interval_sec))
 
         thread = threading.Thread(target=loop, name="market-pattern-scanner", daemon=True)
         thread.start()
@@ -1172,14 +1173,8 @@ class MarketHubService:
                             pre_filter_dropped += 1
                         return None
                         
-                    # Volume: Drop if volume is nearly dead (< 25% of 20-day avg)
-                    # This is relaxed from old 50% but strict enough to drop truly dead stocks
-                    recent_vol_20d = float(frame['Volume'].tail(20).mean())
-                    last_vol = float(quote.get("volume") if quote and quote.get("volume") else frame['Volume'].iloc[-1])
-                    if recent_vol_20d > 0 and last_vol <= recent_vol_20d * 0.25:
-                        with filter_lock:
-                            pre_filter_dropped += 1
-                        return None
+                    # Intraday volume is naturally lower than 20-day average early in the day.
+                    # We remove the 0.25x volume block to prevent dropping valid stocks early in the session.
 
                     # Drop stocks that haven't moved AT ALL in 20 days (truly dead, not squeeze)
                     # A squeeze has <0.5% 5-day range but often has > 2% 20-day range
@@ -1243,11 +1238,8 @@ class MarketHubService:
                     logger.warning("live quote fetch failed during scan symbol=%s", symbol, exc_info=True)
                     return None
 
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = []
-                for symbol in top_symbols:
-                    futures.append(executor.submit(fetch_live_quote, symbol))
-                    time.sleep(0.05)
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                futures = [executor.submit(fetch_live_quote, symbol) for symbol in top_symbols]
                 for future in as_completed(futures):
                     result = future.result()
                     if result is not None:

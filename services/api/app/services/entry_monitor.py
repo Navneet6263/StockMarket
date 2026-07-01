@@ -144,7 +144,7 @@ class EntryMonitor:
             entry = _entry_level(item)
             if not entry:
                 continue
-            # Skip stocks that have already gone way too far (> 6% above entry)
+            # Skip stocks that have already gone way too far (> 6% above entry) to avoid trap losses
             current = _safe_float(item.get("current_price") or item.get("price"))
             if current and current > entry * 1.06:
                 continue
