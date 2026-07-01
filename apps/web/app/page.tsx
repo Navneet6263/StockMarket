@@ -56,6 +56,185 @@ function demandTone(status: any, trapRisk: any) {
   return "watch";
 }
 
+// ── Market Money Flow Banner ─────────────────────────────────────────────────
+function MarketMoneyFlowBanner({ data }: { data: any }) {
+  if (!data) return null;
+  const ctx = data.nifty_context || data.summary || {};
+  const fiiNet = ctx.fii_net ?? null;
+  const diiNet = ctx.dii_net ?? null;
+  const pcr = ctx.pcr ?? null;
+  const bias = (ctx.nifty_bias || ctx.combinedMood || "").toLowerCase();
+  const score = ctx.market_score ?? 50;
+  const regime = ctx.nifty_regime || "";
+
+  if (fiiNet === null && diiNet === null) return null;
+
+  const fiiPositive = (fiiNet ?? 0) >= 0;
+  const diiPositive = (diiNet ?? 0) >= 0;
+  const combined = (fiiNet ?? 0) + (diiNet ?? 0);
+  const moneyIn = combined > 0;
+
+  const bgGradient = bias.includes("bullish")
+    ? "linear-gradient(90deg, rgba(16,185,129,0.12) 0%, rgba(16,185,129,0.04) 100%)"
+    : bias.includes("bearish")
+    ? "linear-gradient(90deg, rgba(239,68,68,0.12) 0%, rgba(239,68,68,0.04) 100%)"
+    : "linear-gradient(90deg, rgba(251,191,36,0.10) 0%, rgba(251,191,36,0.04) 100%)";
+
+  const borderColor = bias.includes("bullish") ? "rgba(16,185,129,0.35)" : bias.includes("bearish") ? "rgba(239,68,68,0.35)" : "rgba(251,191,36,0.35)";
+  const accentColor = bias.includes("bullish") ? "#10b981" : bias.includes("bearish") ? "#ef4444" : "#fbbf24";
+
+  const fmtCr = (v: number | null) => v === null ? "?" : `${v >= 0 ? "+" : ""}${(v / 100).toFixed(0)}Cr`;
+
+  const flowLabel = bias.includes("strongly_bullish") ? "💚 BADA PAISA AA RAHA HAI" :
+    bias.includes("bullish") ? "💚 Paisa Aa Raha Hai" :
+    bias.includes("strongly_bearish") ? "🔴 PAISA BHAAG RAHA HAI" :
+    bias.includes("bearish") ? "🔴 Paisa Nikal Raha Hai" :
+    "🟡 Mixed — Market Wait Kar Raha Hai";
+
+  const pcrLabel = pcr ? (pcr >= 1.3 ? "🟢 Bullish" : pcr <= 0.7 ? "🔴 Bearish" : "🟡 Neutral") : null;
+
+  return (
+    <div style={{
+      background: bgGradient,
+      border: `1px solid ${borderColor}`,
+      borderRadius: 12,
+      padding: "12px 20px",
+      marginBottom: 16,
+      display: "flex",
+      alignItems: "center",
+      gap: 24,
+      flexWrap: "wrap",
+      position: "relative",
+      overflow: "hidden",
+    }}>
+      {/* Animated pulse dot */}
+      <div style={{
+        width: 10, height: 10, borderRadius: "50%",
+        background: accentColor,
+        boxShadow: `0 0 0 0 ${accentColor}`,
+        animation: "pulse 2s infinite",
+        flexShrink: 0,
+      }} />
+
+      {/* Big label */}
+      <div style={{ fontWeight: 800, fontSize: 15, color: accentColor, letterSpacing: "0.02em", flexShrink: 0 }}>
+        {flowLabel}
+      </div>
+
+      {/* FII */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
+        <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>FII Net</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: fiiPositive ? "#10b981" : "#ef4444" }}>
+          {fiiPositive ? "▲" : "▼"} {fmtCr(fiiNet)}
+        </div>
+      </div>
+
+      <div style={{ color: "var(--border)", fontSize: 18 }}>│</div>
+
+      {/* DII */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
+        <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>DII Net</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: diiPositive ? "#10b981" : "#ef4444" }}>
+          {diiPositive ? "▲" : "▼"} {fmtCr(diiNet)}
+        </div>
+      </div>
+
+      <div style={{ color: "var(--border)", fontSize: 18 }}>│</div>
+
+      {/* Combined */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
+        <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Combined</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: moneyIn ? "#10b981" : "#ef4444" }}>
+          {moneyIn ? "▲" : "▼"} {fmtCr(combined)}
+        </div>
+      </div>
+
+      {/* PCR */}
+      {pcr && (
+        <>
+          <div style={{ color: "var(--border)", fontSize: 18 }}>│</div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0 }}>
+            <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>PCR</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#fff" }}>{pcr.toFixed(2)} <span style={{ fontSize: 12, fontWeight: 400 }}>{pcrLabel}</span></div>
+          </div>
+        </>
+      )}
+
+      {/* Market Score */}
+      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+        <div style={{
+          width: 48, height: 48, borderRadius: "50%",
+          background: `conic-gradient(${accentColor} ${score * 3.6}deg, rgba(255,255,255,0.08) 0deg)`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 13, fontWeight: 800, color: accentColor,
+          boxShadow: `0 0 16px ${accentColor}40`,
+        }}>
+          {score}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted)" }}>Market<br />Score</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Sector Rotation Strip ────────────────────────────────────────────────────
+function SectorRotationStrip({ data }: { data: any }) {
+  const sr = data?.sector_rotation;
+  if (!sr) return null;
+  const topSectors: any[] = sr.top_sectors || [];
+  const bottomSectors: any[] = sr.bottom_sectors || [];
+  if (!topSectors.length && !bottomSectors.length) return null;
+
+  const flow = sr.market_flow || "neutral";
+  const flowColor = flow === "inflow" ? "#10b981" : flow === "outflow" ? "#ef4444" : "#fbbf24";
+  const flowLabel = flow === "inflow" ? "💹 Sector Rotation: Paisa Aa Raha Hai" : flow === "outflow" ? "📤 Sector Rotation: Paisa Ja Raha Hai" : "🔄 Sector Rotation: Mixed";
+
+  return (
+    <div style={{
+      background: "rgba(255,255,255,0.03)",
+      border: "1px solid var(--border)",
+      borderRadius: 10,
+      padding: "10px 16px",
+      marginBottom: 16,
+      display: "flex",
+      gap: 16,
+      alignItems: "center",
+      flexWrap: "wrap",
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: flowColor, flexShrink: 0 }}>{flowLabel}</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 11, color: "var(--muted)", flexShrink: 0 }}>🟢 Strong:</span>
+        {topSectors.slice(0, 4).map((s: any, i: number) => (
+          <span key={i} style={{
+            background: "rgba(16,185,129,0.15)",
+            border: "1px solid rgba(16,185,129,0.3)",
+            color: "#10b981",
+            borderRadius: 6,
+            padding: "3px 10px",
+            fontSize: 12,
+            fontWeight: 600,
+          }}>▲ {s.sector}</span>
+        ))}
+      </div>
+      <div style={{ color: "var(--border)", fontSize: 16 }}>│</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 11, color: "var(--muted)", flexShrink: 0 }}>🔴 Weak:</span>
+        {bottomSectors.slice(0, 4).map((s: any, i: number) => (
+          <span key={i} style={{
+            background: "rgba(239,68,68,0.12)",
+            border: "1px solid rgba(239,68,68,0.25)",
+            color: "#ef4444",
+            borderRadius: 6,
+            padding: "3px 10px",
+            fontSize: 12,
+            fontWeight: 600,
+          }}>▼ {s.sector}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Index Ticker Bar ────────────────────────────────────────────────────────
 function IndexTickerBar() {
   const [indices, setIndices] = useState<any[]>([]);
@@ -169,8 +348,70 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
   const volAccel = sb.volume_acceleration || 1;
   const volPriceDivergence = sb.vol_price_divergence || false;
 
+  // ── Institutional Zone Detection ────────────────────────────────────────
+  const accumScore = item.accumulation_score ?? item.raw?.accumulation_score ?? 0;
+  const isAccum = item.is_accumulation ?? item.raw?.is_accumulation ?? false;
+  const deliverySignal = item.delivery_signal ?? item.deliverySignal ?? item.raw?.deliverySignal ?? "";
+  const isInstitutionalZone = isAccum || accumScore >= 40 || deliverySignal === "accumulation" ||
+    demandStatus === "strong_accumulation" || stealthAccum;
+
+  // ── Flying/Chase Rating ──────────────────────────────────────────────────
+  const changeAbs = Math.abs(Number(change) || 0);
+  const chaseRating = changeAbs >= 10 ? { label: "🔥 FLYING — HIGH RISK", color: "#ef4444", tip: "Already bhag chuka hai — entry mat karo, sirf dekho" }
+    : changeAbs >= 6 ? { label: "⚡ FAST MOVE — Caution", color: "#f59e0b", tip: "6%+ chal chuka — wait for pullback ya retest" }
+    : null;
+
   return (
-    <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: isHighTrap ? "var(--red)" : "var(--border)" }}>
+    <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{
+      cursor: "pointer",
+      borderColor: isInstitutionalZone ? "rgba(16,185,129,0.6)" : isHighTrap ? "var(--red)" : "var(--border)",
+      boxShadow: isInstitutionalZone ? "0 0 16px rgba(16,185,129,0.15)" : isHighTrap ? "0 0 12px rgba(239,68,68,0.15)" : "none",
+    }}>
+      {/* Institutional Zone Banner */}
+      {isInstitutionalZone && !isHighTrap && (
+        <div style={{
+          background: "linear-gradient(90deg, rgba(16,185,129,0.18) 0%, rgba(16,185,129,0.06) 100%)",
+          border: "1px solid rgba(16,185,129,0.35)",
+          borderRadius: 7,
+          padding: "6px 12px",
+          marginBottom: 8,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#10b981", animation: "pulse 2s infinite", flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: "#10b981", letterSpacing: "0.04em" }}>🏦 INSTITUTIONAL ZONE</span>
+            <span style={{ fontSize: 11, color: "rgba(16,185,129,0.7)", marginLeft: 8 }}>
+              {accumScore >= 60 ? "Strong accumulation — bada paisa aacha zone pakad ke baitha hai" :
+               stealthAccum ? "Stealth buying — institutions chup ke khareed rahe hain" :
+               deliverySignal === "accumulation" ? "Delivery volume accumulation — institutional buying confirmed" :
+               "Institutions accumulating — strong support zone"}
+            </span>
+          </div>
+          {accumScore > 0 && (
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#10b981", flexShrink: 0 }}>Score: {accumScore}</span>
+          )}
+        </div>
+      )}
+
+      {/* Flying/Chase Warning */}
+      {chaseRating && !isHighTrap && (
+        <div style={{
+          background: chaseRating.color === "#ef4444" ? "rgba(239,68,68,0.1)" : "rgba(245,158,11,0.1)",
+          border: `1px solid ${chaseRating.color}44`,
+          borderRadius: 7,
+          padding: "5px 12px",
+          marginBottom: 8,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: chaseRating.color }}>{chaseRating.label}</span>
+          <span style={{ fontSize: 11, color: "var(--muted)" }}>{chaseRating.tip}</span>
+        </div>
+      )}
+
       {isHighTrap ? (
         <div className="trap-alert">
           <div className="trap-kicker">🚨 AVOID - INSTITUTIONAL TRAP</div>
@@ -1043,6 +1284,12 @@ export default function Page() {
             <StockDetail symbol={selectedSymbol} onClose={() => setSelectedSymbol(null)} />
           ) : (
             <>
+              {/* ── Market Money Flow Banner ── */}
+              <MarketMoneyFlowBanner data={data} />
+
+              {/* ── Sector Rotation Strip ── */}
+              <SectorRotationStrip data={data} />
+
               <div className="stats-row">
                 <div className="stat-card"><span>📊 Scanned</span><strong>{stats.totalScanned ?? stats.total_scanned_universe ?? "..."}</strong></div>
                 <div className="stat-card"><span>🔥 Hot Picks</span><strong style={{ color: "var(--green)" }}>{stats.highConfidence ?? stats.high_priority ?? 0}</strong></div>
