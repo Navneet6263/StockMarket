@@ -273,9 +273,6 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
         blockers.append("Live options chain data unavailable (Fallback mode). Option buying blocked.")
     else:
         dte = _safe_float(chain_data.get("days_to_expiry"))
-        if dte < 2.0:
-            blockers.append(f"DTE ({dte}) is too low. Expiry day gamma/theta trap risk.")
-        
         spread = _safe_float(chain_data.get("bid_ask_spread_pct"))
         if spread > 5.0:
             blockers.append(f"Bid-Ask spread ({spread}%) is too wide. Slippage risk.")
@@ -308,12 +305,7 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
         entry_rule = "Strict option gate blocked this setup."
         confidence = round(score, 1)
 
-    import datetime
-    today_weekday = datetime.datetime.now().weekday()
-    if today_weekday in [2, 3]:
-        expiry_rule = "⚠️ THETA DANGER (Wed/Thu): Option Engine auto-selected NEXT week's expiry to avoid zero-gamma trap."
-    else:
-        expiry_rule = "Option Engine auto-selected current expiry (3+ sessions remain)."
+    expiry_rule = "Option Engine auto-selected nearest active expiry (Hero-Zero spikes allowed)."
 
     target_rule = f"First underlying target near {_fmt_price(target)}." if target else "Book by price action; target unavailable."
     invalidation_rule = f"Exit option if underlying fails {_fmt_price(fail)} or if option premium loses 25% (Auto-Cut)."

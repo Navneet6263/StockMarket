@@ -53,7 +53,11 @@ def analyze_candle_story(history: pd.DataFrame, current_snapshot: Dict) -> Dict:
         # Get current price and extract from snapshot
         current_price = float(current_snapshot.get('price', df['Close'].iloc[-1]))
         current_volume = float(current_snapshot.get('volume', df['Volume'].iloc[-1]))
-        relative_volume = float(current_snapshot.get('relative_volume', 1.0))
+        relative_volume = float(current_snapshot.get('relative_volume') or 1.0)
+        gap_pct = float(current_snapshot.get('gap_pct') or 0.0)
+        change_pct = float(current_snapshot.get('change_pct') or 0.0)
+        trend_status = current_snapshot.get('trend_status', 'unknown')
+        resistance = float(current_snapshot.get('resistance_20') or 0.0)
         obv_slope = float(current_snapshot.get('obv_slope', 0))
         cmf = float(current_snapshot.get('cmf', 0))
         rsi = float(current_snapshot.get('rsi', 50))

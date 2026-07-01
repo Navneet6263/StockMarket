@@ -75,22 +75,6 @@ class LiveOptionsChainService:
         now = datetime.now()
         target_expiry = sorted_expiries[0]
 
-        # SMART EXPIRY SELECTION: Avoid zero-gamma traps / extreme theta decay
-        if len(sorted_expiries) > 1:
-            try:
-                nearest_date = parse_date(target_expiry)
-                days_to_expiry = (nearest_date.date() - now.date()).days
-
-                if days_to_expiry <= 1:
-                    is_wednesday_afternoon = now.weekday() == 2 and now.hour >= 12
-                    is_thursday = now.weekday() == 3
-
-                    if is_wednesday_afternoon or is_thursday:
-                        logger.info(f"[OPTIONS] Skipping current expiry {target_expiry} for {symbol} due to Theta/Gamma risk. Selecting next expiry.")
-                        target_expiry = sorted_expiries[1]
-            except Exception as e:
-                logger.warning(f"Smart expiry logic failed for {symbol}: {e}")
-
         nearest_expiry = target_expiry
 
         tokens = []

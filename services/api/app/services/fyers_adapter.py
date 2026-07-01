@@ -38,8 +38,10 @@ class FyersOptionsLiveFeed:
                 for item in message:
                     if "symbol" in item:
                         # Convert Fyers dict to AngelOne format for seamless integration
+                        raw_sym = item["symbol"].split(":")[1] if ":" in item["symbol"] else item["symbol"]
+                        raw_sym = raw_sym.replace("-EQ", "")
                         data = {
-                            "symbol": item["symbol"].split(":")[1] if ":" in item["symbol"] else item["symbol"],
+                            "symbol": raw_sym,
                             "ltp": float(item.get("ltp", 0)),
                             "volume": int(item.get("vol_traded_today", 0)),
                             "open_interest": int(item.get("oi", 0)),
