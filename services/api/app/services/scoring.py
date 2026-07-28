@@ -11,6 +11,7 @@ from app.services.entry_timing import analyze_entry_timing
 from app.services.lifecycle import build_lifecycle_advice
 from app.services.trap_detector import full_trap_analysis
 from app.services.finnhub_data import fetch_news_sentiment
+from app.services.volume_dip_algo import detect_volume_dip_setup
 import joblib
 import pandas as pd
 
@@ -59,10 +60,16 @@ class ScoringEngine:
             return "watch only", 3
         if intraday_volume_ratio >= 2.2 and atr_pct >= 4.0 and move_quality_seed < 70:
             return "intraday", 1
+        # FIX: Same-day volume capture \u2014 5x+ volume with any price confirmation = act NOW
+        if relative_volume >= 5.0 and abs(self._safe(snapshot, "change_pct")) >= 1.5:
+            return "1-2 days", 2
         if relative_volume >= 2.1 and (
             snapshot.get("breakout_20") or snapshot.get("breakdown_20") or snapshot.get("intraday_breakout")
         ):
             return "1-2 days", 2
+        # FIX: High volume (3x+) even without confirmed breakout = 3-5 day signal, not "swing"
+        if relative_volume >= 3.0 and direction != "neutral":
+            return "3-5 days", 5
         if trend_regime in {"uptrend", "downtrend"} and move_quality_seed >= 75:
             return "swing 1-2 weeks", 10
         return "3-5 days", 5
@@ -689,7 +696,13 @@ class ScoringEngine:
         elif relative_strength <= -2:
             add_bear(7, "relative_strength", f"20-day relative strength vs benchmark is {relative_strength:.2f}%.", "relative_strength")
 
-        if relative_volume >= 3:
+        if relative_volume >= 5.0:
+            # FIX: Extremely high volume (5x+) — capture immediately same-day, don't wait
+            if change_pct >= 0:
+                add_bull(16, "volume", f"EXPLOSIVE volume: {relative_volume:.1f}x average — smart money entering NOW.", "unusual_volume")
+            else:
+                add_bear(16, "volume", f"EXPLOSIVE volume: {relative_volume:.1f}x average on weakness — distribution in progress.", "unusual_volume")
+        elif relative_volume >= 3:
             if change_pct >= 0:
                 add_bull(12, "volume", f"Relative volume is {relative_volume:.2f}x the 20-day average.", "unusual_volume")
             else:
@@ -699,6 +712,13 @@ class ScoringEngine:
                 add_bull(8, "volume", f"Relative volume is {relative_volume:.2f}x and buyers are active.", "unusual_volume")
             elif close_location <= 0.45:
                 add_bear(8, "volume", f"Relative volume is {relative_volume:.2f}x and sellers control the close.", "unusual_volume")
+            else:
+                # Moderate volume with neutral close — still worth noting
+                add_bull(4, "volume", f"Volume is elevated at {relative_volume:.2f}x; direction not yet committed.", "unusual_volume")
+        elif relative_volume >= 1.3:
+            # FIX: Previously this was dumped into weakness. Now give small credit.
+            if change_pct >= 0:
+                add_bull(3, "volume", f"Slightly above-average volume ({relative_volume:.2f}x) with positive tape.")
         else:
             weaknesses.append("Volume confirmation is limited.")
 
@@ -1024,6 +1044,8 @@ class ScoringEngine:
             trailing_stop = stop_loss
             
         risk_reward = round(target_distance / stop_distance, 2) if stop_distance > 0 else 0.0
+        # FIX: Cap RR at 10.0 — anything higher is a stop-too-close bug (e.g. LICNMID100 1:38.4)
+        risk_reward = min(risk_reward, 10.0)
         target_1 = target_price
         target_2 = extended_target_price
 
@@ -1083,12 +1105,37 @@ class ScoringEngine:
             tags.extend(["bull_trap_risk", "avoid_late_entry", "supply_pressure"])
             risk_factors.append(demand_supply.get("smartMoneyRead", "Trap risk is elevated."))
             risk_factors.extend(demand_supply.get("trapReasons", [])[:2])
+            # FIX: If demand_supply detected a direction conflict, demote confidence
+            if demand_supply.get("directionConflict"):
+                confidence = min(confidence, 65.0)
+                if demand_supply.get("conflictNote"):
+                    risk_factors.insert(0, demand_supply["conflictNote"])
         elif demand_supply.get("status") in {"demand_absorption", "early_demand"}:
             tags.extend(["demand_absorption", "accumulation_watch"])
             reasons.append(demand_supply.get("smartMoneyRead", "Demand evidence is improving."))
         elif demand_supply.get("status") == "supply_pressure":
             tags.extend(["supply_pressure", "seller_pressure"])
             risk_factors.append(demand_supply.get("smartMoneyRead", "Supply pressure is elevated."))
+
+        # ── Volume-Dip-Rally Algo ─────────────────────────────────────────────
+        # Detect the "volume aaya → neeche aao → phir bhago" pattern
+        # Gives smart entry zone, gap fill levels, and precise stop loss
+        volume_dip = detect_volume_dip_setup(snapshot)
+        if volume_dip.get("is_volume_dip_setup"):
+            tags.append("volume_dip_setup")
+            if volume_dip.get("wait_for_dip"):
+                tags.append("wait_for_dip")
+                # Downgrade urgency — this stock needs a dip first
+                if "1-2 days" in timeframe_label:
+                    timeframe_label = "3-5 days"
+            if volume_dip.get("has_unfilled_gap"):
+                tags.append("gap_fill_pending")
+            if volume_dip.get("dip_probability_pct", 0) >= 60:
+                risk_factors.append(
+                    f"Dip probability {volume_dip['dip_probability_pct']}%: "
+                    f"Wait for ₹{volume_dip['dip_target']:.2f} before entry. "
+                    f"Smart SL: ₹{volume_dip['smart_stop_loss']:.2f}"
+                )
         if direction == "bullish" and entry_timing.get("profit_booking_risk") in {"high", "very_high"}:
             tags.extend(["profit_booking_zone", "seller_pressure", "avoid_late_entry"])
             risk_factors.extend(entry_timing.get("reasons", [])[:2])
@@ -1517,5 +1564,16 @@ class ScoringEngine:
             "bullish_score": round(bullish, 1),
             "bearish_score": round(bearish, 1),
             "historical_context": historical,
+            # ── Volume-Dip-Rally Algo output ─────────────────────────────────
+            "volume_dip_setup": volume_dip if volume_dip.get("is_volume_dip_setup") else None,
+            "smart_entry_zone": volume_dip.get("smart_entry_zone"),
+            "smart_stop_loss": volume_dip.get("smart_stop_loss"),
+            "dip_target": volume_dip.get("dip_target"),
+            "dip_probability_pct": volume_dip.get("dip_probability_pct"),
+            "wait_for_dip": volume_dip.get("wait_for_dip", False),
+            "algo_plan": volume_dip.get("algo_plan"),
+            "chart_zones": volume_dip.get("chart_zones", []),
+            "gap_fill_level": volume_dip.get("gap_fill_level"),
+            "has_unfilled_gap": volume_dip.get("has_unfilled_gap", False),
             **trap_fields,
         }

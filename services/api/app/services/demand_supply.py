@@ -144,21 +144,57 @@ def analyze_demand_supply(snapshot: Dict[str, Any], *, direction: str) -> Dict[s
     supply_score = max(0, min(100, supply_score))
     trap_score = max(0, min(100, trap_score))
 
+    # ── Status Classification ────────────────────────────────────────────
     if trap_score >= 70:
         status = "bull_trap_risk" if direction == "bullish" else "trap_risk"
         read = "Trap risk is high; avoid fresh entry until price retests and holds with lower supply."
     elif supply_score >= demand_score + 15:
         status = "supply_pressure"
         read = "Supply is stronger than demand; wait for rejection to clear before fresh long."
-    elif demand_score >= supply_score + 15 and demand_score >= 45:
+    elif demand_score >= supply_score + 15 and demand_score >= 35:  # FIX: threshold lowered 45→35
         status = "demand_absorption"
         read = "Demand is visible through money flow, VWAP/price action, or base absorption."
-    elif demand_score >= 35:
+    elif demand_score >= 28:
         status = "early_demand"
         read = "Some demand evidence exists, but confirmation is still incomplete."
     else:
         status = "neutral"
         read = "No clean demand/supply edge from the current tape."
+
+    # ── Direction Conflict Detection ──────────────────────────────────────
+    # If the tape strongly disagrees with the scored direction, flag it.
+    direction_conflict = False
+    conflict_note = None
+
+    if direction == "bullish" and supply_score >= 40 and demand_score <= 18:
+        # System says bullish but supply completely dominates — conflict
+        direction_conflict = True
+        conflict_note = (
+            f"⚠️ Direction conflict: Bullish signal but supply ({supply_score}) "
+            f"far exceeds demand ({demand_score}). Wait for supply to clear."
+        )
+    elif direction == "bearish" and demand_score >= 35 and supply_score <= 18:
+        # System says bearish but demand completely dominates — conflict
+        direction_conflict = True
+        conflict_note = (
+            f"⚠️ Direction conflict: Bearish signal but demand ({demand_score}) "
+            f"far exceeds supply ({supply_score}). Avoid short; wait for demand to fade."
+        )
+
+    if direction_conflict and conflict_note:
+        evidence.append(conflict_note)
+
+    # ── GTF (Forming Demand) special case ────────────────────────────────
+    # When both demand and supply are elevated and equal — institutions are
+    # fighting. Mark as Forming Demand rather than neutral.
+    gtf_forming = (
+        demand_score >= 40
+        and supply_score >= 40
+        and abs(demand_score - supply_score) <= 10
+    )
+    if gtf_forming and status == "neutral":
+        status = "forming_demand"
+        read = "GTF: Institutional Pending Orders Present"
 
     if not evidence:
         evidence.append("Demand/supply evidence is limited in the current data.")
@@ -172,6 +208,13 @@ def analyze_demand_supply(snapshot: Dict[str, Any], *, direction: str) -> Dict[s
         "smartMoneyRead": read,
         "evidence": list(dict.fromkeys(evidence))[:4],
         "trapReasons": list(dict.fromkeys(trap_reasons))[:3],
-        "blockFreshEntry": direction == "bullish" and trap_score >= 60,
+        # FIX: blockFreshEntry now works for BOTH bullish AND bearish conflicts
+        "blockFreshEntry": (
+            (direction == "bullish" and trap_score >= 60)
+            or (direction == "bullish" and direction_conflict)
+            or (direction == "bearish" and direction_conflict)
+        ),
+        "directionConflict": direction_conflict,
+        "conflictNote": conflict_note,
         "confirmationRule": "Buy only after trigger holds above VWAP/resistance and supply wick stays controlled.",
     }

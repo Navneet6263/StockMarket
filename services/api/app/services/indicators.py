@@ -127,14 +127,40 @@ class IndicatorEngine:
         features["bb_width_ratio"] = bb_width_pct / bb_width_pct.rolling(100, min_periods=30).mean()
         features["bb_squeeze"] = (features["bb_width_ratio"] <= 0.85).astype(int)
 
+        # ── Multi-Timeframe Support / Resistance ─────────────────────────────
+        # Daily chart (20-day = ~1 trading month)
         resistance_20 = high.rolling(20).max().shift(1)
         support_20 = low.rolling(20).min().shift(1)
+        # Quarterly chart (50-day)
         resistance_50 = high.rolling(50).max().shift(1)
         support_50 = low.rolling(50).min().shift(1)
+        # 3-Month chart (60-day)
+        resistance_60 = high.rolling(60).max().shift(1)
+        support_60 = low.rolling(60).min().shift(1)
+        # 6-Month chart (120-day)
+        resistance_120 = high.rolling(120, min_periods=60).max().shift(1)
+        support_120 = low.rolling(120, min_periods=60).min().shift(1)
+        # Yearly chart (252 trading days)
+        resistance_252 = high.rolling(252, min_periods=120).max().shift(1)
+        support_252 = low.rolling(252, min_periods=120).min().shift(1)
+
         features["resistance_20"] = resistance_20
         features["support_20"] = support_20
         features["resistance_50"] = resistance_50
         features["support_50"] = support_50
+        features["resistance_60"] = resistance_60
+        features["support_60"] = support_60
+        features["resistance_120"] = resistance_120
+        features["support_120"] = support_120
+        features["resistance_252"] = resistance_252
+        features["support_252"] = support_252
+
+        # 52-week high/low (standard yearly reference)
+        features["high_52w"] = high.rolling(252, min_periods=120).max()
+        features["low_52w"] = low.rolling(252, min_periods=120).min()
+        features["pct_from_52w_high"] = ((close - features["high_52w"]) / features["high_52w"].replace(0, np.nan)) * 100
+        features["pct_from_52w_low"] = ((close - features["low_52w"]) / features["low_52w"].replace(0, np.nan)) * 100
+
         features["breakout_20"] = (close > resistance_20).astype(int)
         features["breakdown_20"] = (close < support_20).astype(int)
         features["distance_to_resistance_pct"] = ((resistance_20 - close) / close.replace(0, np.nan)) * 100
