@@ -1287,6 +1287,7 @@ class ScoringEngine:
         )
 
         ai_probability = probability
+        ai_insight = None   # always initialize — set inside ML block if model runs
         news_sentiment = "neutral"
         news_headlines = []
         
