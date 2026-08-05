@@ -6,7 +6,7 @@ from typing import Any
 
 from app.market_universe_config import FNO_STOCKS
 
-# God-Tier Options Rules - IV Crush Protection
+# Strict options rules - IV-crush protection
 IV_CRUSH_BLOCK_THRESHOLD = float(os.getenv("IV_CRUSH_BLOCK_THRESHOLD", "60.0"))
 IV_CRUSH_WARNING_THRESHOLD = float(os.getenv("IV_CRUSH_WARNING_THRESHOLD", "40.0"))
 MIN_DELTA_FOR_OPTION_BUY = float(os.getenv("MIN_DELTA_FOR_OPTION_BUY", "0.45"))
@@ -27,10 +27,9 @@ def is_fno_symbol(symbol: str) -> bool:
         try:
             from app.services.broker_adapter import get_broker_adapter
             adapter = get_broker_adapter()
-            if not adapter.token_df:
-                adapter._load_tokens()
-            if adapter.token_df:
-                fno = {row.get("name") for row in adapter.token_df if row.get("exch_seg") == "NFO"}
+            instruments = adapter._load_instruments()
+            if instruments:
+                fno = {row.get("name") for row in instruments if row.get("exch_seg") == "NFO"}
                 if fno:
                     _dynamic_fno_symbols = {str(s).upper() for s in fno if s}
             if not _dynamic_fno_symbols:
@@ -218,10 +217,22 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
         blockers.append("High-risk underlying setup.")
     if not price or not trigger or not fail:
         blockers.append("Price, trigger, or invalidation missing.")
+    if raw.get("tradePlanGateBlocked") or raw.get("entry_plan_blocked") or item.get("entry_plan_blocked"):
+        blockers.append("Underlying structural trade plan is watch-only.")
     if score < 72:
         blockers.append("Setup score below strict option threshold.")
-    if risk_reward and risk_reward < 1.5:
+    if not target or not risk_reward:
+        blockers.append("Observed target or risk/reward is unavailable.")
+    elif risk_reward < 1.5:
         blockers.append("Underlying risk/reward below 1:1.5.")
+    if price and fail and direction == "bullish" and fail >= price:
+        blockers.append("Bullish invalidation is not below the underlying price.")
+    if price and target and direction == "bullish" and target <= price:
+        blockers.append("Bullish target is not above the underlying price.")
+    if price and fail and direction == "bearish" and fail <= price:
+        blockers.append("Bearish invalidation is not above the underlying price.")
+    if price and target and direction == "bearish" and target >= price:
+        blockers.append("Bearish target is not below the underlying price.")
 
     trigger_crossed = _trigger_crossed(direction, price, trigger)
     abs_distance = abs(distance) if distance is not None else 99.0
@@ -238,8 +249,9 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
     if stop_pct > 4.0:
         blockers.append("Underlying stop is too wide for option buying.")
 
-    # God-Tier IV Crush Protection - Block option buying when IV/HV too high
-    iv_percentile = _safe_float(item.get("iv_percentile") or item.get("hv_percentile"))
+    # IV-crush protection - block option buying when IV/HV is too high.
+    iv_percentile_verified = bool(item.get("iv_percentile_verified_historical"))
+    iv_percentile = _safe_float(item.get("iv_percentile")) if iv_percentile_verified else 0.0
     if iv_percentile and iv_percentile > IV_CRUSH_BLOCK_THRESHOLD:
         blockers.append(f"IV Percentile ({iv_percentile:.0f}%) > {IV_CRUSH_BLOCK_THRESHOLD}% — SKIP option buying. IV crush risk.")
     elif iv_percentile and iv_percentile > IV_CRUSH_WARNING_THRESHOLD:
@@ -253,13 +265,15 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
 
     ready_blockers = [reason for reason in blockers if "within 1% alert zone" not in reason]
     if not ready_blockers and trigger_crossed and volume_confirmed:
-        status = "STRICT_READY"
-        action_label = f"{option_side} Ready"
+        # This radar sees the underlying setup, not a verified live option
+        # contract.  It may nominate a side but must never claim order-readiness.
+        status = "WATCH_CONTRACT"
+        action_label = f"{option_side} contract check"
         entry_rule = (
-            f"{symbol} {option_side}: only after 5/15-min candle sustains beyond {_fmt_price(trigger)} "
-            f"and Nifty gate stays {direction}."
+            f"Underlying confirmed beyond {_fmt_price(trigger)}. No option order until an exact listed "
+            f"{option_side} has fresh two-sided quotes, liquidity, bounded spread and verified IV."
         )
-        confidence = min(95, round(score + 8, 1))
+        confidence = round(score, 1)
     elif not blockers or (
         len(blockers) == 1 and "within 1% alert zone" in blockers[0] and nifty_gate.get("side") == direction
     ):
@@ -274,19 +288,14 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
         entry_rule = "Strict option gate blocked this setup."
         confidence = round(score, 1)
 
-    import datetime
-    today_weekday = datetime.datetime.now().weekday()
-    if today_weekday in [2, 3]:
-        expiry_rule = "⚠️ THETA DANGER (Wed/Thu): Option Engine auto-selected NEXT week's expiry to avoid zero-gamma trap."
-    else:
-        expiry_rule = "Option Engine auto-selected current expiry (3+ sessions remain)."
+    expiry_rule = "No expiry is assumed here; use only an actual listed contract with enough sessions remaining."
 
     target_rule = f"First underlying target near {_fmt_price(target)}." if target else "Book by price action; target unavailable."
-    invalidation_rule = f"Exit option if underlying fails {_fmt_price(fail)} or if option premium loses 25% (Auto-Cut)."
-    risk_rule = "Max premium risk 0.50% of capital. No averaging losing options."
+    invalidation_rule = f"Underlying research invalidates at {_fmt_price(fail)}; no broker-native option stop is implied."
+    risk_rule = "Contract verification and premium-risk sizing are still required. Never average a losing option."
     instrument_rule = (
-        f"Strictly {option_side} with Delta > {MIN_DELTA_FOR_OPTION_BUY} (ATM/ITM). "
-        f"SKIP if IV Percentile > {IV_CRUSH_BLOCK_THRESHOLD}% (IV Crush protection)."
+        f"{option_side} candidate only—not an executable contract. Require Delta > {MIN_DELTA_FOR_OPTION_BUY}, "
+        "positive volume/OI and a fresh two-sided quote."
     )
 
     return {
@@ -307,6 +316,8 @@ def build_strict_option_idea(item: dict[str, Any], nifty_gate: dict[str, Any], b
         "expiryRule": expiry_rule,
         "riskRule": risk_rule,
         "niftyGate": nifty_gate.get("status"),
+        "tradeGatePassed": False,
+        "contractVerificationRequired": True,
         "blockers": blockers[:5],
     }
 
@@ -335,7 +346,7 @@ def build_strict_options_response(
                 continue
             ideas.append(idea)
 
-    priority = {"STRICT_READY": 3, "WATCH_TRIGGER": 2, "NO_TRADE": 1}
+    priority = {"WATCH_CONTRACT": 3, "WATCH_TRIGGER": 2, "NO_TRADE": 1}
     ideas.sort(key=lambda item: (priority.get(item["status"], 0), item["confidence"]), reverse=True)
     blocked.sort(key=lambda item: item["confidence"], reverse=True)
 
@@ -344,8 +355,8 @@ def build_strict_options_response(
         "radar": ideas[:max_results],
         "blocked": blocked[:10],
         "summary": {
-            "strictReady": len([item for item in ideas if item["status"] == "STRICT_READY"]),
-            "watchOnly": len([item for item in ideas if item["status"] == "WATCH_TRIGGER"]),
+            "strictReady": 0,
+            "watchOnly": len([item for item in ideas if item["status"] in {"WATCH_CONTRACT", "WATCH_TRIGGER"}]),
             "blockedHighScore": len(blocked),
         },
         "warnings": [STRICT_OPTIONS_DISCLAIMER],

@@ -43,6 +43,25 @@ export type DemandSupply = {
   confirmationRule?: string;
 };
 
+export type LargeMoneyFootprint = {
+  bias: string;
+  score: number;
+  strength?: number;
+  evidence?: string[];
+  warnings?: string[];
+  summary?: string;
+  buying_pressure?: boolean;
+  selling_pressure?: boolean;
+  identity_inference_supported?: false;
+  score_is_calibrated_probability?: false;
+  data_quality?: {
+    grade?: "high" | "medium" | "low" | string;
+    score?: number;
+    delivery_verified?: boolean;
+    available?: Record<string, boolean>;
+  };
+};
+
 export type MarketSignal = {
   symbol: string;
   company_name?: string;
@@ -54,7 +73,9 @@ export type MarketSignal = {
   evidence_confidence?: number | null;
   historical_evidence_status: "validated" | "limited" | "unavailable" | "not_loaded" | string;
   confidence_note: string;
-  probability: number;
+  probability?: number | null;
+  probability_available?: boolean;
+  model_alignment_score?: number;
   move_quality: number;
   expected_move_pct: number;
   risk_level: "low" | "medium" | "high" | string;
@@ -79,6 +100,12 @@ export type MarketSignal = {
   seller_pressure_score?: number;
   profit_booking_risk?: "low" | "medium" | "high" | "very_high" | string;
   demand_supply?: DemandSupply;
+  large_money_footprint?: LargeMoneyFootprint;
+  large_money_footprint_bias?: string;
+  large_money_footprint_score?: number;
+  footprint_data_quality?: LargeMoneyFootprint["data_quality"];
+  live_pool_reason?: string;
+  live_pool_rank?: number;
   demand_status?: string;
   demand_score?: number;
   supply_score?: number;
@@ -126,6 +153,16 @@ export type MarketSignal = {
   continuation_risk_reward?: number;
   continuation_action?: "WAIT_FOR_REENTRY" | "ALERT" | "REENTRY_BUY" | string;
   continuation_reason?: string;
+  riskPct?: number | null;
+  riskPerShare?: number | null;
+  maxPositionPctAt1PctAccountRisk?: number | null;
+  targetMethod?: string;
+  entry_plan_status?: string;
+  entry_plan_blocked?: boolean;
+  entry_plan_blocked_reason?: string | null;
+  proposed_entry?: number | null;
+  structural_invalidation?: number | null;
+  opposing_structure_target?: number | null;
   historical_evidence?: {
     sample_count: number;
     win_rate: number;
@@ -236,6 +273,27 @@ export type MarketOverview = {
   re_entry_setups?: MarketSignal[];
   missed_moves_analysis?: MarketMover[];
   avoid_late_entry?: MarketSignal[];
+  live_candidate_symbols?: string[];
+  live_candidate_pool?: Array<{
+    symbol: string;
+    rank: number;
+    reason: string;
+    direction: MarketSignal["direction"];
+    confidence?: number | null;
+    large_money_footprint_score?: number | null;
+  }>;
+  all_entry_levels?: Array<{
+    symbol: string;
+    entry_trigger: number;
+    stop_loss?: number | null;
+    target_1?: number | null;
+    direction?: MarketSignal["direction"];
+  }>;
+  data_health?: {
+    institution_identity_available?: false;
+    large_money_label?: string;
+    delivery_archive?: Record<string, unknown>;
+  };
   summary: {
     high_priority: number;
     watchlist: number;
@@ -258,6 +316,7 @@ export type MarketOverview = {
     re_entry_count?: number;
     missed_moves_count?: number;
     avoid_late_entry_count?: number;
+    live_candidate_count?: number;
   };
 };
 
@@ -393,7 +452,7 @@ export type StrictOptionIdea = {
   symbol: string;
   bucket: string;
   side: "CE" | "PE" | "NO_TRADE" | string;
-  status: "STRICT_READY" | "WATCH_TRIGGER" | "NO_TRADE" | string;
+  status: "WATCH_CONTRACT" | "WATCH_TRIGGER" | "NO_TRADE" | string;
   actionLabel: string;
   confidence: number;
   underlyingPrice: string;

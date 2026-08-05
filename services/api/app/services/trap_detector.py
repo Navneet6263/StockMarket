@@ -1,22 +1,21 @@
-"""
-Trap Detector - Institutional Trap & Smart Money Analysis
+"""Trap and visible-footprint analysis.
 
-Ek experienced trader jaanta hai:
-1. Jab buy orders zyada hain lekin price neeche ja rahi hai = institutions sell kar rahe hain
-2. Jab resistance toot ke bada candle se neeche aata hai = bull trap
-3. Jab OI build-up resistance pe zyada hai = institutions ne ceiling bana di hai
-4. Jab delivery low hai lekin price upar hai = retail speculation, not real buying
-
-Yeh module in sab cheezein detect karta hai aur trader ko bachata hai.
+Price, volume, delivery, order-book depth, and option open interest reveal market
+behaviour; they do not reveal the identity or intent of the participant behind a
+trade. The helpers in this module therefore report evidence-alignment and trap
+risk. They must never be read as proof of FII, DII, institutional, or retail
+activity.
 """
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
-
-import numpy as np
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _clip(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _safe(val, default: float = 0.0) -> float:
@@ -39,19 +38,17 @@ def detect_order_book_trap(
     volume_ratio: float,
     close_location: float,
 ) -> Dict:
-    """
-    Order book trap: Buy orders zyada hain lekin price neeche ja rahi hai.
+    """Flag displayed bid depth that is not producing an upward response.
 
-    Yeh tab hota hai jab institutions:
-    - Retail ko lure karne ke liye fake buy orders dikhate hain
-    - Khud quietly sell karte rehte hain
-    - Jab enough retail buy ho jaata hai, orders cancel karke price crash karte hain
+    Depth can be cancelled and it never identifies the participant. A mismatch
+    is a reason to wait for executed-price confirmation, not proof of spoofing
+    or of any participant's intent.
 
     Signs:
     - Bid quantity >> Ask quantity (buyers dikhte hain)
     - Lekin price neeche ja rahi hai ya flat hai
     - Volume high hai lekin close location low hai (close near low of candle)
-    - Delivery ratio low hai (no real buying)
+    - Displayed depth is not confirmed by executed price
     """
     if bid_quantity <= 0 or ask_quantity <= 0:
         return {"trap_detected": False, "trap_type": None, "trap_score": 0, "trap_reason": []}
@@ -65,13 +62,13 @@ def detect_order_book_trap(
         score += 40
         reasons.append(
             f"Buy orders {bid_ask_ratio:.1f}x sell orders but price is falling "
-            f"({price_change_pct:.2f}%) — classic institutional sell trap."
+            f"({price_change_pct:.2f}%) — displayed demand is not producing a price response."
         )
     elif bid_ask_ratio >= 2.0 and price_change_pct <= 0:
         score += 30
         reasons.append(
             f"Heavy buy-side depth ({bid_ask_ratio:.1f}x) but price not moving up — "
-            "fake depth to attract retail buyers."
+            "displayed depth is unconfirmed by executed price."
         )
 
     # Close location: Candle ke neeche close = sellers in control
@@ -79,7 +76,7 @@ def detect_order_book_trap(
         score += 25
         reasons.append(
             f"High volume ({volume_ratio:.1f}x) but candle closing near lows "
-            f"(close location {close_location:.2f}) — distribution happening."
+            f"(close location {close_location:.2f}) — visible selling pressure dominates."
         )
 
     # Volume high but price not moving = absorption
@@ -87,13 +84,13 @@ def detect_order_book_trap(
         score += 20
         reasons.append(
             f"Volume is {volume_ratio:.1f}x average but price barely moved — "
-            "institutions absorbing supply before a move."
+            "two-sided absorption is possible; direction needs price confirmation."
         )
 
     trap_detected = score >= 40
     if score >= 70:
         trap_type = "strong_sell_trap"
-        action = "AVOID — Strong institutional selling disguised as buying."
+        action = "AVOID — Strong bid/price divergence; wait for executed-price confirmation."
     elif score >= 40:
         trap_type = "possible_sell_trap"
         action = "CAUTION — Possible trap. Wait for price confirmation before entry."
@@ -126,20 +123,13 @@ def detect_bull_trap(
     candle_body_pct: float,
     upper_wick_pct: float,
 ) -> Dict:
-    """
-    Bull Trap: Resistance tod ke bada candle se neeche aana.
-
-    Yeh institutions ka sabse common trap hai:
-    1. Price resistance ke upar jaata hai (retail buyers excited ho jaate hain)
-    2. Bada green candle banta hai (FOMO entry)
-    3. Phir usi session mein ya next session mein bada red candle
-    4. Retail trapped, institutions ne exit kar liya
+    """Detect a failed breakout from observable price/volume behaviour.
 
     Kaise identify karein:
     - Price resistance ke upar gayi (breakout dikhta hai)
     - Lekin close resistance ke neeche aa gayi (failed breakout)
     - Ya upper wick bahut bada hai (rejection at resistance)
-    - Volume high tha breakout pe (retail FOMO)
+    - Volume high tha breakout pe, but price did not hold
     """
     reasons = []
     score = 0
@@ -170,7 +160,7 @@ def detect_bull_trap(
             score += 20
             reasons.append(
                 f"Rejection from resistance was {rejection_pct:.1f}% — "
-                "strong institutional selling at this level."
+                "strong visible selling pressure at this level."
             )
 
     # Large upper wick = rejection
@@ -186,7 +176,7 @@ def detect_bull_trap(
         score += 20
         reasons.append(
             f"High volume ({volume_ratio:.1f}x) on a failed breakout — "
-            "institutions were selling into retail buying."
+            "supply overwhelmed demand; participant identity is unknown."
         )
 
     # Price now below prev close = reversal confirmed
@@ -201,7 +191,7 @@ def detect_bull_trap(
 
     if score >= 80:
         severity = "high"
-        action = "SELL/SHORT — Strong bull trap. Institutions sold into breakout. Exit longs immediately."
+        action = "SELL/SHORT — Strong failed breakout. Exit longs or wait for a clean reclaim."
         entry_note = f"Short entry below {resistance_level:.2f}. Stop above {current_high:.2f}."
     elif score >= 50:
         severity = "medium"
@@ -240,15 +230,11 @@ def analyze_option_chain_traps(
     iv_percentile: float = 50.0,
 ) -> Dict:
     """
-    Option chain se institutional trap identify karo.
+    Option-chain positioning aur crowding risk identify karo.
 
-    Key concepts:
-    - Max Pain: Jis price pe maximum options expire worthless — institutions yahan price le jaate hain
-    - PCR > 1.5: Bahut zyada puts = market makers bullish (contrarian signal)
-    - PCR < 0.7: Bahut zyada calls = market makers bearish (contrarian signal)
-    - Heavy Call OI at resistance = ceiling bana hua hai, price wahan se neeche aayegi
-    - Heavy Put OI at support = floor bana hua hai, price wahan se upar aayegi
-    - OI change: Fresh positions build ho rahi hain = strong signal
+    Aggregate OI shows positioning/crowding, not whether contracts were bought
+    or written and not participant identity. It is descriptive context only;
+    price/volume structure must provide any directional vote.
     """
     reasons = []
     bias = "neutral"
@@ -259,131 +245,278 @@ def analyze_option_chain_traps(
     if max_pain > 0 and spot_price > 0:
         distance_from_max_pain = (spot_price - max_pain) / spot_price * 100
         if distance_from_max_pain > 2.0:
-            score -= 20
             trap_warnings.append(
                 f"Spot ({spot_price:.0f}) is {distance_from_max_pain:.1f}% ABOVE max pain ({max_pain:.0f}). "
-                "Institutions will try to pull price down to max pain by expiry."
+                "This is an expiry payout reference, not a directional price magnet."
             )
         elif distance_from_max_pain < -2.0:
-            score += 20
             reasons.append(
                 f"Spot ({spot_price:.0f}) is {abs(distance_from_max_pain):.1f}% BELOW max pain ({max_pain:.0f}). "
-                "Institutions will try to push price up to max pain by expiry."
+                "This is an expiry payout reference, not a directional price magnet."
             )
 
     # PCR analysis
     if pcr >= 1.5:
-        score += 25
-        bias = "bullish"
+        bias = "put_oi_heavy"
         reasons.append(
-            f"PCR is {pcr:.2f} — heavy put writing means market makers are bullish. "
-            "Puts are being sold = floor is being built."
+            f"PCR is {pcr:.2f} — put OI is heavy. Aggregate OI alone does not reveal "
+            "buying versus writing or market direction."
         )
     elif pcr >= 1.2:
-        score += 10
-        bias = "mildly_bullish"
-        reasons.append(f"PCR {pcr:.2f} — slightly bullish bias from options market.")
+        bias = "put_oi_heavy"
+        reasons.append(f"PCR {pcr:.2f} — put-side OI is moderately heavier; direction is unknown.")
     elif pcr <= 0.7:
-        score -= 25
-        bias = "bearish"
+        bias = "call_oi_heavy"
         trap_warnings.append(
-            f"PCR is {pcr:.2f} — heavy call writing means market makers are bearish. "
-            "Calls are being sold = ceiling is being built."
+            f"PCR is {pcr:.2f} — call OI is heavy. Aggregate OI alone does not reveal "
+            "buying versus writing or market direction."
         )
     elif pcr <= 0.9:
-        score -= 10
-        bias = "mildly_bearish"
-        trap_warnings.append(f"PCR {pcr:.2f} — slightly bearish bias from options market.")
+        bias = "call_oi_heavy"
+        trap_warnings.append(f"PCR {pcr:.2f} — call-side OI is moderately heavier; direction is unknown.")
 
     # Call OI at resistance = ceiling
     if call_oi_at_resistance > 0 and put_oi_at_support > 0:
         oi_ratio = call_oi_at_resistance / max(put_oi_at_support, 1)
         if oi_ratio >= 2.0:
-            score -= 20
             trap_warnings.append(
                 f"Call OI at resistance is {oi_ratio:.1f}x put OI at support — "
-                "strong ceiling built by institutions. Price likely to face heavy resistance."
+                "call-side crowding is visible, but its trade side and direction are unknown."
             )
         elif oi_ratio <= 0.5:
-            score += 20
             reasons.append(
                 f"Put OI at support is {1/oi_ratio:.1f}x call OI at resistance — "
-                "strong floor built. Price likely to bounce from support."
+                "put-side crowding is visible, but its trade side and direction are unknown."
             )
 
     # OI change analysis (fresh positions)
     if call_oi_change > 0 and put_oi_change > 0:
         if call_oi_change > put_oi_change * 1.5:
-            score -= 15
             trap_warnings.append(
-                f"Fresh call writing ({call_oi_change:,.0f}) >> put writing ({put_oi_change:,.0f}) — "
-                "institutions building bearish positions."
+                f"Call OI increase ({call_oi_change:,.0f}) >> put OI increase ({put_oi_change:,.0f}) — "
+                "buying versus writing cannot be identified from OI change alone."
             )
         elif put_oi_change > call_oi_change * 1.5:
-            score += 15
             reasons.append(
-                f"Fresh put writing ({put_oi_change:,.0f}) >> call writing ({call_oi_change:,.0f}) — "
-                "institutions building bullish floor."
+                f"Put OI increase ({put_oi_change:,.0f}) >> call OI increase ({call_oi_change:,.0f}) — "
+                "buying versus writing cannot be identified from OI change alone."
             )
 
     # IV analysis
     if iv_percentile >= 80:
         trap_warnings.append(
             f"IV percentile is {iv_percentile:.0f}% — options are expensive. "
-            "Avoid buying options; sell premium instead."
+            "Long-option entries carry IV-crush risk; use defined risk if a separate price signal confirms."
         )
     elif iv_percentile <= 20:
         reasons.append(
-            f"IV percentile is {iv_percentile:.0f}% — options are cheap. "
-            "Good time to buy options for directional bets."
+            f"IV percentile is {iv_percentile:.0f}% — implied volatility is relatively low, "
+            "but that is not a directional entry signal."
         )
 
-    # Final classification
-    if score >= 30:
-        overall_bias = "bullish"
-        summary = "Options market is bullish. Institutions are building a floor."
-    elif score <= -30:
-        overall_bias = "bearish"
-        summary = "Options market is bearish. Institutions are building a ceiling."
-    else:
-        overall_bias = "neutral"
-        summary = "Options market is neutral. No strong institutional bias."
+    overall_bias = "neutral"
+    summary = "Options OI is positioning context only; these fields provide no directional inference."
 
     return {
         "options_bias": overall_bias,
         "options_score": score,
         "options_summary": summary,
+        "positioning_label": bias,
+        "directional_inference_available": False,
         "pcr": round(pcr, 2),
         "max_pain": round(max_pain, 2),
         "distance_from_max_pain_pct": round((spot_price - max_pain) / spot_price * 100, 2) if max_pain > 0 else 0,
         "iv_percentile": round(iv_percentile, 1),
         "bullish_reasons": reasons,
         "trap_warnings": trap_warnings,
-        "recommended_strategy": _suggest_options_strategy(overall_bias, pcr, iv_percentile),
+        "recommended_strategy": (
+            "No directional options trade from aggregate OI alone; wait for price/volume confirmation "
+            "and prefer a defined-risk structure."
+        ),
     }
 
 
 def _suggest_options_strategy(bias: str, pcr: float, iv_pct: float) -> str:
-    if bias == "bullish":
-        if iv_pct <= 30:
-            return "Buy ATM Call OR Bull Call Spread (IV is cheap — buy options)"
+    return (
+        "Wait for a separate price/volume trigger. If trading options, use a defined-risk structure "
+        "sized for the actual stop; PCR and IV alone are not entry signals."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. LARGE-MONEY VISIBLE-FOOTPRINT DETECTION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def detect_large_money_footprint(
+    price_change_pct: float,
+    volume_ratio: float,
+    delivery_ratio: float,
+    delivery_spike: float,
+    cmf: float,
+    obv_slope: float,
+    close_location: float,
+    relative_strength: float,
+    *,
+    delivery_available: Optional[bool] = None,
+    data_availability: Optional[Dict[str, bool]] = None,
+) -> Dict:
+    """Estimate directional large-money *footprints*, never participant identity.
+
+    A high delivery ratio or volume spike only proves elevated participation.
+    Direction comes from price response, close location and money-flow
+    alignment. The signed score is an explainable evidence score, not a
+    calibrated probability that an FII/DII/institution is trading.
+    """
+    availability = data_availability or {}
+    if delivery_available is None:
+        delivery_available = bool(delivery_ratio > 0 and availability.get("delivery", True))
+
+    buying_score = 0.0
+    selling_score = 0.0
+    evidence: list[str] = []
+    warnings: list[str] = []
+
+    # Volume only becomes directional when executed price confirms it.
+    if volume_ratio >= 2.0:
+        if price_change_pct >= 1.0 and close_location >= 0.65:
+            buying_score += 24
+            evidence.append(
+                f"{volume_ratio:.1f}x volume closed strongly with positive price response."
+            )
+        elif price_change_pct <= -1.0 and close_location <= 0.35:
+            selling_score += 24
+            warnings.append(
+                f"{volume_ratio:.1f}x volume closed weakly with negative price response."
+            )
         else:
-            return "Sell OTM Put (IV is high — sell premium, collect theta)"
-    elif bias == "bearish":
-        if iv_pct <= 30:
-            return "Buy ATM Put OR Bear Put Spread (IV is cheap — buy options)"
-        else:
-            return "Sell OTM Call (IV is high — sell premium, collect theta)"
+            warnings.append(
+                f"{volume_ratio:.1f}x volume has no clean directional price response yet."
+            )
+
+    # Delivery is useful only when the feed explicitly marks it as available.
+    if delivery_available:
+        if delivery_ratio >= 0.60:
+            evidence.append(
+                f"Delivery ratio is {delivery_ratio * 100:.0f}%, showing positional participation; "
+                "participant identity is unavailable."
+            )
+            if price_change_pct >= 0.5 and close_location >= 0.60:
+                buying_score += 12
+            elif price_change_pct <= -0.5 and close_location <= 0.40:
+                selling_score += 12
+        if delivery_spike >= 1.5:
+            if price_change_pct >= 0.5 and close_location >= 0.60:
+                buying_score += 12
+                evidence.append(
+                    f"Delivery is {delivery_spike:.1f}x normal and price held the advance."
+                )
+            elif price_change_pct <= -0.5 and close_location <= 0.40:
+                selling_score += 12
+                warnings.append(
+                    f"Delivery is {delivery_spike:.1f}x normal while price closed weakly."
+                )
+            else:
+                warnings.append(
+                    f"Delivery is {delivery_spike:.1f}x normal but directional response is mixed."
+                )
+        if delivery_ratio <= 0.25 and price_change_pct >= 2.0:
+            warnings.append(
+                f"Delivery is only {delivery_ratio * 100:.0f}% on the up move; follow-through is unconfirmed."
+            )
     else:
-        if iv_pct >= 70:
-            return "Iron Condor — Sell both OTM Call and Put (high IV, range-bound)"
-        else:
-            return "Wait for directional clarity before entering options"
+        warnings.append("Verified delivery data is unavailable; delivery is excluded from the score.")
 
+    if cmf >= 0.15:
+        buying_score += 22
+        evidence.append(f"CMF {cmf:.3f} shows strong positive money flow.")
+    elif cmf >= 0.05:
+        buying_score += 10
+        evidence.append(f"CMF {cmf:.3f} is mildly positive.")
+    elif cmf <= -0.15:
+        selling_score += 22
+        warnings.append(f"CMF {cmf:.3f} shows strong negative money flow.")
+    elif cmf <= -0.05:
+        selling_score += 10
+        warnings.append(f"CMF {cmf:.3f} is mildly negative.")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. INSTITUTIONAL FOOTPRINT DETECTION
-# ─────────────────────────────────────────────────────────────────────────────
+    if obv_slope > 0:
+        buying_score += 14
+        evidence.append("OBV is rising, aligning volume with up sessions.")
+    elif obv_slope < 0:
+        selling_score += 14
+        warnings.append("OBV is falling, aligning volume with down sessions.")
+
+    if close_location >= 0.75:
+        buying_score += 12
+        evidence.append(f"Candle closed near its high ({close_location:.2f}).")
+    elif close_location <= 0.25:
+        selling_score += 12
+        warnings.append(f"Candle closed near its low ({close_location:.2f}).")
+
+    if relative_strength >= 3.0:
+        buying_score += 8
+        evidence.append(f"Price outperformed the benchmark by {relative_strength:.1f}%.")
+    elif relative_strength <= -3.0:
+        selling_score += 8
+        warnings.append(f"Price underperformed the benchmark by {abs(relative_strength):.1f}%.")
+
+    signed_score = float(_clip(buying_score - selling_score, -100, 100))
+    if signed_score >= 45:
+        bias = "strong_buying_pressure"
+    elif signed_score >= 20:
+        bias = "buying_pressure"
+    elif signed_score <= -45:
+        bias = "strong_selling_pressure"
+    elif signed_score <= -20:
+        bias = "selling_pressure"
+    else:
+        bias = "mixed_or_neutral"
+
+    available = {
+        "price_volume": availability.get("price_volume", True),
+        "delivery": bool(delivery_available),
+        "cmf": availability.get("cmf", True),
+        "obv": availability.get("obv", True),
+        "relative_strength": availability.get("relative_strength", True),
+    }
+    quality_score = (
+        (25 if available["price_volume"] else 0)
+        + (25 if available["delivery"] else 0)
+        + (20 if available["cmf"] else 0)
+        + (15 if available["obv"] else 0)
+        + (15 if available["relative_strength"] else 0)
+    )
+    quality_grade = "high" if quality_score >= 80 else "medium" if quality_score >= 50 else "low"
+    summary = (
+        f"Visible footprint shows {bias.replace('_', ' ')}. "
+        "This is behavioural evidence, not participant identification."
+    )
+
+    return {
+        "bias": bias,
+        "score": round(signed_score, 1),
+        "strength": round(abs(signed_score), 1),
+        "buying_evidence_score": round(min(100, buying_score), 1),
+        "selling_evidence_score": round(min(100, selling_score), 1),
+        "evidence": evidence[:5],
+        "warnings": warnings[:5],
+        "summary": summary,
+        "data_quality": {
+            "grade": quality_grade,
+            "score": quality_score,
+            "available": available,
+            "delivery_verified": bool(delivery_available),
+        },
+        "buying_pressure": signed_score >= 20,
+        "selling_pressure": signed_score <= -20,
+        "identity_inference_supported": False,
+        "score_is_calibrated_probability": False,
+        "identity_note": (
+            "Participant identity cannot be inferred from public tape data: FII, DII, "
+            "institutional, and retail flow are not distinguishable here."
+        ),
+    }
+
 
 def detect_institutional_footprint(
     price_change_pct: float,
@@ -394,117 +527,31 @@ def detect_institutional_footprint(
     obv_slope: float,
     close_location: float,
     relative_strength: float,
+    **kwargs,
 ) -> Dict:
-    """
-    Institutional buying/selling ka footprint detect karo.
-
-    Real institutional buying ke signs:
-    - High delivery ratio (real shares changing hands, not intraday speculation)
-    - CMF positive (money flowing in)
-    - OBV rising (volume on up days > volume on down days)
-    - Price closing near highs (close location > 0.7)
-    - Relative strength vs Nifty positive
-
-    Institutional selling ke signs:
-    - High volume but price not moving (absorption)
-    - Delivery high but price falling (forced selling or distribution)
-    - CMF negative
-    - Close location low (closing near lows)
-    """
-    reasons = []
-    warnings = []
-    score = 0
-
-    # Delivery analysis (most reliable signal)
-    if delivery_ratio > 0:
-        if delivery_ratio >= 0.6 and price_change_pct >= 0:
-            score += 30
-            reasons.append(
-                f"Delivery ratio is {delivery_ratio * 100:.0f}% — real institutional buying. "
-                "Not just intraday speculation."
-            )
-        elif delivery_ratio >= 0.6 and price_change_pct < 0:
-            score -= 20
-            warnings.append(
-                f"High delivery ({delivery_ratio * 100:.0f}%) on a down day — "
-                "institutions may be selling/distributing."
-            )
-        elif delivery_ratio <= 0.25 and price_change_pct >= 2.0:
-            score -= 15
-            warnings.append(
-                f"Low delivery ({delivery_ratio * 100:.0f}%) on a big up move — "
-                "retail speculation, not institutional buying. Move may not sustain."
-            )
-
-    if delivery_spike >= 1.5 and price_change_pct >= 0:
-        score += 20
-        reasons.append(
-            f"Delivery spike {delivery_spike:.1f}x normal — unusual institutional activity."
-        )
-
-    # CMF (Chaikin Money Flow)
-    if cmf >= 0.15:
-        score += 25
-        reasons.append(f"CMF is {cmf:.3f} — strong money inflow. Institutions are accumulating.")
-    elif cmf >= 0.05:
-        score += 10
-        reasons.append(f"CMF is {cmf:.3f} — mild accumulation.")
-    elif cmf <= -0.15:
-        score -= 25
-        warnings.append(f"CMF is {cmf:.3f} — strong money outflow. Institutions are distributing.")
-    elif cmf <= -0.05:
-        score -= 10
-        warnings.append(f"CMF is {cmf:.3f} — mild distribution.")
-
-    # OBV slope
-    if obv_slope > 0:
-        score += 15
-        reasons.append("OBV is rising — volume on up days is greater than down days.")
-    elif obv_slope < 0:
-        score -= 15
-        warnings.append("OBV is falling — volume on down days is greater than up days.")
-
-    # Close location
-    if close_location >= 0.75:
-        score += 10
-        reasons.append(f"Candle closing near highs ({close_location:.2f}) — buyers in control.")
-    elif close_location <= 0.25:
-        score -= 10
-        warnings.append(f"Candle closing near lows ({close_location:.2f}) — sellers in control.")
-
-    # Relative strength
-    if relative_strength >= 3.0:
-        score += 10
-        reasons.append(f"Outperforming Nifty by {relative_strength:.1f}% — institutional interest.")
-    elif relative_strength <= -3.0:
-        score -= 10
-        warnings.append(f"Underperforming Nifty by {abs(relative_strength):.1f}% — institutions avoiding.")
-
-    # Classification
-    if score >= 50:
-        footprint = "strong_institutional_buying"
-        summary = "Strong institutional buying detected. High conviction setup."
-    elif score >= 25:
-        footprint = "mild_institutional_buying"
-        summary = "Mild institutional interest. Setup is constructive but not high conviction."
-    elif score <= -50:
-        footprint = "strong_institutional_selling"
-        summary = "Strong institutional selling/distribution. Avoid fresh longs."
-    elif score <= -25:
-        footprint = "mild_institutional_selling"
-        summary = "Mild distribution. Be cautious with new entries."
-    else:
-        footprint = "neutral"
-        summary = "No clear institutional footprint. Retail-driven move."
-
+    """Backward-compatible name; returns the truthful visible-footprint schema."""
+    result = detect_large_money_footprint(
+        price_change_pct=price_change_pct,
+        volume_ratio=volume_ratio,
+        delivery_ratio=delivery_ratio,
+        delivery_spike=delivery_spike,
+        cmf=cmf,
+        obv_slope=obv_slope,
+        close_location=close_location,
+        relative_strength=relative_strength,
+        **kwargs,
+    )
     return {
-        "institutional_footprint": footprint,
-        "institutional_score": score,
-        "institutional_summary": summary,
-        "institutional_reasons": reasons[:4],
-        "institutional_warnings": warnings[:4],
-        "is_institutional_buying": score >= 25,
-        "is_institutional_selling": score <= -25,
+        **result,
+        # Legacy keys intentionally refuse to infer identity. New consumers
+        # should use bias/score/evidence/data_quality above.
+        "institutional_footprint": "not_inferable_from_public_tape",
+        "institutional_score": None,
+        "institutional_summary": result["identity_note"],
+        "institutional_reasons": [],
+        "institutional_warnings": [result["identity_note"]],
+        "is_institutional_buying": False,
+        "is_institutional_selling": False,
     }
 
 
@@ -551,8 +598,8 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
         upper_wick_pct=upper_wick_pct,
     )
 
-    # Institutional footprint
-    inst = detect_institutional_footprint(
+    # Visible footprint. It deliberately makes no participant-identity claim.
+    footprint = detect_large_money_footprint(
         price_change_pct=change_pct,
         volume_ratio=volume_ratio,
         delivery_ratio=delivery_ratio,
@@ -561,6 +608,16 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
         obv_slope=obv_slope,
         close_location=close_location,
         relative_strength=relative_strength,
+        delivery_available=bool(signal.get("delivery_available")),
+        data_availability={
+            "price_volume": "relative_volume" in signal,
+            "delivery": bool(signal.get("delivery_available")),
+            "cmf": "cmf" in signal and signal.get("cmf") is not None,
+            "obv": "obv_slope" in signal and signal.get("obv_slope") is not None,
+            "relative_strength": (
+                "relative_strength_20d" in signal and signal.get("relative_strength_20d") is not None
+            ),
+        },
     )
 
     # Options analysis (if available)
@@ -585,9 +642,9 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
         trap_score += bull_trap["bull_trap_score"]
         all_warnings.extend(bull_trap["bull_trap_reason"])
 
-    if inst["is_institutional_selling"]:
-        trap_score += abs(inst["institutional_score"])
-        all_warnings.extend(inst["institutional_warnings"])
+    if footprint["selling_pressure"]:
+        trap_score += abs(footprint["score"])
+        all_warnings.extend(footprint["warnings"])
 
     if options_analysis and options_analysis["options_bias"] == "bearish":
         trap_score += 20
@@ -599,7 +656,7 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
         safe_to_enter = False
         entry_advice = (
             "DO NOT ENTER — Multiple trap signals detected. "
-            "Institutions are likely selling into this move. "
+            "Visible selling pressure is dominating this move. "
             "Wait for price to stabilize and re-test support."
         )
     elif trap_score >= 40:
@@ -622,9 +679,8 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
         safe_to_enter = True
         entry_advice = "CLEAR — No significant trap signals. Setup looks genuine."
 
-    # Institutional confirmation
-    if inst["is_institutional_buying"] and trap_risk in ("none", "low"):
-        entry_advice += " Institutional buying confirmed — higher conviction entry."
+    if footprint["buying_pressure"] and trap_risk in ("none", "low"):
+        entry_advice += " Buying-footprint evidence is aligned; participant identity remains unknown."
 
     return {
         "trap_risk": trap_risk,
@@ -633,6 +689,19 @@ def full_trap_analysis(signal: Dict, options_data: Optional[Dict] = None) -> Dic
         "entry_advice": entry_advice,
         "trap_warnings": all_warnings[:5],
         "bull_trap": bull_trap,
-        "institutional": inst,
+        "large_money_footprint": footprint,
+        # Compatibility container for older clients. The nested payload itself
+        # explicitly states that identity inference is unsupported.
+        "institutional": {
+            "institutional_footprint": "not_inferable_from_public_tape",
+            "institutional_score": None,
+            "institutional_summary": footprint["identity_note"],
+            "institutional_reasons": [],
+            "institutional_warnings": [footprint["identity_note"]],
+            "is_institutional_buying": False,
+            "is_institutional_selling": False,
+            "identity_inference_supported": False,
+            "visible_footprint": footprint,
+        },
         "options": options_analysis,
     }

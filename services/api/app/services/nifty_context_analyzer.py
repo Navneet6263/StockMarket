@@ -51,7 +51,11 @@ def _get(url: str) -> dict | None:
 
 # ── FII / DII ─────────────────────────────────────────────────────────────────
 def fetch_fii_dii() -> Dict:
-    """Fetch latest FII/DII net buy/sell from NSE."""
+    """Fetch aggregate cash-market FII/FPI and DII activity from NSE.
+
+    This context is market-wide and must never be interpreted as proof that a
+    named participant category traded a particular stock.
+    """
     if not ENABLE_FII_DII:
         return _unknown_fii("fii_dii_disabled")
     try:
@@ -59,23 +63,55 @@ def fetch_fii_dii() -> Dict:
         if not data:
             return _unknown_fii("nse_api_unavailable")
 
-        # NSE returns list; last entry = latest date
+        # NSE returns one row per category with category/date/buyValue/
+        # sellValue/netValue.  Older response variants are retained only as a
+        # compatibility fallback; missing fields are never converted to zero.
         rows = data if isinstance(data, list) else data.get("data", [])
         if not rows:
             return _unknown_fii("empty_response")
 
-        latest = rows[-1]
-        fii_net = float(latest.get("fiiNet") or latest.get("FII_NET") or 0)
-        dii_net = float(latest.get("diiNet") or latest.get("DII_NET") or 0)
-        date_str = latest.get("date") or latest.get("DATE") or ""
+        def parse_value(value):
+            if value is None or value == "":
+                return None
+            try:
+                return float(str(value).replace(",", "").strip())
+            except (TypeError, ValueError):
+                return None
 
-        if fii_net > 500 and dii_net > 0:
+        fii_net = None
+        dii_net = None
+        date_str = None
+        for row in rows:
+            category = str(row.get("category") or row.get("CATEGORY") or "").strip().upper()
+            net = parse_value(
+                row.get("netValue")
+                if row.get("netValue") is not None
+                else row.get("NET_VALUE")
+            )
+            if "FII" in category or "FPI" in category:
+                fii_net = net
+                date_str = row.get("date") or row.get("DATE") or date_str
+            elif "DII" in category:
+                dii_net = net
+                date_str = row.get("date") or row.get("DATE") or date_str
+
+        if fii_net is None and len(rows) == 1:
+            latest = rows[0]
+            fii_net = parse_value(latest.get("fiiNet") or latest.get("FII_NET"))
+            dii_net = parse_value(latest.get("diiNet") or latest.get("DII_NET"))
+            date_str = latest.get("date") or latest.get("DATE") or date_str
+
+        if fii_net is None or dii_net is None:
+            return _unknown_fii("unexpected_nse_schema")
+
+        combined_net = fii_net + dii_net
+        if combined_net >= 1000 and fii_net >= 0 and dii_net >= 0:
             mood = "strongly_bullish"
-        elif fii_net > 0 or dii_net > 500:
+        elif combined_net >= 500:
             mood = "bullish"
-        elif fii_net < -500 and dii_net < 0:
+        elif combined_net <= -1000 and fii_net <= 0 and dii_net <= 0:
             mood = "strongly_bearish"
-        elif fii_net < 0:
+        elif combined_net <= -500:
             mood = "bearish"
         else:
             mood = "neutral"
@@ -84,10 +120,13 @@ def fetch_fii_dii() -> Dict:
         return {
             "fiiNet": round(fii_net, 2),
             "diiNet": round(dii_net, 2),
-            "combinedNet": round(fii_net + dii_net, 2),
+            "combinedNet": round(combined_net, 2),
             "mood": mood,
             "date": date_str,
             "available": True,
+            "scope": "aggregate_cash_market",
+            "symbolLevelIdentityAvailable": False,
+            "source": "NSE FII/FPI & DII trading activity",
         }
     except Exception as exc:
         logger.warning("[FII_DII] fetch failed: %s", exc)
@@ -96,12 +135,27 @@ def fetch_fii_dii() -> Dict:
 
 def _unknown_fii(reason: str) -> Dict:
     return {"fiiNet": None, "diiNet": None, "combinedNet": None,
-            "mood": "unknown", "date": None, "available": False, "reason": reason}
+            "mood": "unknown", "date": None, "available": False, "reason": reason,
+            "scope": "aggregate_cash_market", "symbolLevelIdentityAvailable": False}
 
 
 # ── PCR + Max Pain ────────────────────────────────────────────────────────────
+def _aggregate_writer_payout(rows: list[tuple[float, float, float]]) -> tuple[float | None, dict[float, float]]:
+    """Return the settlement strike with minimum aggregate option payout."""
+
+    strikes = sorted({strike for strike, _, _ in rows if strike > 0})
+    payout_map: dict[float, float] = {}
+    for settlement in strikes:
+        payout_map[settlement] = sum(
+            max(0.0, settlement - strike) * ce_oi
+            + max(0.0, strike - settlement) * pe_oi
+            for strike, ce_oi, pe_oi in rows
+        )
+    return (min(payout_map, key=payout_map.get), payout_map) if payout_map else (None, {})
+
+
 def fetch_pcr_max_pain(symbol: str = "NIFTY") -> Dict:
-    """Fetch Put-Call Ratio and Max Pain from NSE options chain."""
+    """Fetch OI positioning ratio and aggregate-payout max pain from NSE."""
     if not ENABLE_PCR:
         return _unknown_pcr("pcr_disabled")
     try:
@@ -120,7 +174,7 @@ def fetch_pcr_max_pain(symbol: str = "NIFTY") -> Dict:
 
         total_ce_oi = 0
         total_pe_oi = 0
-        pain_map: dict[float, float] = {}
+        option_rows: list[tuple[float, float, float]] = []
 
         for item in all_data:
             if item.get("expiryDate") != nearest_expiry:
@@ -132,17 +186,20 @@ def fetch_pcr_max_pain(symbol: str = "NIFTY") -> Dict:
             pe_oi = float(pe.get("openInterest", 0))
             total_ce_oi += ce_oi
             total_pe_oi += pe_oi
-            pain_map[strike] = ce_oi + pe_oi
+            if strike > 0:
+                option_rows.append((strike, ce_oi, pe_oi))
 
-        pcr = round(total_pe_oi / total_ce_oi, 3) if total_ce_oi > 0 else 0.0
-        max_pain = min(pain_map, key=pain_map.get) if pain_map else None
+        if not option_rows or total_ce_oi <= 0:
+            return _unknown_pcr("insufficient_open_interest")
+        pcr = round(total_pe_oi / total_ce_oi, 3)
+        max_pain, payout_map = _aggregate_writer_payout(option_rows)
 
         if pcr >= 1.3:
-            pcr_signal = "bullish"       # heavy put writing = market expects up
+            pcr_signal = "put_oi_heavy"
         elif pcr <= 0.7:
-            pcr_signal = "bearish"       # heavy call writing = market expects down
+            pcr_signal = "call_oi_heavy"
         else:
-            pcr_signal = "neutral"
+            pcr_signal = "balanced_oi"
 
         logger.debug("[PCR] symbol=%s pcr=%.3f max_pain=%s signal=%s", symbol, pcr, max_pain, pcr_signal)
         return {
@@ -153,6 +210,10 @@ def fetch_pcr_max_pain(symbol: str = "NIFTY") -> Dict:
             "totalPeOi": int(total_pe_oi),
             "nearestExpiry": nearest_expiry,
             "available": True,
+            "pcrMeaning": "Aggregate put OI divided by call OI; OI alone does not identify buying/writing or direction.",
+            "directionalInferenceAvailable": False,
+            "maxPainMethod": "minimum_aggregate_writer_payout_across_all_strikes",
+            "maxPainPayout": round(payout_map.get(max_pain, 0), 2) if max_pain is not None else None,
         }
     except Exception as exc:
         logger.warning("[PCR] fetch failed symbol=%s: %s", symbol, exc)
@@ -162,7 +223,8 @@ def fetch_pcr_max_pain(symbol: str = "NIFTY") -> Dict:
 def _unknown_pcr(reason: str) -> Dict:
     return {"pcr": None, "pcrSignal": "unknown", "maxPain": None,
             "totalCeOi": None, "totalPeOi": None, "nearestExpiry": None,
-            "available": False, "reason": reason}
+            "available": False, "reason": reason,
+            "directionalInferenceAvailable": False}
 
 
 # ── Combined context ──────────────────────────────────────────────────────────
@@ -171,8 +233,10 @@ def get_nifty_context(symbol: str = "NIFTY") -> Dict:
     fii_dii = fetch_fii_dii()
     pcr = fetch_pcr_max_pain(symbol)
 
-    # Combine moods
-    moods = [fii_dii.get("mood", "unknown"), pcr.get("pcrSignal", "unknown")]
+    # Aggregate OI PCR is positioning context, not a directional vote.
+    moods = [fii_dii.get("mood", "unknown")]
+    if pcr.get("directionalInferenceAvailable"):
+        moods.append(pcr.get("pcrSignal", "unknown"))
     bullish_count = sum(1 for m in moods if "bullish" in m)
     bearish_count = sum(1 for m in moods if "bearish" in m)
 

@@ -78,7 +78,7 @@ class MarketDataService:
             return clean[:-3]
         return clean
 
-    def _normalize_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
+    def _normalize_frame(self, frame: pd.DataFrame, interval: str = "1d") -> pd.DataFrame:
         if frame is None or frame.empty:
             return pd.DataFrame()
         normalized = frame.copy()
@@ -88,7 +88,14 @@ class MarketDataService:
             return pd.DataFrame()
         normalized = normalized.dropna(subset=["Close"]).copy()
         if getattr(normalized.index, "tz", None) is not None:
-            normalized.index = normalized.index.tz_convert(None)
+            if str(interval).lower() in {"1d", "1wk", "1mo", "3mo"}:
+                # Daily bars represent an exchange session date. Converting an
+                # IST midnight to UTC first shifts it to the previous calendar
+                # day and breaks the official NSE delivery-data join.
+                normalized.index = normalized.index.tz_convert("Asia/Kolkata").tz_localize(None)
+            else:
+                # Intraday timestamps remain a UTC-normalised timeline.
+                normalized.index = normalized.index.tz_convert("UTC").tz_localize(None)
         return normalized
 
     def fetch_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
@@ -112,7 +119,7 @@ class MarketDataService:
         if self.use_broker_history and self.broker.is_available() and self.provider_name != "yfinance":
             frame = self.broker.fetch_history(clean, period, interval)
             if not frame.empty:
-                normalized = self._normalize_frame(frame)
+                normalized = self._normalize_frame(frame, interval=interval)
                 if not normalized.empty:
                     self.history_cache.set(cache_key, normalized, ttl_seconds=self._history_ttl(interval))
                     return normalized.copy()
@@ -130,7 +137,7 @@ class MarketDataService:
         except Exception as exc:
             logger.warning("history fetch failed symbol=%s error=%s", clean, exc)
             return pd.DataFrame()
-        frame = self._normalize_frame(history)
+        frame = self._normalize_frame(history, interval=interval)
         if not frame.empty:
             self.history_cache.set(cache_key, frame, ttl_seconds=self._history_ttl(interval))
             self._save_to_parquet(frame, pq_path)
@@ -213,7 +220,7 @@ class MarketDataService:
                 except Exception:
                     frame = pd.DataFrame()
 
-                normalized = self._normalize_frame(frame)
+                normalized = self._normalize_frame(frame, interval=interval)
                 if normalized.empty:
                     logger.info("skipped no-data symbol=%s period=%s interval=%s", clean, period, interval)
                     continue

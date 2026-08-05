@@ -45,7 +45,7 @@ export default function ScannerPanel({
                 <small>{item.setup_label}</small>
               </div>
               <div className="scanner-metrics">
-                <span style={{ color: toneForDirection(item.direction) }}>{item.confidence.toFixed(0)}%</span>
+                <span style={{ color: toneForDirection(item.direction) }}>{item.confidence.toFixed(0)}/100</span>
                 <span>{item.relative_volume.toFixed(2)}x</span>
                 <span>{item.expected_move_pct > 0 ? "+" : ""}{item.expected_move_pct.toFixed(2)}%</span>
               </div>

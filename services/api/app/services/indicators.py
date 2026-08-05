@@ -81,7 +81,7 @@ class IndicatorEngine:
         vol_max_5 = volume.rolling(5).max().shift(1)
         features["volume_breakout_ratio"] = volume / vol_max_5.replace(0, np.nan)
 
-        # 6. Vol-Price Divergence: Volume rising but price not (smart money loading)
+        # 6. Vol-price divergence: rising volume with muted price response (absorption proxy)
         vol_change_5d = (volume_avg_5 / volume_avg_20.replace(0, np.nan)) - 1  # volume change ratio
         price_change_5d = close.pct_change(5).abs()
         features["vol_price_divergence"] = (
@@ -174,7 +174,10 @@ class IndicatorEngine:
                 break
         if delivery_series is not None:
             features["delivery_ratio"] = delivery_series.clip(lower=0, upper=1)
-            features["delivery_spike"] = features["delivery_ratio"] / features["delivery_ratio"].rolling(20).mean()
+            features["delivery_spike"] = (
+                features["delivery_ratio"]
+                / features["delivery_ratio"].rolling(20, min_periods=5).mean()
+            )
         else:
             features["delivery_ratio"] = np.nan
             features["delivery_spike"] = np.nan
@@ -275,4 +278,9 @@ class IndicatorEngine:
         snapshot["near_resistance"] = bool((snapshot.get("distance_to_resistance_pct") or 99) <= 1.2)
         snapshot["near_support"] = bool((snapshot.get("distance_to_support_pct") or 99) <= 1.2)
         snapshot["delivery_available"] = snapshot.get("delivery_ratio") is not None
+        snapshot["delivery_source"] = (
+            frame.attrs.get("delivery_source", "verified_delivery_column")
+            if snapshot["delivery_available"]
+            else None
+        )
         return snapshot

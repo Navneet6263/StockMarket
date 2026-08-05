@@ -153,6 +153,66 @@ def compute_sector_strength(
         return _unknown(f"compute_error: {exc}")
 
 
+def build_sector_strength_map(all_signals: List[Dict]) -> Dict[str, Dict]:
+    """Precompute every mapped stock's peer statistics in one grouped pass."""
+
+    if not ENABLE_SECTOR_RS:
+        return {}
+    grouped: Dict[str, list[Dict]] = {}
+    for signal in all_signals:
+        symbol = str(signal.get("symbol") or "").upper()
+        sector = get_sector(symbol)
+        value = signal.get("return_20d")
+        if not sector or value is None:
+            continue
+        try:
+            return_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(sector, []).append(
+            {"symbol": symbol, "return_20d": return_value}
+        )
+
+    result: Dict[str, Dict] = {}
+    for sector, peers in grouped.items():
+        if len(peers) < 2:
+            continue
+        ordered = sorted(peers, key=lambda item: item["return_20d"], reverse=True)
+        returns = [item["return_20d"] for item in ordered]
+        average = float(np.mean(returns))
+        deviation = float(np.std(returns)) or 1.0
+        for rank, item in enumerate(ordered, start=1):
+            symbol = item["symbol"]
+            stock_return = item["return_20d"]
+            score = round((stock_return - average) / deviation, 2)
+            if score >= 1.0:
+                strength = "sector_leader"
+            elif score >= 0.3:
+                strength = "above_sector_avg"
+            elif score >= -0.3:
+                strength = "in_line_with_sector"
+            elif score >= -1.0:
+                strength = "below_sector_avg"
+            else:
+                strength = "sector_laggard"
+            result[symbol] = {
+                "sectorStrength": strength,
+                "sector": sector,
+                "relativeStrengthScore": score,
+                "sectorAvgReturn20d": round(average, 2),
+                "stockReturn20d": round(stock_return, 2),
+                "sectorPeerCount": len(ordered),
+                "stockSectorRank": rank,
+                "sectorRank": f"{rank}/{len(ordered)}",
+                "sectorReason": (
+                    f"{symbol} 20d return {stock_return:.1f}% vs sector {sector} "
+                    f"avg {average:.1f}% ({len(ordered)} peers). RS score: {score:.2f}."
+                ),
+                "sectorAvailable": True,
+            }
+    return result
+
+
 def rank_global_sectors(all_signals: List[Dict]) -> Dict[str, Dict]:
     """
     Ranks all mapped sectors based on their average 20-day return.

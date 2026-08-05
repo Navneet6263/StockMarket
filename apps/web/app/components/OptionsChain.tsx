@@ -17,20 +17,28 @@ interface StrikeData {
   pe_delta?: number;
   pe_greeks?: { delta: number; gamma: number; theta: number; vega: number; iv: number };
   itm: boolean;
-  institutional_flag: boolean;
+  ce_large_oi_change_flag: boolean;
+  pe_large_oi_change_flag: boolean;
+  participant_identity: string;
 }
 
 interface OptionsSnapshot {
   type: string;
   symbol: string;
   expiry: string;
-  pcr: number;
-  max_pain: number;
+  pcr: number | null;
+  max_pain: number | null;
   spot_price: number;
   days_to_expiry: number;
   theta_risk: boolean;
-  iv_percentile: number;
+  iv_percentile: number | null;
+  iv_percentile_available: boolean;
+  iv_cross_section_median: number | null;
   iv_crush_blocked: boolean;
+  chain_complete: boolean;
+  chain_data_quality: string;
+  requested_option_tokens: number;
+  subscribed_option_tokens: number;
   strikes: StrikeData[];
 }
 
@@ -76,12 +84,17 @@ export default function OptionsChain({ symbol }: { symbol: string }) {
           <span className="text-xs text-gray-500 font-normal">Exp: {snapshot.expiry}</span>
           {snapshot.iv_crush_blocked && (
             <span className="ml-2 text-xs bg-red-100 text-red-700 px-2 py-1 rounded font-bold">
-              IV CRUSH BLOCKED ({snapshot.iv_percentile}% IV)
+              IV CRUSH BLOCKED
             </span>
           )}
           {snapshot.theta_risk && !snapshot.iv_crush_blocked && (
             <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded">
               ⚠️ Theta Risk (EOD expiry)
+            </span>
+          )}
+          {!snapshot.chain_complete && (
+            <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded font-bold">
+              PARTIAL CHAIN — PCR/MAX PAIN DISABLED ({snapshot.subscribed_option_tokens}/{snapshot.requested_option_tokens})
             </span>
           )}
         </div>
@@ -93,9 +106,9 @@ export default function OptionsChain({ symbol }: { symbol: string }) {
             </span>
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-gray-500 text-xs uppercase tracking-wider">IV %ile</span>
-            <span className={`font-mono font-bold ${snapshot.iv_crush_blocked ? 'text-red-600' : snapshot.iv_percentile > 40 ? 'text-orange-600' : 'text-green-600'}`}>
-              {snapshot.iv_percentile}%
+            <span className="text-gray-500 text-xs uppercase tracking-wider">IV median</span>
+            <span className="font-mono font-bold text-gray-800">
+              {snapshot.iv_cross_section_median != null ? `${snapshot.iv_cross_section_median.toFixed(1)}%` : "—"}
             </span>
           </div>
           <div className="flex items-center gap-1">
@@ -104,12 +117,12 @@ export default function OptionsChain({ symbol }: { symbol: string }) {
           </div>
           <div className="flex items-center gap-1">
             <span className="text-gray-500 text-xs uppercase tracking-wider">Max Pain</span>
-            <span className="text-purple-700 font-mono font-bold">{snapshot.max_pain}</span>
+            <span className="text-purple-700 font-mono font-bold" title="Aggregate payout reference; not a directional forecast">{snapshot.max_pain ?? "—"}</span>
           </div>
           <div className="flex items-center gap-1">
             <span className="text-gray-500 text-xs uppercase tracking-wider">PCR</span>
-            <span className={`font-mono font-bold ${snapshot.pcr > 1 ? "text-green-600" : snapshot.pcr < 1 ? "text-red-600" : "text-gray-700"}`}>
-              {snapshot.pcr.toFixed(2)}
+            <span className="font-mono font-bold text-purple-700" title="Put/call open-interest ratio; not a directional signal">
+              {snapshot.pcr != null ? snapshot.pcr.toFixed(2) : "—"}
             </span>
           </div>
         </div>
@@ -162,7 +175,7 @@ export default function OptionsChain({ symbol }: { symbol: string }) {
                       <div className="h-full bg-red-400 float-right" style={{ width: `${ceOiPct}%` }}></div>
                     </div>
                     <span className="relative z-10 pr-2 block">
-                      {s.institutional_flag && <span className="mr-1" title="Institutional Activity (OI Spike > 20%)">🚨</span>}
+                      {s.ce_large_oi_change_flag && <span className="mr-1" title="Large CE OI change; participant identity unknown">🚨</span>}
                       {(s.ce_oi / 100000).toFixed(2)}
                     </span>
                   </td>
@@ -179,7 +192,7 @@ export default function OptionsChain({ symbol }: { symbol: string }) {
                     </div>
                     <span className="relative z-10 pl-2 block">
                       {(s.pe_oi / 100000).toFixed(2)}
-                      {s.institutional_flag && <span className="ml-1" title="Institutional Activity (OI Spike > 20%)">🚨</span>}
+                      {s.pe_large_oi_change_flag && <span className="ml-1" title="Large PE OI change; participant identity unknown">🚨</span>}
                     </span>
                   </td>
                   <td className={`p-2 ${peItm ? 'bg-yellow-50' : ''}`}>{(s.pe_iv || 0).toFixed(1)}</td>

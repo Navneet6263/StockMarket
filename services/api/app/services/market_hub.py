@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable
 
 import pandas as pd
@@ -19,6 +19,7 @@ from app.services.backtest import BacktestService
 from app.services.data_provider import MarketDataService
 from app.services.indicators import IndicatorEngine
 from app.services.narrative import NarrativeService
+from app.services.nse_delivery import NSEDeliveryArchive
 from app.services.scoring import ScoringEngine
 from app.services.smart_layers import build_smart_scan_payload
 from app.services.setup_tracker import SetupTrackerService
@@ -26,10 +27,56 @@ from app.services.nifty_context_analyzer import analyze_nifty_context, stock_nif
 from app.services.breakout_radar import build_breakout_radar
 from app.services.chart_patterns import detect_chart_pattern_setup
 from app.services.telegram_market_alerts import get_telegram_market_alerts
+from app.services.trade_plan import (
+    actionable_plan_fields,
+    assess_structural_plan,
+    watch_only_plan_fields,
+)
 from app.services.zone_detector import ZoneDetector
 
 
 logger = logging.getLogger(__name__)
+
+
+def _select_gtf_zone(zones: list[Dict], current_price: float, zone_type: str) -> Dict | None:
+    """Select one zone and keep its own touch state attached.
+
+    A currently tested zone wins over a stronger nearby zone.  This prevents a
+    global ``in_zone`` flag from accidentally arming an untouched level.
+    """
+
+    candidates: list[Dict] = []
+    for zone in zones:
+        proximal = float(zone["proximal"])
+        distal = float(zone["distal"])
+        if zone_type == "demand":
+            inside = distal <= current_price <= proximal
+            nearby = proximal < current_price <= proximal * 1.05
+            distance = 0.0 if inside else abs(current_price - proximal) / current_price
+        else:
+            inside = proximal <= current_price <= distal
+            nearby = proximal * 0.95 <= current_price < proximal
+            distance = 0.0 if inside else abs(proximal - current_price) / current_price
+        if not (inside or nearby):
+            continue
+        candidates.append(
+            {
+                "zone": zone,
+                "state": "inside" if inside else "near",
+                "distance": distance,
+                "strength": float(zone.get("strength") or 0),
+            }
+        )
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda candidate: (
+            candidate["state"] == "inside",
+            candidate["strength"],
+            -candidate["distance"],
+        ),
+    )
 
 
 class MarketHubService:
@@ -44,6 +91,7 @@ class MarketHubService:
         self.backtest = BacktestService(settings, self.indicators, self.scoring)
         self.narrative = NarrativeService()
         self.tracker = SetupTrackerService(settings, self.data)
+        self.delivery_archive = NSEDeliveryArchive(settings)
         self.zone_detector = ZoneDetector()
         self.scan_cache: TTLCache[Dict] = TTLCache(settings.scan_cache_ttl_sec)
         self.detail_cache: TTLCache[Dict] = TTLCache(settings.detail_cache_ttl_sec)
@@ -77,13 +125,19 @@ class MarketHubService:
 
     def _scan_symbols(self, discovery: Dict) -> list[str]:
         custom = list(self.settings.custom_universe)
+        persistent = list(self._persistent_watch_map())
         ranked = discovery.get("scan_symbols") or discovery.get("symbols") or []
         invalid_symbols = set(self.settings.invalid_symbols)
         ranked = [symbol for symbol in ranked if symbol not in invalid_symbols]
         if custom:
-            merged = list(dict.fromkeys(symbol for symbol in custom + ranked if symbol not in invalid_symbols))
+            merged = list(
+                dict.fromkeys(symbol for symbol in custom + persistent + ranked if symbol not in invalid_symbols)
+            )
             return merged[: self.settings.scan_symbol_limit]
-        return ranked[: self.settings.scan_symbol_limit]
+        # Previously surfaced calls stay in the research universe for the full
+        # setup-memory window.  This is what lets a stopped/expired setup form a
+        # fresh base and re-arm instead of disappearing forever.
+        return list(dict.fromkeys(persistent + ranked))[: self.settings.scan_symbol_limit]
 
     def _copy_with_warning(self, payload: Dict, warning: str, *, cache_status: str) -> Dict:
         response = copy.deepcopy(payload)
@@ -124,6 +178,13 @@ class MarketHubService:
             "avoid_late_entry": [],
             "candidates": [],
             "avoid_risky": [],
+            "live_candidate_symbols": [],
+            "live_candidate_pool": [],
+            "all_entry_levels": [],
+            "data_health": {
+                "institution_identity_available": False,
+                "large_money_label": "visible behavioural footprint",
+            },
             "breakout_radar": [],
             "nifty_context": {"nifty_bias": "neutral", "nifty_regime": "unknown", "market_score": 50, "data_available": False},
             "summary": {
@@ -168,7 +229,11 @@ class MarketHubService:
             "evidence_confidence": row.get("evidence_confidence"),
             "historical_evidence_status": row.get("evidence_status") or "not_loaded",
             "confidence_note": "Loaded from persisted scanner calls while the live scan refreshes.",
-            "probability": round((row.get("confidence") or 0) / 100, 4),
+            # Confidence is an evidence score, not an empirically calibrated
+            # probability.  Keep the distinction explicit in persisted calls.
+            "probability": None,
+            "probability_available": False,
+            "model_alignment_score": row.get("confidence") or 0,
             "move_quality": row.get("move_quality") or 0,
             "expected_move_pct": row.get("expected_move_pct") or 0,
             "risk_level": row.get("risk_level") or "medium",
@@ -216,7 +281,10 @@ class MarketHubService:
                 WHERE archived = 0
                   AND ignored = 0
                   AND source_mode = 'scanner_suggested'
-                  AND scanner_call_status IN ('ACTIVE', 'TARGET_1_HIT', 'PARTIAL_BOOK', 'EXIT_SUGGESTED')
+                  AND scanner_call_status IN (
+                    'ACTIVE', 'TARGET_1_HIT', 'TARGET_2_HIT', 'PARTIAL_BOOK',
+                    'TRAILING_HOLD', 'RETEST', 'REARMED', 'CONTINUATION', 'EXIT_SUGGESTED'
+                  )
                   AND status != 'expired'
                 ORDER BY suggested_at DESC, confidence DESC
                 LIMIT 20
@@ -337,13 +405,194 @@ class MarketHubService:
             logger.exception("nifty context analysis failed")
             return {"nifty_bias": "neutral", "nifty_regime": "unknown", "market_score": 50, "data_available": False}
 
+    def _persistent_watch_map(self) -> dict[str, Dict]:
+        """Return recent scanner calls that still deserve re-entry surveillance.
+
+        A target, stop, or expiry closes one trade decision; it does not erase
+        the symbol's setup history.  Keeping these calls in the research pool
+        for 30-60 sessions prevents RBA/GAEL-style target-hit amnesia.
+        """
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # Legacy rows have no memory_expires_at. Approximate trading sessions
+        # as calendar days only for those rows; new lifecycle rows carry the
+        # exact persisted memory horizon.
+        legacy_days = max(30, round(self.settings.setup_memory_days * 7 / 5))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=legacy_days)).isoformat()
+        limit = max(200, int(self.settings.intraday_symbol_limit) * 4)
+        try:
+            rows = self.tracker.store.list_setups(
+                """
+                SELECT symbol, direction, status, scanner_call_status,
+                       detected_at, suggested_at, confidence, move_quality
+                FROM tracked_setups
+                WHERE archived = 0
+                  AND ignored = 0
+                  AND source_mode = 'scanner_suggested'
+                  AND (
+                    memory_expires_at >= ?
+                    OR (memory_expires_at IS NULL AND COALESCE(suggested_at, detected_at) >= ?)
+                  )
+                ORDER BY
+                  CASE scanner_call_status
+                    WHEN 'TARGET_1_HIT' THEN 0
+                    WHEN 'PARTIAL_BOOK' THEN 1
+                    WHEN 'ACTIVE' THEN 2
+                    WHEN 'STOP_LOSS_HIT' THEN 3
+                    WHEN 'EXPIRED' THEN 4
+                    ELSE 5
+                  END,
+                  COALESCE(suggested_at, detected_at) DESC,
+                  confidence DESC
+                LIMIT ?
+                """,
+                (now_iso, cutoff, limit),
+            )
+        except Exception:
+            logger.debug("persistent setup pool unavailable", exc_info=True)
+            return {}
+
+        persistent: dict[str, Dict] = {}
+        for row in rows:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if symbol and symbol not in persistent:
+                persistent[symbol] = row
+        return persistent
+
+    @staticmethod
+    def _live_pool_reason(signal: Dict, persistent: dict[str, Dict]) -> str:
+        symbol = str(signal.get("symbol") or "").upper()
+        tracked = persistent.get(symbol)
+        if tracked:
+            status = tracked.get("scanner_call_status") or tracked.get("status") or "TRACKED"
+            return f"SETUP_MEMORY_{str(status).upper()}"
+
+        footprint = signal.get("large_money_footprint") or {}
+        footprint_score = float(footprint.get("score") or signal.get("large_money_footprint_score") or 0)
+        tags = {str(tag).lower() for tag in signal.get("tags", [])}
+        rsi = float(signal.get("rsi") or 50)
+        if (
+            signal.get("reversal_watch")
+            or float(signal.get("reversal_score") or 0) >= 55
+            or signal.get("selling_exhaustion")
+            or (rsi <= 38 and (signal.get("support") or "support_respect" in tags))
+            or abs(footprint_score) >= 35
+        ):
+            return "REVERSAL_OR_DIRECTIONAL_LARGE_MONEY_FOOTPRINT"
+        if signal.get("is_pre_breakout") or tags.intersection(
+            {"base_building", "pre_breakout", "accumulation_watch", "demand_absorption"}
+        ):
+            return "BASE_OR_PRE_BREAKOUT"
+        if abs(float(signal.get("change_pct") or 0)) >= 3 or float(signal.get("relative_volume") or 1) >= 1.6:
+            return "FAST_MOVE_OR_UNUSUAL_VOLUME"
+        return "QUALITY_RANK"
+
     def _top_symbols(self, results: list[Dict], limit: int) -> list[str]:
-        ranked = sorted(
-            [item for item in results if item["direction"] != "neutral"],
-            key=lambda item: (item["move_quality"], item["confidence"], item["relative_volume"]),
+        """Build a diversified, bounded pool for expensive intraday analysis.
+
+        Pure momentum ranking repeatedly evicted quiet bases and stopped calls.
+        Quotas preserve lifecycle, reversal/absorption, base and momentum names,
+        then quality ranking fills any unused slots.  The returned list remains
+        hard-capped, so the live path does not become slower.
+        """
+
+        if limit <= 0:
+            return []
+        persistent = self._persistent_watch_map()
+
+        def number(value, fallback: float = 0.0) -> float:
+            try:
+                return float(value if value is not None else fallback)
+            except (TypeError, ValueError):
+                return fallback
+
+        def quality(item: Dict) -> tuple[float, float, float, float]:
+            footprint = item.get("large_money_footprint") or {}
+            return (
+                number(item.get("move_quality")),
+                number(item.get("confidence")),
+                abs(number(footprint.get("score") or item.get("large_money_footprint_score"))),
+                number(item.get("relative_volume"), 1),
+            )
+
+        def is_reversal(item: Dict) -> bool:
+            tags = {str(tag).lower() for tag in item.get("tags", [])}
+            footprint = item.get("large_money_footprint") or {}
+            return bool(
+                item.get("reversal_watch")
+                or item.get("selling_exhaustion")
+                or number(item.get("reversal_score")) >= 55
+                or abs(number(footprint.get("score") or item.get("large_money_footprint_score"))) >= 35
+                or (
+                    number(item.get("rsi"), 50) <= 38
+                    and (item.get("support") or tags.intersection({"support_respect", "demand_absorption"}))
+                )
+            )
+
+        def is_base(item: Dict) -> bool:
+            tags = {str(tag).lower() for tag in item.get("tags", [])}
+            return bool(
+                item.get("is_pre_breakout")
+                or number(item.get("baseQualityScore") or item.get("base_quality_score")) >= 55
+                or tags.intersection({"base_building", "pre_breakout", "accumulation_watch", "demand_absorption"})
+            )
+
+        persistent_bucket = sorted(
+            [item for item in results if str(item.get("symbol") or "").upper() in persistent],
+            key=quality,
             reverse=True,
         )
-        return [item["symbol"] for item in ranked[:limit]]
+        reversal_bucket = sorted([item for item in results if is_reversal(item)], key=quality, reverse=True)
+        base_bucket = sorted([item for item in results if is_base(item)], key=quality, reverse=True)
+        momentum_bucket = sorted(
+            [
+                item for item in results
+                if abs(number(item.get("change_pct"))) >= 3 or number(item.get("relative_volume"), 1) >= 1.6
+            ],
+            key=lambda item: (
+                abs(number(item.get("change_pct"))),
+                number(item.get("relative_volume"), 1),
+                *quality(item),
+            ),
+            reverse=True,
+        )
+        general_bucket = sorted(
+            [item for item in results if item.get("direction") != "neutral"],
+            key=quality,
+            reverse=True,
+        ) + sorted([item for item in results if item.get("direction") == "neutral"], key=quality, reverse=True)
+
+        quotas = (
+            (persistent_bucket, max(1, round(limit * 0.25))),
+            (reversal_bucket, max(1, round(limit * 0.25))),
+            (base_bucket, max(1, round(limit * 0.25))),
+            (momentum_bucket, max(1, round(limit * 0.15))),
+        )
+        selected: list[Dict] = []
+        seen: set[str] = set()
+
+        def add(pool: list[Dict], cap: int) -> None:
+            added = 0
+            for item in pool:
+                symbol = str(item.get("symbol") or "").strip().upper()
+                if not symbol or symbol in seen:
+                    continue
+                selected.append(item)
+                seen.add(symbol)
+                added += 1
+                if len(selected) >= limit or added >= cap:
+                    return
+
+        for bucket, quota in quotas:
+            add(bucket, quota)
+            if len(selected) >= limit:
+                break
+        if len(selected) < limit:
+            add(general_bucket, limit - len(selected))
+
+        for item in selected:
+            item["live_pool_reason"] = self._live_pool_reason(item, persistent)
+        return [str(item.get("symbol") or "").upper() for item in selected]
 
     def _evaluate_symbol(
         self,
@@ -371,6 +620,27 @@ class MarketHubService:
             except (TypeError, ValueError):
                 return fallback
 
+        def apply_structural_trade_plan(
+            direction: str,
+            entry: float,
+            stop: float,
+            opposing_levels: Iterable,
+            metadata: Dict,
+        ) -> Dict:
+            """Publish only plans whose real structure supports stop and target."""
+
+            plan = assess_structural_plan(direction, entry, stop, opposing_levels)
+            signal.update(metadata)
+            if plan["allowed"]:
+                signal.update(actionable_plan_fields(plan))
+            else:
+                signal.update(watch_only_plan_fields(plan))
+                risk_factors = list(signal.get("risk_factors") or [])
+                if plan.get("blockReason") and plan["blockReason"] not in risk_factors:
+                    risk_factors.append(plan["blockReason"])
+                signal["risk_factors"] = risk_factors
+            return plan
+
         live_frame = self.data.overlay_quote(frame, quote)
         feature_frame = self.indicators.build_feature_frame(live_frame, benchmark_frame)
         snapshot = self.indicators.build_snapshot(symbol, live_frame, feature_frame, intraday_frame)
@@ -380,62 +650,307 @@ class MarketHubService:
         
         # --- GTF Strategy Integration ---
         try:
-            zone_df = live_frame.copy()
-            zone_df.columns = [c.lower() for c in zone_df.columns]
-            gtf_zones = self.zone_detector.detect_zones(zone_df, max_lookback=200)
+            gtf_zones = []
+            if with_backtest:
+                # The all-universe preliminary pass already has the lighter
+                # demand/supply scorer. Run detailed 200-bar zone lifecycle
+                # only for the capped enhanced/live pool.
+                zone_df = live_frame.copy()
+                zone_df.columns = [c.lower() for c in zone_df.columns]
+                gtf_zones = self.zone_detector.detect_zones(zone_df, max_lookback=200)
             demand_zones = [z for z in gtf_zones if z["type"] == "demand"]
+            supply_zones = [z for z in gtf_zones if z["type"] == "supply"]
             current_price = float(quote.get("price") if quote else live_frame["Close"].iloc[-1])
             
-            in_demand = False
-            forming_demand = False
-            best_zone = None
-            strongest_demand = 0
-            
-            for z in demand_zones:
-                # Is price inside the zone?
-                if z["distal"] <= current_price <= z["proximal"]:
-                    in_demand = True
-                    if z["strength"] > strongest_demand:
-                        strongest_demand = z["strength"]
-                        best_zone = z
-                # Is price forming a base just above the zone?
-                elif z["proximal"] < current_price <= z["proximal"] * 1.05:
-                    forming_demand = True
-                    if z["strength"] > strongest_demand:
-                        strongest_demand = z["strength"]
-                        best_zone = z
+            demand_choice = _select_gtf_zone(demand_zones, current_price, "demand")
+            supply_choice = _select_gtf_zone(supply_zones, current_price, "supply")
+            best_zone = demand_choice["zone"] if demand_choice else None
+            best_supply_zone = supply_choice["zone"] if supply_choice else None
+            in_demand = bool(demand_choice and demand_choice["state"] == "inside")
+            forming_demand = bool(demand_choice and demand_choice["state"] == "near")
+            in_supply = bool(supply_choice and supply_choice["state"] == "inside")
+            approaching_supply = bool(supply_choice and supply_choice["state"] == "near")
+            strongest_demand = demand_choice["strength"] if demand_choice else 0
+            strongest_supply = supply_choice["strength"] if supply_choice else 0
+
+            if best_zone and best_supply_zone:
+                demand_distance = float(demand_choice["distance"])
+                supply_distance = float(supply_choice["distance"])
+                if supply_distance < demand_distance:
+                    best_zone = None
+                    demand_choice = None
+                    in_demand = False
+                    forming_demand = False
+                else:
+                    best_supply_zone = None
+                    supply_choice = None
+                    in_supply = False
+                    approaching_supply = False
 
             if best_zone:
+                existing_demand = signal.get("demand_supply") or {}
+                zone_status = "IN_DEMAND_ZONE" if in_demand else "NEAR_DEMAND_ZONE"
+                zone_score = min(100.0, float(strongest_demand) * 10)
                 signal["demand_supply"] = {
-                    "status": "In Demand Zone" if in_demand else "Forming Demand",
-                    "demandScore": strongest_demand * 10,
+                    **existing_demand,
+                    "gtfZoneStatus": zone_status,
+                    "demandScore": max(float(existing_demand.get("demandScore") or 0), zone_score),
                     "proximal": best_zone["proximal"],
                     "distal": best_zone["distal"],
-                    "trapRisk": "low",
-                    "smartMoneyRead": "GTF: Institutional Pending Orders Present",
-                    "zone_pattern": best_zone.get("pattern")
+                    "visibleDemandZone": True,
+                    "smartMoneyRead": (
+                        "Price is testing a visible demand zone. Buyer identity and pending institutional "
+                        "orders cannot be inferred; require live price/volume confirmation."
+                    ),
+                    "zone_pattern": best_zone.get("pattern"),
+                    "identity_inference_supported": False,
                 }
-                # GTF Execution Buffer Rules
-                signal["entry_trigger"] = round(best_zone["proximal"] * 1.002, 2)
-                signal["safe_entry_price"] = signal["entry_trigger"]
-                atr_buffer = best_zone["distal"] * 0.005 # Default 0.5% buffer for SL liquidity hunt protection
-                signal["invalidation"] = round(best_zone["distal"] - atr_buffer, 2)
-                signal["setup_stage"] = "RETEST_ENTRY"
+                signal["visible_demand_zone"] = True
+                signal["demand_zone_score"] = round(zone_score, 1)
+                signal["demand_zone_approach_only"] = bool(forming_demand and not in_demand)
 
-                
-                # Tag it so it hits the correct UI tabs
                 tags = set(signal.get("tags", []))
                 if in_demand:
                     tags.add("support_respect")
-                    signal["confidence"] = min(100, signal.get("confidence", 50) + 15)
                 if forming_demand:
                     tags.add("base_building")
-                    tags.add("accumulation")
+                    tags.add("accumulation_watch")
                     signal["is_pre_breakout"] = True
+
+                if in_demand and signal.get("direction") == "bullish":
+                    # Zone is context; the real-time engine still has to confirm
+                    # price response, VWAP, volume velocity and visible depth.
+                    entry = round(float(best_zone["proximal"]) * 1.002, 2)
+                    stop = round(float(best_zone["distal"]) * 0.995, 2)
+                    apply_structural_trade_plan(
+                        "bullish",
+                        entry,
+                        stop,
+                        [signal.get("resistance")],
+                        {
+                            "setup_stage": "RETEST_ENTRY",
+                            "signal_stage": "RETEST_ENTRY",
+                            "action": "WAIT_FOR_LIVE_CONFIRMATION",
+                            "recommended_action": "WAIT_FOR_LIVE_CONFIRMATION",
+                            "attention_only": True,
+                            "allow_buy_call": False,
+                            "requires_live_confirmation": True,
+                        },
+                    )
+                elif in_demand and signal.get("direction") == "bearish" and (
+                    str(signal.get("reversal_bias") or "").lower() == "bullish"
+                    and safe_float(
+                        signal.get("bullish_reversal_score") or signal.get("reversal_risk_score"),
+                        0,
+                    ) >= 65
+                ):
+                    # Counter-trend reversal plan: do not turn the bearish model
+                    # into an instant BUY. Arm only a reclaim above the demand
+                    # zone and require full live footprint confirmation.
+                    reversal_score = safe_float(
+                        signal.get("bullish_reversal_score") or signal.get("reversal_risk_score"),
+                        65,
+                    )
+                    entry = round(float(best_zone["proximal"]) * 1.002, 2)
+                    stop = round(float(best_zone["distal"]) * 0.995, 2)
+                    apply_structural_trade_plan(
+                        "bullish",
+                        entry,
+                        stop,
+                        [signal.get("resistance")],
+                        {
+                            "direction": "bullish",
+                            "setup_label": "Bullish reversal reclaim watch",
+                            "confidence": min(75.0, max(55.0, reversal_score)),
+                            "alignment_score": min(75.0, max(55.0, reversal_score)),
+                            "setup_stage": "RETEST_ENTRY",
+                            "signal_stage": "BULLISH_REVERSAL_CANDIDATE",
+                            "action": "WAIT_FOR_LIVE_CONFIRMATION",
+                            "recommended_action": "WAIT_FOR_LIVE_CONFIRMATION",
+                            "attention_only": True,
+                            "allow_buy_call": False,
+                            "allow_trade_call": False,
+                            "requires_live_confirmation": True,
+                            "requires_full_tick": True,
+                            "live_min_confirmations": 3,
+                            "countertrend_reversal_plan": True,
+                            "bearish_support_conflict": True,
+                            "alert_level": "watchlist",
+                        },
+                    )
+                    tags.add("bullish_reversal_watch")
+                    tags.add("demand_reclaim_required")
+                elif in_demand and signal.get("direction") == "bearish":
+                    # A lagging trend model must not print 95% bearish while
+                    # price is absorbing supply at established support.
+                    confidence_cap = 68.0 if in_demand else 75.0
+                    signal["confidence"] = min(float(signal.get("confidence") or 50), confidence_cap)
+                    signal["bearish_support_conflict"] = True
+                    signal["bearish_requires_breakdown"] = True
+                    signal["reversal_watch"] = True
+                    entry = round(float(best_zone["distal"]) * 0.998, 2)
+                    stop = round(float(best_zone["proximal"]) * 1.005, 2)
+                    apply_structural_trade_plan(
+                        "bearish",
+                        entry,
+                        stop,
+                        [signal.get("support")],
+                        {
+                            "setup_stage": "BREAKDOWN_WATCH",
+                            "signal_stage": "BREAKDOWN_WATCH",
+                            "action": "WAIT_FOR_BREAKDOWN_CONFIRMATION",
+                            "recommended_action": "WAIT_FOR_BREAKDOWN_CONFIRMATION",
+                            "attention_only": True,
+                            "allow_buy_call": False,
+                            "allow_trade_call": False,
+                            "requires_live_confirmation": True,
+                            "requires_full_tick": True,
+                            "live_min_confirmations": 3,
+                            "alert_level": "watchlist",
+                        },
+                    )
+                    weaknesses = list(signal.get("weaknesses") or [])
+                    weaknesses.append(
+                        "Bearish trend evidence conflicts with a visible demand zone; wait for a decisive close below it."
+                    )
+                    signal["weaknesses"] = weaknesses
+                    tags.add("bearish_support_conflict")
+                    tags.add("reversal_watch")
+                signal["tags"] = list(tags)
+
+            if best_supply_zone and not best_zone:
+                existing_supply = signal.get("demand_supply") or {}
+                supply_status = "IN_SUPPLY_ZONE" if in_supply else "NEAR_SUPPLY_ZONE"
+                supply_score = min(100.0, float(strongest_supply) * 10)
+                signal["demand_supply"] = {
+                    **existing_supply,
+                    "gtfZoneStatus": supply_status,
+                    "supplyScore": max(float(existing_supply.get("supplyScore") or 0), supply_score),
+                    "supplyProximal": best_supply_zone["proximal"],
+                    "supplyDistal": best_supply_zone["distal"],
+                    "visibleSupplyZone": True,
+                    "smartMoneyRead": (
+                        "Price is testing a visible supply zone. Seller identity and pending orders "
+                        "cannot be inferred; require live price/volume confirmation."
+                    ),
+                    "zone_pattern": best_supply_zone.get("pattern"),
+                    "identity_inference_supported": False,
+                }
+                signal["visible_supply_zone"] = True
+                signal["supply_zone_score"] = round(supply_score, 1)
+                signal["supply_zone_approach_only"] = bool(approaching_supply and not in_supply)
+                tags = set(signal.get("tags", []))
+                tags.add("supply_reaction_watch")
+
+                if in_supply and signal.get("direction") == "bearish":
+                    entry = round(float(best_supply_zone["proximal"]) * 0.998, 2)
+                    stop = round(float(best_supply_zone["distal"]) * 1.005, 2)
+                    apply_structural_trade_plan(
+                        "bearish",
+                        entry,
+                        stop,
+                        [signal.get("support")],
+                        {
+                            "setup_stage": "SUPPLY_REJECTION_WATCH",
+                            "signal_stage": "SUPPLY_REJECTION_WATCH",
+                            "action": "WAIT_FOR_LIVE_CONFIRMATION",
+                            "recommended_action": "WAIT_FOR_LIVE_CONFIRMATION",
+                            "attention_only": True,
+                            "allow_buy_call": False,
+                            "allow_trade_call": False,
+                            "requires_live_confirmation": True,
+                            "requires_full_tick": True,
+                            "live_min_confirmations": 3,
+                        },
+                    )
+                elif in_supply and signal.get("direction") == "bullish":
+                    # Do not buy directly into supply; only arm a clean break
+                    # above its distal edge with supply as invalidation.
+                    signal["bullish_supply_conflict"] = True
+                    signal["confidence"] = min(float(signal.get("confidence") or 50), 75.0)
+                    entry = round(float(best_supply_zone["distal"]) * 1.002, 2)
+                    stop = round(float(best_supply_zone["proximal"]) * 0.995, 2)
+                    apply_structural_trade_plan(
+                        "bullish",
+                        entry,
+                        stop,
+                        [signal.get("resistance")],
+                        {
+                            "setup_stage": "SUPPLY_BREAKOUT_WATCH",
+                            "signal_stage": "SUPPLY_BREAKOUT_WATCH",
+                            "action": "WAIT_FOR_BREAKOUT_CONFIRMATION",
+                            "recommended_action": "WAIT_FOR_BREAKOUT_CONFIRMATION",
+                            "attention_only": True,
+                            "allow_buy_call": False,
+                            "allow_trade_call": False,
+                            "requires_live_confirmation": True,
+                            "requires_full_tick": True,
+                            "live_min_confirmations": 3,
+                        },
+                    )
+                    tags.add("supply_breakout_required")
                 signal["tags"] = list(tags)
         except Exception as e:
             logger.warning("GTF zone detection failed in scanner for %s: %s", symbol, e)
         # --- End GTF Integration ---
+
+        # A high-quality bullish exhaustion/reversal outside a surviving GTF
+        # zone still needs a route to live confirmation. Build a conservative
+        # reclaim plan from visible support; never emit an immediate BUY.
+        if (
+            signal.get("signal_stage") == "BULLISH_REVERSAL_CANDIDATE"
+            and str(signal.get("reversal_bias") or "").lower() == "bullish"
+            and safe_float(
+                signal.get("bullish_reversal_score") or signal.get("reversal_risk_score"),
+                0,
+            ) >= 65
+            and not signal.get("requires_live_confirmation")
+        ):
+            current = safe_float(signal.get("current_price"), 0)
+            support = safe_float(signal.get("support") or signal.get("invalidation"), 0)
+            reversal_score = safe_float(
+                signal.get("bullish_reversal_score") or signal.get("reversal_risk_score"),
+                65,
+            )
+            near_support = bool(current > 0 and support > 0 and support < current <= support * 1.08)
+            if near_support:
+                observed_vwap = safe_float(signal.get("rolling_vwap"), 0)
+                reclaim_reference = (
+                    observed_vwap
+                    if current <= observed_vwap <= current * 1.025
+                    else current * 1.005
+                )
+                entry = round(max(current * 1.003, reclaim_reference * 1.001), 2)
+                stop = round(support * 0.99, 2)
+                resistance = safe_float(signal.get("resistance"), 0)
+                original_direction = str(signal.get("direction") or "bearish")
+                apply_structural_trade_plan(
+                    "bullish",
+                    entry,
+                    stop,
+                    [resistance],
+                    {
+                        "original_direction": original_direction,
+                        "direction": "bullish",
+                        "setup_label": "Bullish reversal reclaim watch",
+                        "confidence": min(75.0, max(55.0, reversal_score)),
+                        "alignment_score": min(75.0, max(55.0, reversal_score)),
+                        "setup_stage": "RETEST_ENTRY",
+                        "action": "WAIT_FOR_LIVE_CONFIRMATION",
+                        "recommended_action": "WAIT_FOR_LIVE_CONFIRMATION",
+                        "attention_only": True,
+                        "allow_buy_call": False,
+                        "allow_trade_call": False,
+                        "requires_live_confirmation": True,
+                        "requires_full_tick": True,
+                        "live_min_confirmations": 3,
+                        "countertrend_reversal_plan": True,
+                        "alert_level": "watchlist",
+                    },
+                )
+                reversal_tags = set(signal.get("tags", []))
+                reversal_tags.update({"bullish_reversal_watch", "support_reclaim_required"})
+                signal["tags"] = list(reversal_tags)
 
         if with_backtest and self.settings.news_api_key:
             signal["catalyst_summary"] = self._catalyst_summary(symbol)
@@ -551,6 +1066,7 @@ class MarketHubService:
             for item in (self.last_successful_scan or {}).get("pre_breakout_setups", [])
             if item.get("symbol")
         }
+        setup_memory = self._persistent_watch_map()
         movers: list[Dict] = []
         for meta in discovery.get("symbol_meta", {}).values():
             symbol = meta.get("symbol")
@@ -567,7 +1083,10 @@ class MarketHubService:
             tags = meta.get("tags", [])
             result = result_by_symbol.get(symbol, {})
             was_pre_breakout = symbol in prior_pre_breakout
-            if was_pre_breakout:
+            if symbol in setup_memory:
+                remembered_status = setup_memory[symbol].get("scanner_call_status") or setup_memory[symbol].get("status")
+                missed_reason = f"remembered_setup_reaccelerated_after_{remembered_status or 'prior_call'}"
+            elif was_pre_breakout:
                 missed_reason = "was_in_prior_pre_breakout_scan"
             elif symbol not in result_symbols:
                 missed_reason = "not_in_scanned_history_or_failed_data"
@@ -706,6 +1225,11 @@ class MarketHubService:
             [
                 item for item in results
                 if item.get("signal_stage") == "RETEST_ENTRY"
+                or item.get("signal_stage") in {
+                    "BULLISH_REVERSAL_CANDIDATE",
+                    "SUPPLY_REJECTION_WATCH",
+                    "SUPPLY_BREAKOUT_WATCH",
+                }
                 or item.get("continuation_type") == "pullback"
                 or "support_bounce" in item.get("pattern_labels", [])
             ],
@@ -939,32 +1463,146 @@ class MarketHubService:
         nifty_context = self._get_nifty_context()
 
         # ── Extract Zero-Latency Live Triggers for the Entire Universe ────────
+        live_candidate_symbols = [
+            str(symbol).upper()
+            for symbol in discovery.get("live_candidate_symbols", [])
+            if symbol
+        ][: self.settings.intraday_symbol_limit]
+        live_candidate_set = set(live_candidate_symbols)
+        persistent = self._persistent_watch_map()
+        result_by_symbol = {
+            str(item.get("symbol") or "").upper(): item
+            for item in results
+            if item.get("symbol")
+        }
+        live_candidate_pool = []
+        for rank, symbol in enumerate(live_candidate_symbols, start=1):
+            item = result_by_symbol.get(symbol, {})
+            reason = item.get("live_pool_reason") or self._live_pool_reason(item | {"symbol": symbol}, persistent)
+            item["live_pool_reason"] = reason
+            item["live_pool_rank"] = rank
+            footprint = item.get("large_money_footprint") or {}
+            live_candidate_pool.append(
+                {
+                    "symbol": symbol,
+                    "rank": rank,
+                    "reason": reason,
+                    "direction": item.get("direction", "neutral"),
+                    "confidence": item.get("confidence"),
+                    "large_money_footprint_score": (
+                        footprint.get("score")
+                        if isinstance(footprint, dict)
+                        else item.get("large_money_footprint_score")
+                    ),
+                }
+            )
+
         all_entry_levels = []
         for item in results:
+            symbol = str(item.get("symbol") or "").upper()
+            if symbol not in live_candidate_set:
+                continue
+            direction = str(item.get("direction") or "neutral").lower()
+            if direction not in {"bullish", "bearish"}:
+                continue
+            action = str(
+                item.get("effectiveAction")
+                or item.get("action")
+                or item.get("recommended_action")
+                or "WATCH"
+            ).upper()
+            stage = str(item.get("signal_stage") or item.get("setup_stage") or "").upper()
+            armable_confirmation = bool(
+                item.get("requires_live_confirmation")
+                or item.get("is_pre_breakout")
+                or item.get("is_momentum_continuation")
+                or stage in {
+                    "RETEST_ENTRY", "BREAKDOWN_WATCH", "PATTERN_FORMING",
+                    "ALERT_ABOVE_LEVEL", "LIVE_PATTERN_READY", "RE_ENTRY_SETUP",
+                }
+            )
+            blocked_actions = {
+                "AVOID", "EXIT", "NO_TRADE", "WAIT_FOR_PULLBACK",
+                "AVOID_LATE_ENTRY", "AVOID_CHASE", "PROFIT_BOOKING_RISK",
+                "WAIT_FOR_BETTER_ENTRY",
+            }
+            if (
+                action in blocked_actions
+                or item.get("entry_plan_blocked")
+                or item.get("blockedBuyReason")
+                or item.get("overextended_fresh_entry")
+                or item.get("chase_risk")
+                or (item.get("attention_only") and not armable_confirmation)
+                or (direction == "bullish" and item.get("allow_buy_call") is False and not armable_confirmation)
+            ):
+                continue
             entry = float(item.get("safe_entry_price") or item.get("entry_trigger") or item.get("breakoutTrigger") or 0)
             if entry > 0:
                 all_entry_levels.append({
-                    "symbol": item.get("symbol"),
+                    "symbol": symbol,
                     "entry_trigger": entry,
                     "safe_entry_price": item.get("safe_entry_price"),
                     "stop_loss": item.get("invalidation_level") or item.get("stop_loss"),
                     "target_1": item.get("target_1") or item.get("new_target"),
-                    "direction": item.get("direction", "bullish"),
+                    "direction": direction,
                     "setup_type": item.get("setup_type") or item.get("setup_label", ""),
                     "confidence": item.get("confidence") or 0,
                     "risk_reward": item.get("risk_reward") or 0,
+                    "riskPct": item.get("riskPct"),
+                    "riskPerShare": item.get("riskPerShare"),
+                    "maxPositionPctAt1PctAccountRisk": item.get("maxPositionPctAt1PctAccountRisk"),
+                    "entry_plan_status": item.get("entry_plan_status"),
+                    "entry_plan_blocked": bool(item.get("entry_plan_blocked")),
+                    "entry_plan_blocked_reason": item.get("entry_plan_blocked_reason"),
+                    "enforce_structural_risk_cap": bool(item.get("enforce_structural_risk_cap")),
+                    "max_structural_risk_pct": item.get("max_structural_risk_pct"),
+                    "targetMethod": item.get("targetMethod"),
                     "current_price": item.get("current_price"),
                     "pre_breakout_timeframe": item.get("pre_breakout_timeframe") or item.get("time_horizon"),
+                    "signal_stage": stage,
+                    "action": action,
+                    "attention_only": bool(item.get("attention_only")),
+                    "allow_buy_call": item.get("allow_buy_call"),
+                    "requires_live_confirmation": armable_confirmation,
+                    "requires_full_tick": bool(item.get("requires_full_tick")),
+                    "live_min_confirmations": item.get("live_min_confirmations"),
+                    "countertrend_reversal_plan": bool(item.get("countertrend_reversal_plan")),
+                    "counterRegime": bool(item.get("counterRegime")),
+                    "reversal_bias": item.get("reversal_bias"),
+                    "bullish_reversal_score": item.get("bullish_reversal_score"),
+                    "bearish_reversal_score": item.get("bearish_reversal_score"),
+                    "reversal_risk_score": item.get("reversal_risk_score"),
+                    "marketMood": item.get("marketMood") or item.get("market_mood"),
+                    "large_money_footprint": item.get("large_money_footprint"),
+                    "large_money_footprint_score": (
+                        (item.get("large_money_footprint") or {}).get("score")
+                        if isinstance(item.get("large_money_footprint"), dict)
+                        else None
+                    ) or item.get("large_money_footprint_score"),
+                    "blockedBuyReason": item.get("blockedBuyReason"),
+                    "overextended_fresh_entry": bool(item.get("overextended_fresh_entry")),
+                    "chase_risk": bool(item.get("chase_risk")),
                 })
 
 
         # Enrich each signal with Nifty alignment score
         for item in results:
             try:
-                alignment = stock_nifty_alignment_score(item, nifty_context)
-                item["nifty_alignment_score"] = alignment["nifty_alignment_score"]
-                item["nifty_alignment"] = alignment["nifty_alignment"]
-                item["nifty_alignment_warnings"] = alignment["nifty_alignment_warnings"]
+                alignment = float(stock_nifty_alignment_score(item, nifty_context))
+                item["nifty_alignment_score"] = round(alignment, 2)
+                if alignment >= 0.75:
+                    item["nifty_alignment"] = "aligned"
+                    item["nifty_alignment_warnings"] = []
+                elif alignment <= 0.30:
+                    item["nifty_alignment"] = "counter_regime"
+                    item["nifty_alignment_warnings"] = [
+                        "Stock direction conflicts with aggregate Nifty context; require stricter live confirmation."
+                    ]
+                else:
+                    item["nifty_alignment"] = "mixed_or_unknown"
+                    item["nifty_alignment_warnings"] = [
+                        "Nifty context is mixed or unavailable; it is not a directional confirmation."
+                    ]
             except Exception:
                 pass
 
@@ -1029,6 +1667,10 @@ class MarketHubService:
                 "pattern_forming_count": len(pre_breakout_setups),
                 "alert_above_count": len(alert_above_setups),
                 "retest_entry_count": len(retest_entry),
+                "reversal_reclaim_watch_count": len([
+                    item for item in retest_entry
+                    if item.get("signal_stage") == "BULLISH_REVERSAL_CANDIDATE"
+                ]),
                 "momentum_continuation_count": len(momentum_continuation),
                 "re_entry_count": len(momentum_continuation),
                 "missed_moves_count": len(missed_moves_analysis),
@@ -1040,7 +1682,10 @@ class MarketHubService:
                 "nifty_bias": nifty_context.get("nifty_bias", "neutral"),
                 "nifty_regime": nifty_context.get("nifty_regime", "unknown"),
                 "market_score": nifty_context.get("market_score", 50),
+                "live_candidate_count": len(live_candidate_symbols),
             },
+            "live_candidate_symbols": live_candidate_symbols,
+            "live_candidate_pool": live_candidate_pool,
             "all_entry_levels": all_entry_levels,
         }
 
@@ -1048,6 +1693,10 @@ class MarketHubService:
         refresh_started = time.perf_counter()
         timing_stats = {}
         logger.info("market overview refresh started force_refresh=%s", force_refresh)
+
+        # Refresh official EOD delivery data in parallel.  Cached rows can be
+        # consumed immediately; exchange latency never blocks the live scan.
+        delivery_refresh_started = self.delivery_archive.refresh_async()
 
         t0 = time.perf_counter()
         discovery = self.universe.discover_market(force_refresh=force_refresh)
@@ -1071,12 +1720,15 @@ class MarketHubService:
         except Exception:
             logger.exception("daily batch fetch failed")
             daily_frames = {}
+        daily_frames = self.delivery_archive.enrich_frames(daily_frames)
         timing_stats["data_fetch_ms"] = int((time.perf_counter() - t1) * 1000)
+        timing_stats["delivery_background_refresh_started"] = delivery_refresh_started
 
         preliminary: list[Dict] = []
         pre_filter_passed = 0
         pre_filter_dropped = 0
         filter_lock = threading.Lock()
+        persistent_symbols = set(self._persistent_watch_map())
         
         t2 = time.perf_counter()
 
@@ -1092,36 +1744,29 @@ class MarketHubService:
             if self.settings.enable_prefilter:
                 try:
                     last_close = float(quote.get("price") if quote and quote.get("price") else frame['Close'].iloc[-1])
-                    # Price must be between 50 and 5000
-                    if not (50 <= last_close <= 5000):
+                    # Keep this pre-filter structural only.  Intraday partial
+                    # volume, quiet five-day bases and >6% moves used to be
+                    # dropped here, exactly where reversal/re-entry candidates
+                    # disappeared.  Directional quality belongs in scoring.
+                    if not (self.settings.min_price <= last_close <= 100000):
                         with filter_lock:
                             pre_filter_dropped += 1
                         return None
-                        
-                    # Volume > 20-day average * 0.5
-                    recent_vol_20d = float(frame['Volume'].tail(20).mean())
-                    last_vol = float(quote.get("volume") if quote and quote.get("volume") else frame['Volume'].iloc[-1])
-                    if last_vol <= recent_vol_20d * 0.5:
+
+                    # Use completed-session liquidity, never today's partial
+                    # cumulative volume. Remembered setups bypass this gate so
+                    # a temporarily quiet retest remains observable.
+                    completed_volume = pd.to_numeric(frame["Volume"], errors="coerce").iloc[:-1].tail(20)
+                    typical_volume = float(completed_volume.median()) if not completed_volume.empty else 0.0
+                    min_liquidity = (
+                        self.settings.bse_min_volume
+                        if str(symbol).upper().endswith(".BO")
+                        else self.settings.min_volume
+                    )
+                    if typical_volume < min_liquidity and symbol.upper() not in persistent_symbols:
                         with filter_lock:
                             pre_filter_dropped += 1
                         return None
-                        
-                    # Not more than 6% above entry level (using previous close)
-                    prev_close = float(frame['Close'].iloc[-2]) if len(frame) > 1 else last_close
-                    change_pct = (last_close - prev_close) / prev_close * 100
-                    if change_pct > 6.0:
-                        with filter_lock:
-                            pre_filter_dropped += 1
-                        return None
-                    
-                    # Last 5 candles not completely flat (must have > 0.5% range)
-                    high_5d = float(frame['High'].tail(5).max())
-                    low_5d = float(frame['Low'].tail(5).min())
-                    if (high_5d - low_5d) / max(low_5d, 1) < 0.005:
-                        with filter_lock:
-                            pre_filter_dropped += 1
-                        return None
-                        
                 except Exception:
                     pass # Fall through if parse fails
 
@@ -1162,6 +1807,7 @@ class MarketHubService:
             raise RuntimeError("No valid symbols were scanned.")
 
         top_symbols = self._top_symbols(preliminary, self.settings.intraday_symbol_limit)
+        discovery["live_candidate_symbols"] = top_symbols
         live_quotes: dict[str, Dict] = {}
         if top_symbols:
             def fetch_live_quote(symbol: str) -> tuple[str, Dict] | None:
@@ -1215,6 +1861,12 @@ class MarketHubService:
                     enhanced[symbol] = signal
 
         payload = self._shape_scan_payload(discovery, list(enhanced.values()), benchmark_frame)
+        payload["data_health"] = {
+            **payload.get("data_health", {}),
+            "delivery_archive": self.delivery_archive.status(),
+            "institution_identity_available": False,
+            "large_money_label": "visible behavioural footprint",
+        }
         try:
             payload = build_smart_scan_payload(
                 payload,

@@ -413,6 +413,10 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
         rejection_reasons.append("missing_price")
     if direction == "neutral":
         rejection_reasons.append("unclear_direction")
+    if signal.get("marketGateBlocked") or signal.get("blockedBuyReason"):
+        rejection_reasons.append("market_regime_gate")
+    if signal.get("tradePlanGateBlocked") or signal.get("entry_plan_blocked"):
+        rejection_reasons.append("structural_trade_plan_gate")
     if volume and volume < 30000:
         soft_reasons.append("low_volume")
     if not invalidation:
@@ -446,7 +450,7 @@ def _prediction_wording(signal: dict[str, Any], score: float) -> str:
     elif _is_watch_only(signal) and direction == "bullish":
         prefix = "Pre-breakout watch setup" if score >= 60 else "Early bullish watch setup"
     elif score >= 75:
-        prefix = "High probability setup"
+        prefix = "High alignment setup"
     elif score >= 60:
         prefix = "Watchlist setup"
     else:
@@ -492,6 +496,15 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "change_pct": round(_safe_float(signal.get("change_pct")), 2),
         "relative_volume": round(_safe_float(signal.get("relative_volume") or signal.get("volume_ratio"), 1.0), 2),
         "risk_reward": _safe_float(signal.get("risk_reward")),
+        "riskPct": signal.get("riskPct"),
+        "riskPerShare": signal.get("riskPerShare"),
+        "maxPositionPctAt1PctAccountRisk": signal.get("maxPositionPctAt1PctAccountRisk"),
+        "entry_plan_status": signal.get("entry_plan_status"),
+        "entry_plan_blocked": bool(signal.get("entry_plan_blocked")),
+        "entry_plan_blocked_reason": signal.get("entry_plan_blocked_reason"),
+        "proposed_entry": signal.get("proposed_entry"),
+        "structural_invalidation": signal.get("structural_invalidation"),
+        "opposing_structure_target": signal.get("opposing_structure_target"),
         "setupType": _setup_type(signal),
         "chartPattern": _setup_type(signal),
         "patternLabels": signal.get("pattern_labels") or [],
@@ -531,6 +544,14 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "trapRiskScore": demand_supply.get("trapRiskScore") or signal.get("trap_risk_score"),
         "smartMoneyRead": demand_supply.get("smartMoneyRead"),
         "raw": signal,
+        "freshEntryAllowed": bool(
+            not signal.get("marketGateBlocked")
+            and not signal.get("blockedBuyReason")
+            and not signal.get("tradePlanGateBlocked")
+            and not signal.get("entry_plan_blocked")
+            and signal.get("allow_buy_call", True)
+            and not signal.get("attention_only", False)
+        ),
         "rejectionReasons": scored["rejectionReasons"],
         "softReasons": scored["softReasons"],
     }
@@ -777,19 +798,32 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
     rejected = []
     eligible = []
     for item in mapped:
-        if item["symbol"] in tracked_symbols:
-            item["rejectionReasons"] = []  # Rescue from rejection
+        hard_rejections = {
+            "market_regime_gate", "unclear_direction", "missing_price",
+        }.intersection(item["rejectionReasons"])
+        if item["symbol"] in tracked_symbols and not hard_rejections:
+            # Preserve lifecycle visibility without overriding a hard safety
+            # gate. Only transient ranking/score rejection is rescued.
+            item["rejectionReasons"] = []
             if item["score"] < 80:
                 item["entryStatus"] = "Active Call (Pullback)"
             else:
                 item["entryStatus"] = "Active Call"
             eligible.append(item)
+        elif hard_rejections:
+            item["freshEntryAllowed"] = False
+            rejected.append(item)
         elif item["rejectionReasons"]:
             rejected.append(item)
         else:
             eligible.append(item)
 
-    hot = [item for item in eligible if item["score"] >= 70 or item["symbol"] in tracked_symbols][:12]
+    hot = [
+        item for item in eligible
+        if (item["score"] >= 70 or item["symbol"] in tracked_symbols)
+        and not item.get("raw", {}).get("attention_only")
+        and item.get("freshEntryAllowed", True)
+    ][:12]
 
     # Enrich top hot picks with AI analysis (Finnhub + Gemini)
     if AI_AVAILABLE:
@@ -832,7 +866,16 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
 
     hot.sort(key=lambda item: item["score"], reverse=True)
     hot_symbols = {item["symbol"] for item in hot}
-    watchlist = [item for item in eligible if 50 <= item["score"] < 70 and item["symbol"] not in hot_symbols][:16]
+    watchlist = [
+        item for item in eligible
+        if item["score"] >= 50
+        and item["symbol"] not in hot_symbols
+        and (
+            item["score"] < 70
+            or item.get("raw", {}).get("attention_only")
+            or not item.get("freshEntryAllowed", True)
+        )
+    ][:16]
     used = hot_symbols | {item["symbol"] for item in watchlist}
     momentum = [
         item for item in eligible

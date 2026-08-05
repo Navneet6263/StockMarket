@@ -100,7 +100,7 @@ export default function StockDetailPanel({
 
       <div className="stat-grid">
         <Stat label="Bias" value={humanize(signal.direction)} tone={toneForDirection(signal.direction)} />
-        <Stat label="Confidence" value={`${fmt(signal.confidence, 0)}%`} />
+        <Stat label="Alignment Score" value={`${fmt(signal.confidence, 0)}/100`} />
         <Stat label="Risk" value={humanize(signal.risk_level)} tone={toneForRisk(signal.risk_level)} />
         <Stat label="Chart Pattern" value={humanize(signal.setup_type || signal.setup_label)} />
         <Stat label="Expected Move" value={`${(signal.expected_move_pct ?? 0) > 0 ? "+" : ""}${fmt(signal.expected_move_pct, 2)}%`} tone={toneForDirection(signal.direction)} />
@@ -122,10 +122,10 @@ export default function StockDetailPanel({
       </div>
 
       <div className="terminal-card soft">
-        <div className="mono-label">Confidence Read</div>
+        <div className="mono-label">Alignment Read</div>
         <p className="detail-summary">{signal.confidence_note}</p>
         <div className="micro-copy">
-          Model confidence {fmt(signal.model_confidence, 0)}%
+          Model alignment {fmt(signal.model_confidence, 0)}/100
           {signal.evidence_confidence !== null && signal.evidence_confidence !== undefined
             ? ` | Historical hit-rate proxy ${fmt(signal.evidence_confidence, 0)}%`
             : " | Historical hit-rate proxy unavailable"}

@@ -1,58 +1,28 @@
 import asyncio
 import logging
 import time
-from typing import Dict, List, Callable
-import pandas as pd
-
-from app.services.data_provider import MarketDataService
-from app.core.settings import get_settings
+from statistics import median
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
-class InstitutionalDetector:
-    def __init__(self, data_service: MarketDataService):
-        self.data_service = data_service
-        self.context_cache: Dict[str, Dict] = {}
-
-    def get_context(self, symbol: str) -> Dict:
-        now = time.time()
-        cached = self.context_cache.get(symbol)
-        if cached and (now - cached['timestamp'] < 3600):  # 1 hour cache
-            return cached
-
-        try:
-            # Fetch 20d daily history to get avg volume, support, resistance
-            df = self.data_service.fetch_history(symbol, period="1mo", interval="1d")
-            if df.empty or len(df) < 5:
-                return {}
-
-            avg_vol = df['Volume'].tail(20).mean()
-            resistance = df['High'].tail(20).max()
-            support = df['Low'].tail(20).min()
-
-            ctx = {
-                'avg_volume_20d': avg_vol,
-                'resistance': resistance,
-                'support': support,
-                'timestamp': now
-            }
-            self.context_cache[symbol] = ctx
-            return ctx
-        except Exception as e:
-            logger.warning(f"Failed to fetch context for {symbol}: {e}")
-            return {}
-
+class VisibleFootprintDetector:
     def detect(self, symbol: str, recent_candles: List[Dict]) -> List[Dict]:
-        if len(recent_candles) < 3:
+        if len(recent_candles) < 6:
             return []
 
-        ctx = self.get_context(symbol)
-        if not ctx:
+        # Use only completed 15-minute candles already observed by the live
+        # feed. Comparing a 15-minute bar with average *daily* volume was both
+        # dimensionally wrong and forced network I/O into the tick callback.
+        prior_structure = recent_candles[:-2][-20:]
+        prior_volume = [float(candle.get('volume') or 0) for candle in recent_candles[:-1][-20:]]
+        positive_volume = [value for value in prior_volume if value > 0]
+        if len(prior_structure) < 3 or len(positive_volume) < 5:
             return []
 
-        avg_vol = ctx['avg_volume_20d']
-        resistance = ctx['resistance']
-        support = ctx['support']
+        baseline_vol = median(positive_volume)
+        resistance = max(float(candle['high']) for candle in prior_structure)
+        support = min(float(candle['low']) for candle in prior_structure)
 
         current = recent_candles[-1]
         prev1 = recent_candles[-2]
@@ -65,7 +35,7 @@ class InstitutionalDetector:
         def is_bearish(c): return c['close'] < c['open']
 
         # 1. Volume Anomaly
-        if current.get('volume', 0) > (avg_vol * 3):
+        if current.get('volume', 0) > (baseline_vol * 3):
             patterns.append({"type": "VOLUME_ANOMALY", "time": current['time'], "message": "Massive Volume Surge"})
 
         # 2. Bull Trap
@@ -76,17 +46,25 @@ class InstitutionalDetector:
         if prev1['close'] < support and current['close'] > support:
             patterns.append({"type": "BEAR_TRAP", "time": current['time'], "message": "Bear Trap Detected"})
 
-        # 4. Institutional Trap
-        spike_up = is_bullish(prev2) and prev2.get('volume', 0) > (avg_vol * 2)
+        # 4. High-volume reversal trap. Candle data cannot identify who traded.
+        spike_up = is_bullish(prev2) and prev2.get('volume', 0) > (baseline_vol * 2)
         sharp_reversal = current['close'] < prev2['low']
         if spike_up and sharp_reversal:
-            patterns.append({"type": "INSTITUTIONAL_TRAP", "time": current['time'], "message": "Inst. Reversal Trap"})
+            patterns.append({
+                "type": "VISIBLE_REVERSAL_TRAP",
+                "time": current['time'],
+                "message": "High-volume reversal trap",
+            })
 
         # 5. Accumulation (simplification without EOD delivery info, focusing on tight spread + volume)
         body = abs(current['close'] - current['open'])
         tight_action = body / current['open'] < 0.005 if current['open'] > 0 else False
-        if tight_action and current.get('volume', 0) > avg_vol:
-            patterns.append({"type": "ACCUMULATION", "time": current['time'], "message": "Heavy Accumulation"})
+        if tight_action and current.get('volume', 0) > baseline_vol:
+            patterns.append({
+                "type": "ABSORPTION_PROXY",
+                "time": current['time'],
+                "message": "Tight-range high-volume absorption proxy",
+            })
 
         return patterns
 
@@ -97,7 +75,7 @@ class OHLCAggregator:
         self.current_candles: Dict[str, Dict] = {}
         self.candle_history: Dict[str, List[Dict]] = {}
         self.subscribers: Dict[str, List[asyncio.Queue]] = {}
-        self.detector = InstitutionalDetector(MarketDataService(get_settings()))
+        self.detector = VisibleFootprintDetector()
         self.last_volume: Dict[str, int] = {}
 
     def subscribe(self, symbol: str) -> asyncio.Queue:
@@ -141,8 +119,8 @@ class OHLCAggregator:
                 completed_candle = self.current_candles[symbol].copy()
                 self.candle_history[symbol].append(completed_candle)
                 
-                # Run institutional detection on completed candles
-                patterns = self.detector.detect(symbol, self.candle_history[symbol][-5:])
+                # Run visible price/volume pattern detection on completed candles.
+                patterns = self.detector.detect(symbol, self.candle_history[symbol][-40:])
                 if patterns:
                     self._broadcast(symbol, {
                         "type": "PATTERN_DETECTED",

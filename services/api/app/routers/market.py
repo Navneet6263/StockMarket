@@ -4,10 +4,10 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.dependencies import get_market_hub
-from app.options_analyzer import OptionsAnalyzer, get_index_quotes
+from app.options_analyzer import OptionsAnalyzer, SUPPORTED_INDEX_SYMBOLS, get_index_quotes
 from app.services.hot_picks import build_hot_picks_response
 from app.services.market_hub import MarketHubService
 
@@ -60,26 +60,39 @@ async def market_hot_picks(
 
 @router.get("/market/live-entries")
 async def market_live_entries():
-    """Real-time stocks that have hit their entry level right now.
+    """Real-time stocks whose entry is confirmed by the live evidence gate.
 
-    The Entry Monitor watches every live price tick and promotes a stock
-    the moment its price enters within ENTRY_TRIGGER_PCT of its
-    safe_entry_price / entry_trigger.  This list updates in real-time
-    (sub-second from AngelOne WebSocket ticks).
+    Price proximity alone is not enough when full ticks are available.  The
+    monitor also evaluates observed VWAP, volume velocity, persistent visible
+    depth, price response, structure and tick freshness.
     """
     try:
         from app.services.entry_monitor import get_entry_monitor
         monitor = get_entry_monitor()
         entries = monitor.get_live_entries()
+        assessments = monitor.get_live_assessments()
+        status_counts = {
+            status: len([item for item in assessments if item.get("status") == status])
+            for status in ("CONFIRMED", "WAIT", "REJECT")
+        }
         return {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "count": len(entries),
             "watchedCount": monitor.get_watched_count(),
             "entries": entries,
+            "assessmentCounts": status_counts,
+            "assessments": assessments,
         }
     except Exception as exc:
         logger.warning("live-entries endpoint error: %s", exc)
-        return {"generatedAt": datetime.now(timezone.utc).isoformat(), "count": 0, "entries": []}
+        return {
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "count": 0,
+            "watchedCount": 0,
+            "entries": [],
+            "assessmentCounts": {"CONFIRMED": 0, "WAIT": 0, "REJECT": 0},
+            "assessments": [],
+        }
 
 
 @router.get("/market/opportunities")
@@ -317,7 +330,7 @@ async def market_traps(
     force_refresh: bool = False,
     hub: MarketHubService = Depends(get_market_hub),
 ):
-    """Institutional trap signals (bull traps, sell traps, etc.)"""
+    """Visible price/volume trap signals (participant identity is unavailable)."""
     payload = await scan_market_with_timeout(hub, force_refresh)
     return {
         "generated_at": payload["generated_at"],
@@ -338,10 +351,16 @@ async def market_options_analysis(
     10-day swing prediction, and CE/PE recommendation.
     Supported: NIFTY | BANKNIFTY | FINNIFTY | MIDCPNIFTY
     """
+    normalized = str(symbol or "").strip().upper()
+    if normalized not in SUPPORTED_INDEX_SYMBOLS:
+        raise HTTPException(
+            status_code=422,
+            detail="Unsupported index symbol. Allowed: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY.",
+        )
     try:
         analyzer = OptionsAnalyzer()
         # get_full_analysis returns already-analyzed data — do NOT call analyze_options_data again
-        return await asyncio.to_thread(analyzer.get_full_analysis, symbol)
+        return await asyncio.to_thread(analyzer.get_full_analysis, normalized)
     except Exception as e:
         logger.exception("Failed to analyze options for %s", symbol)
         return {"error": str(e), "symbol": symbol}

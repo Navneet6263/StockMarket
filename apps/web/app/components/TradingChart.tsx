@@ -250,7 +250,8 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
           const newMarkers = payload.patterns.map((p: any) => {
             let marker: SeriesMarker<any> = { time: p.time as Time, position: 'aboveBar', shape: 'arrowDown', text: p.message, color: '' };
             switch(p.type) {
-              case "INSTITUTIONAL_TRAP":
+              case "VISIBLE_REVERSAL_TRAP":
+              case "INSTITUTIONAL_TRAP": // compatibility with older cached events
               case "BULL_TRAP":
                 marker.color = "#ef4444";
                 marker.text = "🚨 " + p.message;
@@ -261,7 +262,8 @@ export default function TradingChart({ symbol, data, prediction, liveQuote }: Tr
                 marker.shape = "arrowUp";
                 marker.text = "🟢 " + p.message;
                 break;
-              case "ACCUMULATION":
+              case "ABSORPTION_PROXY":
+              case "ACCUMULATION": // compatibility with older cached events
                 marker.color = "#3b82f6";
                 marker.position = "belowBar";
                 marker.shape = "arrowUp";

@@ -2,15 +2,27 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
+import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from app.services.angelone_live import get_angelone_live
 
 router = APIRouter(prefix="/api/live", tags=["live"])
 logger = logging.getLogger(__name__)
+
+
+def _require_auto_order_authorization(provided_key: str | None) -> None:
+    """Fail closed: order actions require a separate server-side secret."""
+
+    expected_key = os.getenv("AUTO_ORDER_API_KEY", "").strip()
+    if not expected_key:
+        raise HTTPException(status_code=503, detail="Auto-order API authorization is not configured.")
+    if not provided_key or not hmac.compare_digest(provided_key, expected_key):
+        raise HTTPException(status_code=401, detail="Invalid auto-order authorization.")
 
 # Real-time WebSocket connection registry
 active_websockets: set[WebSocket] = set()
@@ -28,11 +40,17 @@ async def websocket_endpoint(websocket: WebSocket):
         from app.services.entry_monitor import get_entry_monitor
         monitor = get_entry_monitor()
         entries = monitor.get_live_entries()
+        assessments = monitor.get_live_assessments()
         await websocket.send_json({
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "count": len(entries),
             "watchedCount": monitor.get_watched_count(),
             "entries": entries,
+            "assessmentCounts": {
+                status: len([item for item in assessments if item.get("status") == status])
+                for status in ("CONFIRMED", "WAIT", "REJECT")
+            },
+            "assessments": assessments,
         })
         while True:
             await websocket.receive_text()
@@ -131,11 +149,17 @@ def on_live_entry_triggered(alert: dict):
         from app.services.entry_monitor import get_entry_monitor
         monitor = get_entry_monitor()
         entries = monitor.get_live_entries()
+        assessments = monitor.get_live_assessments()
         payload = {
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "count": len(entries),
             "watchedCount": monitor.get_watched_count(),
             "entries": entries,
+            "assessmentCounts": {
+                status: len([item for item in assessments if item.get("status") == status])
+                for status in ("CONFIRMED", "WAIT", "REJECT")
+            },
+            "assessments": assessments,
             "new_alert": alert,
         }
         asyncio.run_coroutine_threadsafe(_broadcast_payload(payload), global_loop)
@@ -204,7 +228,7 @@ async def start_feed(symbols: list[str] | None = None):
 
 @router.get("/delivery/{symbol}")
 async def delivery_data(symbol: str):
-    """Fetch delivery volume data from AngelOne."""
+    """Return AngelOne traded-volume context; broker candles do not supply delivery fields."""
     svc = get_angelone_live()
     data = await asyncio.to_thread(svc.get_delivery, symbol)
     return {"symbol": symbol.upper(), **data}
@@ -217,9 +241,11 @@ async def place_order(
     entry_price: float = Query(..., gt=0),
     stop_loss: float = Query(..., gt=0),
     target: float = Query(..., gt=0),
-    quantity: int = Query(1, ge=1),
+    quantity: int = Query(1, ge=1, le=1_000_000),
+    x_auto_order_key: str | None = Header(default=None, alias="X-Auto-Order-Key"),
 ):
-    """Place GTT auto order via AngelOne. Requires ENABLE_AUTO_ORDER=true."""
+    """Validate an order request; execution stays locked without native exits."""
+    _require_auto_order_authorization(x_auto_order_key)
     svc = get_angelone_live()
     result = await asyncio.to_thread(
         svc.place_order, symbol, direction, entry_price, stop_loss, target, quantity
@@ -228,8 +254,11 @@ async def place_order(
 
 
 @router.get("/orders/today")
-async def today_orders():
+async def today_orders(
+    x_auto_order_key: str | None = Header(default=None, alias="X-Auto-Order-Key"),
+):
     """Get all auto orders placed today."""
+    _require_auto_order_authorization(x_auto_order_key)
     svc = get_angelone_live()
     return {"orders": svc.orders.get_today_orders(), "status": svc.get_status()}
 

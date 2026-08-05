@@ -47,8 +47,8 @@ export default function OpportunityCard({ item, active, onSelect }: OpportunityC
 
       <div className="mini-grid">
         <div className="mini-stat">
-          <span>Confidence</span>
-          <strong>{fmt(item.confidence, 0)}%</strong>
+          <span>Alignment</span>
+          <strong>{fmt(item.confidence, 0)}/100</strong>
         </div>
         <div className="mini-stat">
           <span>Move Quality</span>

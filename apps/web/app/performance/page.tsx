@@ -77,7 +77,7 @@ function OpenCard({ pos, onClose }: { pos: Trade; onClose: (s: string) => void }
           <Badge text={pos.direction.toUpperCase()} color={dirColor(pos.direction)} />
           {pos.order_type === "live"  && <Badge text="🟢 Live Order"  color="#16a34a" />}
           {pos.order_type === "paper" && <Badge text="📄 Paper Trade" color="#6b7280" />}
-          {pos.confidence ? <Badge text={`${fmt(pos.confidence, 0)}% conf`} color="#7c3aed" /> : null}
+          {pos.confidence ? <Badge text={`${fmt(pos.confidence, 0)}/100 alignment`} color="#7c3aed" /> : null}
           {pos.setup_type ? <Badge text={humanize(pos.setup_type)} color="#0369a1" /> : null}
         </div>
         <button
@@ -209,7 +209,7 @@ function HistoryRow({ pos }: { pos: Trade }) {
       </td>
       <td style={{ padding: "10px 12px" }}>
         {pos.rr ? <div style={{ fontSize: 12 }}>⚖️ 1:{fmt(pos.rr, 1)}</div> : null}
-        {pos.confidence ? <div style={{ fontSize: 12, color: "#888" }}>🎯 {fmt(pos.confidence, 0)}%</div> : null}
+        {pos.confidence ? <div style={{ fontSize: 12, color: "#888" }}>🎯 {fmt(pos.confidence, 0)}/100 alignment</div> : null}
       </td>
     </tr>
   );

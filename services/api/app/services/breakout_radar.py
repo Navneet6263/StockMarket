@@ -1,7 +1,6 @@
 from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +14,103 @@ def _safe(val, default=0.0):
         return default
 
 
+def _normalise_nifty_bias(value):
+    text = str(value or "neutral").lower()
+    if "bearish" in text or "down" in text:
+        return "bearish"
+    if "bullish" in text or "up" in text:
+        return "bullish"
+    return "neutral"
+
+
+def _normalise_nifty_regime(value):
+    text = str(value or "unknown").lower()
+    if "down" in text or "bear" in text:
+        return "downtrend"
+    if "up" in text or "bull" in text:
+        return "uptrend"
+    if "side" in text or "range" in text:
+        return "sideways"
+    return "unknown"
+
+
+def _normalise_market_hub_signal(signal):
+    """Map MarketHub's scored payload into the radar's snapshot contract."""
+
+    chart = signal.get("chart_features") or {}
+    price = _safe(signal.get("price") or signal.get("current_price"), 0.0)
+    resistance = _safe(
+        signal.get("resistance_20")
+        or signal.get("resistance")
+        or signal.get("resistance_level"),
+        0.0,
+    )
+    support = _safe(
+        signal.get("support_20")
+        or signal.get("support")
+        or signal.get("support_level"),
+        0.0,
+    )
+    trend = str(
+        signal.get("trend_regime")
+        or chart.get("moving_average_trend")
+        or "range"
+    ).lower()
+    above_vwap = signal.get("above_vwap")
+    if above_vwap is None and price > 0:
+        rolling_vwap = _safe(signal.get("rolling_vwap"), 0.0)
+        above_vwap = price >= rolling_vwap if rolling_vwap > 0 else False
+    distance = signal.get("distance_to_resistance_pct")
+    if distance is None:
+        distance = chart.get("distance_to_resistance_pct")
+    if distance is None and price > 0 and resistance > 0:
+        distance = ((resistance - price) / price) * 100
+
+    normalized = dict(signal)
+    normalized.update(
+        {
+            "price": price,
+            "current_price": price,
+            "resistance_20": resistance,
+            "support_20": support,
+            "tight_consolidation_pct": signal.get("tight_consolidation_pct")
+            if signal.get("tight_consolidation_pct") is not None
+            else chart.get("tight_consolidation_pct"),
+            "bb_width_ratio": signal.get("bb_width_ratio")
+            if signal.get("bb_width_ratio") is not None
+            else chart.get("bb_width_ratio"),
+            "higher_lows": bool(signal.get("higher_lows") or chart.get("higher_lows")),
+            "cmf": signal.get("cmf") if signal.get("cmf") is not None else chart.get("cmf"),
+            "obv_slope": signal.get("obv_slope")
+            if signal.get("obv_slope") is not None
+            else chart.get("obv_slope"),
+            "above_vwap": bool(above_vwap),
+            "distance_to_resistance_pct": distance,
+            "breakout_20": bool(
+                signal.get("breakout_20")
+                or chart.get("breakout_confirmed")
+            ),
+            "price_above_ema20": bool(
+                signal.get("price_above_ema20") or trend in {"uptrend", "strong_uptrend"}
+            ),
+            "price_above_ema50": bool(
+                signal.get("price_above_ema50") or trend in {"uptrend", "strong_uptrend"}
+            ),
+            "price_above_ema200": bool(signal.get("price_above_ema200")),
+            "trend_regime": trend,
+            "relative_strength_20d": signal.get("relative_strength_20d")
+            if signal.get("relative_strength_20d") is not None
+            else signal.get("benchmark_relative_strength"),
+            "delivery_spike": signal.get("delivery_spike")
+            if signal.get("delivery_spike") is not None
+            else signal.get("delivery_deliverySpikeVs20d"),
+        }
+    )
+    return normalized
+
+
 def score_breakout_readiness(snapshot, nifty_bias='neutral'):
+    nifty_bias = _normalise_nifty_bias(nifty_bias)
     tight = _safe(snapshot.get('tight_consolidation_pct'), 99.0)
     rel_vol = _safe(snapshot.get('relative_volume'), 1.0)
     bb_width = _safe(snapshot.get('bb_width_ratio'), 1.0)
@@ -80,13 +175,14 @@ def score_breakout_readiness(snapshot, nifty_bias='neutral'):
 
 
 def build_breakout_radar(all_signals, nifty_context=None, max_results=10):
-    nifty_bias = (nifty_context or {}).get('nifty_bias', 'neutral')
+    nifty_bias = _normalise_nifty_bias((nifty_context or {}).get('nifty_bias', 'neutral'))
     nifty_level = (nifty_context or {}).get('level_signal', 'mid_range')
-    nifty_regime = (nifty_context or {}).get('nifty_regime', 'unknown')
-    if nifty_regime in ('strong_downtrend', 'downtrend'):
+    nifty_regime = _normalise_nifty_regime((nifty_context or {}).get('nifty_regime', 'unknown'))
+    if nifty_regime == 'downtrend':
         max_results = max(3, max_results // 2)
     candidates = []
-    for signal in all_signals:
+    for source_signal in all_signals:
+        signal = _normalise_market_hub_signal(source_signal)
         if signal.get('direction', 'neutral') != 'bullish':
             continue
         if signal.get('breakout_20') or abs(_safe(signal.get('change_pct'), 0)) >= 5.0:

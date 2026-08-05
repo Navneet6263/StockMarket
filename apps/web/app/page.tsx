@@ -6,7 +6,7 @@ import TradingChart from "./components/TradingChart";
 const TABS = [
   { id: "dashboard",   label: "Dashboard",       api: "/api/market/hot-picks" },
   { id: "live-action", label: "🔴 Live Action",  api: "/api/market/live-entries" },
-  { id: "hot-picks",   label: "🌟 God-Tier Scans",  api: "/api/market/hot-picks" },
+  { id: "hot-picks",   label: "🌟 Pro Setup Scans", api: "/api/market/hot-picks" },
   { id: "volume-boomers", label: "📦 3x+ Volume Boomers", api: "/api/market/hot-picks" },
   { id: "watchlist",   label: "Watchlist",         api: "/api/market/hot-picks" },
   { id: "base-radar",  label: "Base Formation",    api: "/api/market/hot-picks" },
@@ -113,14 +113,14 @@ function IndexTickerBar() {
 function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) => void; tab?: string }) {
   if (item.entryRule && item.instrumentRule) {
     return (
-      <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: item.status === "STRICT_READY" ? "var(--green)" : "var(--orange)" }}>
+      <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: item.status === "WATCH_CONTRACT" ? "var(--orange)" : "var(--border)" }}>
         <div className="stock-card-top">
           <h3>{item.symbol}</h3>
           <span className={`badge ${item.side === "PE" ? "bearish" : "bullish"}`}>{item.actionLabel}</span>
         </div>
         <div className="stock-meta">
           <span className="tag watch">{humanize(item.status)}</span>
-          <span className="tag">{fmt(item.confidence, 0)}%</span>
+          <span className="tag">Score {fmt(item.confidence, 0)}/100</span>
           <span className="tag">{item.bucket}</span>
         </div>
         <p className="stock-reason">{item.entryRule}</p>
@@ -143,7 +143,7 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
   const chartPattern = item.chartPattern ?? item.setupType ?? item.setup_type ?? item.raw?.setup_type;
   const patternLabels = item.patternLabels ?? item.pattern_labels ?? item.raw?.pattern_labels ?? [];
   const entryLabel = item.entryLabel ?? item.entry_label ?? (item.entryMissed || item.entry_missed ? "Retest" : "Entry");
-  const entryValue = item.entryZone ?? item.entry_zone_text ?? item.entry_trigger ?? item.entryTrigger ?? item.breakoutTrigger ?? price;
+  const entryValue = item.proposed_entry ?? item.entryZone ?? item.entry_zone_text ?? item.entry_trigger ?? item.entryTrigger ?? item.breakoutTrigger ?? price;
   const aiReason = item.aiReason || "";
   const aiTradePlan = item.aiTradePlan || "";
   const aiRisks = item.aiRisks || [];
@@ -158,6 +158,13 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
   const trapRisk = item.trapRisk || item.trap_risk || demand.trapRisk;
   const trapRiskScore = item.trapRiskScore ?? item.trap_risk_score ?? demand.trapRiskScore;
   const smartMoneyRead = item.smartMoneyRead || demand.smartMoneyRead;
+  const footprint = item.large_money_footprint || item.raw?.large_money_footprint || {};
+  const footprintScore = footprint.score ?? item.large_money_footprint_score ?? item.raw?.large_money_footprint_score;
+  const footprintQuality = footprint.data_quality?.grade ?? item.footprint_data_quality?.grade ?? item.raw?.footprint_data_quality?.grade;
+  const liveStatus = item.liveTriggerStatus || item.liveConfirmation?.status;
+  const liveScore = item.liveTriggerScore ?? item.liveConfirmation?.score;
+  const liveScoreMeaning = item.liveTriggerScoreMeaning || item.liveConfirmation?.scoreMeaning;
+  const liveEvidence = item.liveEvidence || item.liveConfirmation?.evidence || [];
   const fallbackReason = item.reason || item.signal_summary || item.setup_label || item.whyInteresting || item.missed_reason || "";
   const timeHorizon = item.timeHorizon || item.pre_breakout_timeframe || item.timeframe || item.raw?.pre_breakout_timeframe || "";
   const isHighTrap = trapRisk === "high" || item.trap_risk === "high" || item.bull_trap?.bull_trap_detected || (item.trap_warnings && item.trap_warnings.length > 0);
@@ -173,10 +180,10 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
     <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: isHighTrap ? "var(--red)" : "var(--border)" }}>
       {isHighTrap ? (
         <div className="trap-alert">
-          <div className="trap-kicker">🚨 AVOID - INSTITUTIONAL TRAP</div>
+          <div className="trap-kicker">🚨 AVOID - VISIBLE TRAP EVIDENCE</div>
           <div className="trap-desc">
             {item.bull_trap?.bull_trap_detected ? "Fake Breakout Detected. Price broke resistance but failed to sustain." :
-             item.trap_warnings?.[0] || "High institutional selling pressure detected."}
+             item.trap_warnings?.[0] || "Strong visible selling-pressure evidence detected; participant identity is unknown."}
           </div>
           <div className="stock-meta" style={{ marginTop: 4 }}>
             <span className="tag sell" style={{ fontSize: 13, padding: '6px 12px' }}>🔴 DO NOT BUY / SELL TURANT</span>
@@ -205,11 +212,15 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
       <div className="stock-meta">
         <span className={`tag ${actionClass}`}>{action === 'BUY' ? '✅ BUY' : action === 'SELL' ? '🛑 SELL' : '👁️ WATCH'}</span>
         {(item.risk_reward || item.rr) ? <span className="tag">⚖️ RR 1:{fmt(item.risk_reward ?? item.rr, 1)}</span> : null}
+        {item.riskPct != null ? <span className="tag">Stop risk {fmt(item.riskPct, 2)}%</span> : null}
+        {item.maxPositionPctAt1PctAccountRisk != null ? (
+          <span className="tag">1% account-risk cap: max {fmt(item.maxPositionPctAt1PctAccountRisk, 1)}% capital</span>
+        ) : null}
         {item.confidence ? <span className="tag" style={{ 
           background: (item.confidence ?? 0) > 80 ? 'var(--green)' : (item.confidence ?? 0) > 60 ? 'var(--yellow)' : 'var(--orange)',
           color: '#fff',
           fontWeight: 'bold'
-        }}>🎯 {fmt(item.confidence ?? item.score, 0)}%</span> : null}
+        }}>🎯 Alignment {fmt(item.confidence ?? item.score, 0)}/100</span> : null}
         {relVol > 0 ? <span className="tag" style={{
           background: relVol >= 5 ? 'var(--orange)' : relVol >= 3 ? 'var(--green)' : 'transparent',
           color: relVol >= 3 ? '#fff' : 'inherit',
@@ -217,19 +228,41 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
           border: relVol >= 3 ? 'none' : '1px solid var(--border)'
         }}>{relVol >= 5 ? '🚀' : relVol >= 3 ? '🔥' : '📦'} {fmt(relVol, 1)}X VOL</span> : null}
         {volBuilding && relVol < 3 ? <span className="tag" style={{ background: '#10b981', color: '#fff', fontWeight: 'bold' }}>📈 VOL BUILDING {volStreak}d</span> : null}
-        {stealthAccum ? <span className="tag" style={{ background: '#8b5cf6', color: '#fff', fontWeight: 'bold' }}>🕵️ STEALTH BUY</span> : null}
+        {stealthAccum ? <span className="tag" style={{ background: '#8b5cf6', color: '#fff', fontWeight: 'bold' }}>🕵️ ABSORPTION PROXY</span> : null}
         {volAccel >= 1.5 && !volBuilding && !stealthAccum ? <span className="tag" style={{ background: '#f59e0b', color: '#fff', fontWeight: 'bold' }}>⚡ VOL ACCELERATING</span> : null}
-        {volPriceDivergence && !stealthAccum ? <span className="tag" style={{ background: '#6366f1', color: '#fff', fontWeight: 'bold' }}>🔍 SMART LOADING</span> : null}
+        {volPriceDivergence && !stealthAccum ? <span className="tag" style={{ background: '#6366f1', color: '#fff', fontWeight: 'bold' }}>🔍 PRICE-VOLUME DIVERGENCE</span> : null}
+        {footprintScore != null && Math.abs(footprintScore) >= 20 ? (
+          <span className="tag">Large-money footprint {footprintScore > 0 ? "+" : ""}{fmt(footprintScore, 0)}/100{footprintQuality ? ` · ${humanize(footprintQuality)} data` : ""}</span>
+        ) : null}
         {item.entry_quality ? <span className="tag">{humanize(item.entry_quality)} entry</span> : null}
         {item.seller_pressure ? <span className="tag">{humanize(item.seller_pressure)} sellers</span> : null}
         {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking</span> : null}
         {timeHorizon ? <span className="tag" style={{ color: "var(--yellow)", fontWeight: "bold" }}>⏳ Runs in: {timeHorizon}</span> : null}
         {patternLabels.slice(0, 2).map((label: string) => <span key={label} className="tag">{humanize(label)}</span>)}
       </div>
+      {item.entry_plan_blocked ? (
+        <div className="demand-panel" style={{ marginTop: 10, borderColor: "var(--orange)" }}>
+          <div className="stock-meta"><span className="tag watch">WATCH ONLY - BETTER ENTRY NEEDED</span></div>
+          <p className="stock-reason">{item.entry_plan_blocked_reason || "Current structural stop/target does not justify a live entry."}</p>
+        </div>
+      ) : null}
+      {liveStatus ? (
+        <div className="demand-panel" style={{ marginTop: 10 }}>
+          <div className="stock-meta">
+            <span className={`tag ${liveStatus === "CONFIRMED" ? "buy" : liveStatus === "REJECT" ? "sell" : "watch"}`}>Live gate {humanize(liveStatus)}</span>
+            {liveScore != null ? <span className="tag">Evidence {fmt(liveScore, 0)}/100</span> : null}
+            {item.liveConfirmationMode ? <span className="tag">{humanize(item.liveConfirmationMode)}</span> : null}
+          </div>
+          {liveScoreMeaning ? <p className="stock-reason">{liveScoreMeaning}</p> : null}
+          {liveEvidence.slice(0, 2).map((reason: string, index: number) => (
+            <p className="stock-reason" key={`${item.symbol}-live-evidence-${index}`}>• {reason}</p>
+          ))}
+        </div>
+      ) : null}
       {tab === 'hot-picks' && (
-        <div className="god-tier-panel" style={{ background: "rgba(139, 92, 246, 0.1)", border: "1px solid var(--accent)", borderRadius: 8, padding: 12, marginTop: 12, marginBottom: 12 }}>
+        <div className="pro-evidence-panel" style={{ background: "rgba(139, 92, 246, 0.1)", border: "1px solid var(--accent)", borderRadius: 8, padding: 12, marginTop: 12, marginBottom: 12 }}>
           <div style={{ fontSize: 12, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700, marginBottom: 8 }}>
-            🛡️ God-Level Metrics
+            🛡️ Pro Setup Evidence
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {((item.raw?.tight_consolidation_pct ?? 100) < 4 || (item.raw?.bb_width_ratio ?? 1) < 0.15 || patternLabels.some((l: string) => l.toLowerCase().includes('squeeze') || l.toLowerCase().includes('base'))) && (
@@ -239,7 +272,7 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
               <span className="tag" style={{ background: "rgba(52, 211, 153, 0.2)", color: "#34d399", border: "1px solid rgba(52, 211, 153, 0.4)" }}>💪 True Relative Strength</span>
             )}
             {(demandStatus === "strong_accumulation" || item.seller_pressure === "low" || smartMoneyRead?.toLowerCase().includes("accumulation")) && (
-              <span className="tag" style={{ background: "rgba(96, 165, 250, 0.2)", color: "#60a5fa", border: "1px solid rgba(96, 165, 250, 0.4)" }}>🧊 Iceberg / Accumulation</span>
+              <span className="tag" style={{ background: "rgba(96, 165, 250, 0.2)", color: "#60a5fa", border: "1px solid rgba(96, 165, 250, 0.4)" }}>🧊 Demand / Accumulation Proxy</span>
             )}
             {((item.raw?.sector_momentum ?? 0) > 0 || item.raw?.sector_strength === "strong") && (
               <span className="tag" style={{ background: "rgba(167, 139, 250, 0.2)", color: "#a78bfa", border: "1px solid rgba(167, 139, 250, 0.4)" }}>💸 Sector Rotation</span>
@@ -247,7 +280,7 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
             {((item.raw?.iv_percentile ?? 0) > 80) ? (
               <span className="tag" style={{ background: "rgba(244, 63, 94, 0.2)", color: "#f43f5e", border: "1px solid rgba(244, 63, 94, 0.4)" }}>🚫 IV Crush Risk</span>
             ) : (item.raw?.options_activity === "bullish" || (item.raw?.put_oi_chg ?? 0) > (item.raw?.call_oi_chg ?? 0) * 1.5) ? (
-              <span className="tag" style={{ background: "rgba(52, 211, 153, 0.2)", color: "#34d399", border: "1px solid rgba(52, 211, 153, 0.4)" }}>🏦 Smart Put Writing</span>
+              <span className="tag" style={{ background: "rgba(52, 211, 153, 0.2)", color: "#34d399", border: "1px solid rgba(52, 211, 153, 0.4)" }}>🏦 Put OI Activity</span>
             ) : null}
             
             {/* Fallback if no specific rule matches heavily */}
@@ -257,7 +290,7 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
              !((item.raw?.sector_momentum ?? 0) > 0 || item.raw?.sector_strength === "strong") &&
              !((item.raw?.iv_percentile ?? 0) > 80) &&
              !(item.raw?.options_activity === "bullish" || (item.raw?.put_oi_chg ?? 0) > (item.raw?.call_oi_chg ?? 0) * 1.5) && (
-               <span className="tag" style={{ color: "var(--muted)", background: "rgba(255,255,255,0.05)", border: "1px dashed var(--border)" }}>⚙️ Institutional Engine Active</span>
+               <span className="tag" style={{ color: "var(--muted)", background: "rgba(255,255,255,0.05)", border: "1px dashed var(--border)" }}>⚙️ Footprint Engine Active</span>
             )}
           </div>
         </div>
@@ -325,8 +358,8 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
       ) : null}
       <div className="stock-targets">
         <div><span>{entryLabel}</span><strong>{priceText(entryValue)}</strong></div>
-        <div><span>Target</span><strong>{priceText(item.target_1 ?? item.target_price ?? item.target ?? item.keyResistance)}</strong></div>
-        <div><span>Stop</span><strong>{priceText(item.stop_loss ?? item.stoploss ?? item.invalidation ?? item.invalidationLevel)}</strong></div>
+        <div><span>Target</span><strong>{priceText(item.opposing_structure_target ?? item.target_1 ?? item.target_price ?? item.target ?? item.keyResistance)}</strong></div>
+        <div><span>Stop</span><strong>{priceText(item.structural_invalidation ?? item.stop_loss ?? item.stoploss ?? item.invalidation ?? item.invalidationLevel)}</strong></div>
       </div>
     </div>
   );
@@ -398,7 +431,7 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
         <div className="stat-card"><span>Price</span><strong>₹{fmt(q.price)}</strong></div>
         <div className="stat-card"><span>Change</span><strong style={{ color: (q.change_percent ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>{fmtPct(q.change_percent)}</strong></div>
         <div className="stat-card"><span>Direction</span><strong>{humanize(s.direction)}</strong></div>
-        <div className="stat-card"><span>Confidence</span><strong>{fmt(s.confidence, 0)}%</strong></div>
+        <div className="stat-card"><span>Alignment</span><strong>{fmt(s.confidence, 0)}/100</strong></div>
         <div className="stat-card"><span>Risk</span><strong>{humanize(s.risk_level)}</strong></div>
         <div className="stat-card"><span>RR</span><strong>1:{fmt(s.risk_reward, 1)}</strong></div>
         <div className="stat-card"><span>Entry Quality</span><strong>{humanize(s.entry_quality || "watch")}</strong></div>
@@ -478,7 +511,7 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
   const isNoTrade = !rec || rec.action === "NO_TRADE";
   const isCe = rec?.action === "BUY_CE";
 
-  // Stock options from hot picks (confidence >= 75)
+  // Stock-option watch ideas from strongly aligned underlying setups.
   const hotPicks = hotPicksData?.hotPicks || hotPicksData?.top_opportunities || [];
   const stockOptions = hotPicks.filter((s: any) => (s.confidence ?? s.score ?? 0) >= 75 && s.direction && s.direction !== "neutral");
 
@@ -497,7 +530,9 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
           </button>
         ))}
         <div style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>
-          {lastFetch ? `Updated: ${lastFetch.toLocaleTimeString()}` : ""}
+          {data?.source_timestamps?.option_chain
+            ? `Chain snapshot: ${new Date(data.source_timestamps.option_chain).toLocaleString()}`
+            : lastFetch ? `Fetched: ${lastFetch.toLocaleTimeString()}` : ""}
           <button
             onClick={() => fetchData(activeIndex)}
             style={{ marginLeft: 8, background: "none", border: "1px solid var(--border)", color: "var(--muted)", padding: "4px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}
@@ -532,14 +567,14 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
             </div>
 
             {isNoTrade ? (
-              <p className="options-rec-reason">{rec?.reason || "Confidence too low or data unavailable. Stay out until clear signal."}</p>
+              <p className="options-rec-reason">{rec?.reason || "Rule alignment is too low or data is unavailable. Stay out until the evidence is clear."}</p>
             ) : (
               <>
                 <div className="options-rec-main">
                   <div>
                     <div className="options-rec-strategy">{rec?.strategy}</div>
                     <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>
-                      🎯 Confidence: <strong style={{ color: "#fff" }}>{rec?.confidence}%</strong>
+                      🎯 Rule score: <strong style={{ color: "#fff" }}>{rec?.confidence}/100</strong>
                       &nbsp;&nbsp;⏳ Horizon: <strong style={{ color: "#fff" }}>{rec?.horizon}</strong>
                     </div>
                     {rec?.vix_note && (
@@ -554,12 +589,12 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
                       <strong>{rec?.strike}</strong>
                     </div>
                     <div>
-                      <span>Stop (underlying)</span>
-                      <strong style={{ color: "var(--red)" }}>₹{fmt(rec?.stop_loss_underlying)}</strong>
+                      <span>Invalidation (underlying)</span>
+                      <strong style={{ color: "var(--red)" }}>₹{fmt(rec?.underlying_invalidation)}</strong>
                     </div>
                     <div>
-                      <span>Target (underlying)</span>
-                      <strong style={{ color: "var(--green)" }}>₹{fmt(rec?.target_underlying)}</strong>
+                      <span>Price-structure target</span>
+                      <strong style={{ color: "var(--green)" }}>₹{fmt(rec?.underlying_structure_target)}</strong>
                     </div>
                   </div>
                 </div>
@@ -713,9 +748,9 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
           {/* ── Stock Options from Hot Picks ── */}
           {stockOptions.length > 0 && (
             <div>
-              <h2 className="section-title">📋 Stock Options Suggestions (from Hot Picks)</h2>
+              <h2 className="section-title">📋 Stock Options Watchlist (from Underlying Setups)</h2>
               <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
-                These stocks have ≥75% confidence. Based on direction, here's the option play:
+                These underlying setups have alignment ≥75/100. Option entry still needs live chain, spread, liquidity and premium confirmation:
               </div>
               <div className="stock-grid">
                 {stockOptions.slice(0, 6).map((stock: any) => {
@@ -730,7 +765,7 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
                       <div className="stock-card-top">
                         <h3>{stock.symbol}</h3>
                         <span className={`badge ${isBull ? "bullish" : "bearish"}`}>
-                          {isBull ? "📈 BUY CE" : "📉 BUY PE"}
+                          {isBull ? "📈 CE WATCH" : "📉 PE WATCH"}
                         </span>
                       </div>
                       <div style={{ fontSize: 13, color: "var(--muted)" }}>
@@ -738,9 +773,9 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
                       </div>
                       <div className="stock-meta">
                         <span className={`tag ${isBull ? "buy" : "sell"}`}>
-                          {isBull ? `Buy ${stock.symbol} ${atmStrike} CE` : `Buy ${stock.symbol} ${atmStrike} PE`}
+                          {isBull ? `Watch ${stock.symbol} ${atmStrike} CE` : `Watch ${stock.symbol} ${atmStrike} PE`}
                         </span>
-                        <span className="tag">🎯 {fmt(conf, 0)}% conf</span>
+                        <span className="tag">🎯 Alignment {fmt(conf, 0)}/100</span>
                       </div>
                       <p className="stock-reason">
                         {stock.aiReason || stock.reason || stock.signal_summary || "Strong signal — direction confirmed by multiple indicators."}
@@ -783,12 +818,30 @@ function extractItems(tab: string, data: any): any[] {
       const hasSector = (raw.sector_momentum ?? 0) > 0 || raw.sector_strength === "strong";
       const hasOptions = (raw.options_activity === "bullish" || (raw.put_oi_chg ?? 0) > (raw.call_oi_chg ?? 0) * 1.5);
       
-      // Keep only if it has at least one strong God-Level metric AND score > 70
+      // Keep only if it has at least one strong evidence metric and score > 70.
       return (hasVCP || hasRS || hasIceberg || hasSector || hasOptions) && (item.confidence ?? item.score ?? 0) >= 70;
     });
   }
   if (tab === "volume-boomers") return data.volumeBoomers || (data.hotPicks || data.top_opportunities || []).filter((x: any) => (x.relative_volume ?? x.raw?.relative_volume ?? 1) >= 3);
-  if (tab === "live-action") return data.entries || data.liveAction || [];
+  if (tab === "live-action") {
+    const confirmed = data.entries || data.liveAction || [];
+    const confirmedSymbols = new Set(confirmed.map((item: any) => item.symbol));
+    const assessments = (data.assessments || [])
+      .filter((item: any) => !confirmedSymbols.has(item.symbol))
+      .map((item: any) => ({
+        ...item,
+        current_price: item.features?.price,
+        entry_trigger: item.entryLevel,
+        action: item.status,
+        liveTriggerStatus: item.status,
+        liveTriggerScore: item.score,
+        liveTriggerScoreMeaning: item.scoreMeaning,
+        liveConfirmationMode: item.confirmationMode,
+        liveConfirmation: item,
+        setup_label: item.status === "WAIT" ? "Waiting for live evidence" : "Live setup rejected for now",
+      }));
+    return [...confirmed, ...assessments];
+  }
   if (tab === "traps") return data.trap_signals || [];
   if (tab === "pbs") return data.pbsRadar || [];
   if (tab === "watchlist") return data.watchlist || data.candidates || [];
@@ -842,9 +895,9 @@ export default function Page() {
 
         ws = new WebSocket(wsUrl);
 
-        ws.onopen = () => {
-          if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-        };
+        // Keep lightweight polling active for WAIT/REJECT assessment changes;
+        // WebSocket pushes remain useful for instant CONFIRMED alerts.
+        ws.onopen = () => {};
         ws.onmessage = (event) => {
           try {
             const json = JSON.parse(event.data);
@@ -853,21 +906,16 @@ export default function Page() {
           } catch {}
         };
         ws.onclose = () => {
-          if (!pollInterval) {
-            pollLiveEntries();
-            pollInterval = setInterval(pollLiveEntries, 15000);
-          }
           setTimeout(connectWebSocket, 10000);
         };
         ws.onerror = () => { ws?.close(); };
       } catch {
-        if (!pollInterval) {
-          pollLiveEntries();
-          pollInterval = setInterval(pollLiveEntries, 15000);
-        }
+        // Polling is already active and safely covers WebSocket outages.
       }
     };
 
+    pollLiveEntries();
+    pollInterval = setInterval(pollLiveEntries, 15000);
     connectWebSocket();
     return () => {
       if (ws) ws.close();
@@ -945,6 +993,7 @@ export default function Page() {
 
   const mood = summary?.marketMood || data?.marketMood || "loading";
   const stats = summary?.summary || data?.summary || {};
+  const assessmentCounts = data?.assessmentCounts || {};
 
   useEffect(() => {
     if (selectedSymbol || !items.length) return;
@@ -1052,13 +1101,22 @@ export default function Page() {
                 <div className="stat-card"><span>✅ This Tab</span><strong>{liveItems.length}</strong></div>
               </div>
 
+              {tab === "live-action" ? (
+                <div className="stats-row">
+                  <div className="stat-card"><span>Live pool</span><strong>{data?.watchedCount ?? 0}/100</strong></div>
+                  <div className="stat-card"><span>Confirmed</span><strong style={{ color: "var(--green)" }}>{assessmentCounts.CONFIRMED ?? data?.count ?? 0}</strong></div>
+                  <div className="stat-card"><span>Waiting for evidence</span><strong style={{ color: "var(--yellow)" }}>{assessmentCounts.WAIT ?? 0}</strong></div>
+                  <div className="stat-card"><span>Rejected now</span><strong style={{ color: "var(--red)" }}>{assessmentCounts.REJECT ?? 0}</strong></div>
+                </div>
+              ) : null}
+
               <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
                 {([
                   { key: "all",       label: "All",             count: allLiveItems.length },
                   { key: "bullish",   label: "📈 Bullish",       count: allLiveItems.filter((x: any) => x.direction === "bullish").length },
                   { key: "bearish",   label: "📉 Bearish",       count: allLiveItems.filter((x: any) => x.direction === "bearish").length },
                   { key: "breakout",  label: "⚡ Breakout",      count: allLiveItems.filter((x: any) => x.entry_label?.includes("BREAKOUT") || x.has_breakout).length },
-                  { key: "high-conf", label: "🎯 High Confidence", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
+                  { key: "high-conf", label: "🎯 Strong Alignment", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
                   { key: "tomorrow",  label: "🌅 Tomorrow",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("tomorrow")).length },
                   { key: "1-2-days",  label: "⏳ 1-2 Days",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2")).length },
                   { key: "3-4-days",  label: "📆 3-4 Days",      count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-4") || s.includes("3 to 4") || s.includes("3 - 4"); }).length },

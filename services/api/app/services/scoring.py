@@ -3,13 +3,15 @@ from __future__ import annotations
 from typing import Dict, List
 import os
 
-import numpy as np
-
 from app.services.chase_risk import classify_chase_risk
 from app.services.demand_supply import analyze_demand_supply
 from app.services.entry_timing import analyze_entry_timing
 from app.services.lifecycle import build_lifecycle_advice
 from app.services.trap_detector import full_trap_analysis
+
+
+def _clip(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 class ScoringEngine:
@@ -157,7 +159,11 @@ class ScoringEngine:
             score += 4
             labels.append("ICEBERG_ACCUMULATION")
             labels.append("PRE_BREAKOUT_CONFIRMED")
-            reasons.insert(0, f"Order Book shows massive institutional bidding ({bid_ask:.1f}x buyers) near resistance.")
+            reasons.insert(
+                0,
+                f"Displayed bid depth is {bid_ask:.1f}x ask depth near resistance; "
+                "executed-price confirmation is still required.",
+            )
             
         if advanced_score >= 75 and advanced.get("direction") == "bullish":
             score += 4
@@ -200,6 +206,8 @@ class ScoringEngine:
             "pre_breakout_labels": list(dict.fromkeys(labels)),
             "pre_breakout_score": score,
             "pre_breakout_confidence": round(confidence, 1),
+            "pre_breakout_alignment_score": round(confidence, 1),
+            "pre_breakout_confidence_note": "Uncalibrated setup-alignment score, not a probability.",
             "pre_breakout_action": action,
             "setup_type": "Pattern Forming / Pre-Move Setup",
             "breakout_level": round(resistance, 2),
@@ -417,13 +425,17 @@ class ScoringEngine:
         """Runs the full trap analysis and extracts relevant fields."""
         try:
             trap_data = full_trap_analysis(snapshot)
+            footprint = trap_data.get("large_money_footprint", {}) or {}
             return {
                 "trap_risk": trap_data.get("trap_risk"),
                 "safe_to_enter": trap_data.get("safe_to_enter", True),
                 "entry_advice": trap_data.get("entry_advice"),
                 "trap_warnings": trap_data.get("trap_warnings", []),
-                "institutional_buying": trap_data.get("institutional", {}).get("is_institutional_buying", False),
-                "institutional_selling": trap_data.get("institutional", {}).get("is_institutional_selling", False),
+                "large_money_footprint": footprint,
+                "large_money_footprint_bias": footprint.get("bias", "mixed_or_neutral"),
+                "large_money_footprint_score": footprint.get("score", 0.0),
+                "footprint_data_quality": footprint.get("data_quality", {}),
+                "participant_identity_known": False,
             }
         except Exception as e:
             return {
@@ -496,15 +508,20 @@ class ScoringEngine:
         advanced_pattern_score = self._safe(advanced_pattern, "score")
         advanced_pattern_late = bool(advanced_pattern.get("late_entry_risk"))
         advanced_pattern_stage = str(advanced_pattern.get("stage") or "")
+        bullish_reversal_score = 0.0
+        bearish_reversal_score = 0.0
+        selling_exhaustion_score = 0.0
 
-        if snapshot.get("price_above_ema20") and snapshot.get("price_above_ema50"):
+        ema20_known = "price_above_ema20" in snapshot
+        ema50_known = "price_above_ema50" in snapshot
+        if ema20_known and ema50_known and snapshot.get("price_above_ema20") and snapshot.get("price_above_ema50"):
             add_bull(12, "trend", "Price is holding above the 20 and 50 EMA.", "trend_up")
-        elif not snapshot.get("price_above_ema20") and not snapshot.get("price_above_ema50"):
+        elif ema20_known and ema50_known and not snapshot.get("price_above_ema20") and not snapshot.get("price_above_ema50"):
             add_bear(12, "trend", "Price is below the 20 and 50 EMA.", "trend_down")
 
         if snapshot.get("price_above_ema200"):
             add_bull(6, "trend", "Longer-term structure is above the 200 EMA.")
-        elif price and self._safe(snapshot, "ema_200"):
+        elif "price_above_ema200" in snapshot and price and self._safe(snapshot, "ema_200"):
             add_bear(6, "trend", "Longer-term structure is below the 200 EMA.")
 
         trend_regime = str(snapshot.get("trend_regime") or "range")
@@ -514,6 +531,10 @@ class ScoringEngine:
             add_bear(8, "trend", "Trend regime is weakening across the recent swing.")
         else:
             weaknesses.append("Trend regime is still range-bound.")
+
+        trend_edge = components["trend"]
+        trend_direction = "bullish" if trend_edge > 0 else "bearish" if trend_edge < 0 else "range"
+        trend_strength_score = float(_clip((abs(trend_edge) / 26.0) * 100, 0, 100))
 
         if 55 <= rsi <= 68:
             add_bull(8, "momentum", f"RSI is strong at {rsi:.1f} without being overheated.", "momentum")
@@ -598,11 +619,87 @@ class ScoringEngine:
                 if advanced_pattern_stage in {"READY_TO_BREAK", "BREAKOUT_ACTIVE"}:
                     add_bull(5, "volatility", "Pattern is close enough to trigger for live monitoring.", "live_trigger_ready")
 
+        high_volume = relative_volume >= 1.8 or intraday_volume_ratio >= 1.5
+        very_high_volume = relative_volume >= 3.0 or intraday_volume_ratio >= 2.2
+        near_support_now = bool(snapshot.get("near_support")) or distance_to_support_pct <= 1.5
+        near_resistance_now = bool(snapshot.get("near_resistance")) or distance_to_resistance_pct <= 1.5
+        above_vwap_now = bool(snapshot.get("above_vwap") or snapshot.get("intraday_above_vwap"))
+
+        bullish_reversal_thrust = bool(
+            change_pct >= 3.0
+            and high_volume
+            and close_location >= 0.72
+            and upper_wick_pct <= 0.28
+        )
+        bearish_reversal_thrust = bool(
+            change_pct <= -3.0
+            and high_volume
+            and close_location <= 0.28
+            and lower_wick_pct <= 0.28
+        )
+        if bullish_reversal_thrust:
+            bullish_reversal_score += 45
+            if very_high_volume:
+                bullish_reversal_score += 10
+            if trend_direction == "bearish":
+                bullish_reversal_score += 12
+            if rsi <= 35 or near_support_now:
+                bullish_reversal_score += 12
+            if above_vwap_now:
+                bullish_reversal_score += 10
+            bullish_reversal_score = min(100, bullish_reversal_score)
+            add_bull(
+                min(34, 14 + bullish_reversal_score * 0.22),
+                "breakout",
+                "High-volume bullish range expansion closed near the high; a fresh reversal is developing.",
+                "bullish_reversal",
+            )
+        if bearish_reversal_thrust:
+            bearish_reversal_score += 45
+            if very_high_volume:
+                bearish_reversal_score += 10
+            if trend_direction == "bullish":
+                bearish_reversal_score += 12
+            if rsi >= 65 or near_resistance_now:
+                bearish_reversal_score += 12
+            if not above_vwap_now:
+                bearish_reversal_score += 10
+            bearish_reversal_score = min(100, bearish_reversal_score)
+            add_bear(
+                min(34, 14 + bearish_reversal_score * 0.22),
+                "breakout",
+                "High-volume bearish range expansion closed near the low; reversal risk is rising.",
+                "bearish_reversal",
+            )
+
+        if rsi <= 32:
+            selling_exhaustion_score += 30
+        if near_support_now:
+            selling_exhaustion_score += 25
+        if lower_wick_pct >= 0.30:
+            selling_exhaustion_score += 20
+        if high_volume and close_location >= 0.55:
+            selling_exhaustion_score += 15
+        if not snapshot.get("breakdown_20") and (rsi <= 32 or near_support_now):
+            selling_exhaustion_score += 10
+        selling_exhaustion_score = min(100, selling_exhaustion_score)
+        bullish_reversal_score = min(100, bullish_reversal_score + min(20, selling_exhaustion_score * 0.20))
+        if selling_exhaustion_score >= 45:
+            add_bull(
+                8,
+                "momentum",
+                "Oversold price near support raises selling-exhaustion and snapback risk.",
+                "selling_exhaustion",
+            )
+            tags.append("reversal_watch")
+
         if atr_expansion >= 1.2 and abs(change_pct) >= 1:
-            if bullish >= bearish:
+            if change_pct > 0 and close_location >= 0.55:
                 add_bull(4, "volatility", "Range expansion confirms the move.")
-            else:
+            elif change_pct < 0 and close_location <= 0.45:
                 add_bear(4, "volatility", "Range expansion confirms the downside move.")
+            else:
+                weaknesses.append("Range expanded without a clean directional close.")
         elif atr_expansion <= 0.9:
             weaknesses.append("Volatility is compressed and the move still needs expansion.")
 
@@ -614,11 +711,33 @@ class ScoringEngine:
         else:
             direction = "neutral"
 
+        if trend_direction == "bearish":
+            reversal_risk_score = bullish_reversal_score
+            reversal_bias = "bullish" if reversal_risk_score >= 35 else "none"
+        elif trend_direction == "bullish":
+            reversal_risk_score = bearish_reversal_score
+            reversal_bias = "bearish" if reversal_risk_score >= 35 else "none"
+        else:
+            reversal_risk_score = max(bullish_reversal_score, bearish_reversal_score)
+            reversal_bias = (
+                "bullish"
+                if bullish_reversal_score > bearish_reversal_score and reversal_risk_score >= 35
+                else "bearish"
+                if bearish_reversal_score > bullish_reversal_score and reversal_risk_score >= 35
+                else "none"
+            )
+        reversal_watch = reversal_risk_score >= 45
+        if reversal_watch:
+            tags.extend(["reversal_watch", f"{reversal_bias}_reversal_watch"])
+            risk_factors.append(
+                f"The {trend_direction} trend has {reversal_bias} reversal evidence; wait for follow-through confirmation."
+            )
+
         base_confidence = 50 + min(abs(edge) * 1.9, 30) + min(max(bullish, bearish) * 0.28, 14)
-        model_confidence = float(np.clip(base_confidence, 38, 95))
+        model_confidence = float(_clip(base_confidence, 38, 95))
         confidence = model_confidence
         evidence_confidence = None
-        confidence_note = "Confidence is driven by live signal alignment."
+        confidence_note = "Confidence is an uncalibrated live signal-alignment score, not a probability."
 
         historical = {}
         evidence_status = "not_loaded"
@@ -629,7 +748,10 @@ class ScoringEngine:
             if signal_count >= 8:
                 evidence_confidence = float(historical.get("win_rate", 0) * 100)
                 confidence = (model_confidence * 0.72) + (evidence_confidence * 0.28)
-                confidence_note = "Confidence blends live model alignment with historical hit-rate evidence."
+                confidence_note = (
+                    "Confidence blends live signal alignment with historical hit-rate evidence; "
+                    "it is not a calibrated probability."
+                )
                 fpr = historical.get("false_positive_rate", 0)
                 if fpr > 0.55:
                     # >55% false positive rate: significant penalty + block buy
@@ -643,19 +765,22 @@ class ScoringEngine:
                 evidence_confidence = float(historical.get("win_rate", 0) * 100)
                 confidence = min(model_confidence, 86.0)
                 confidence_note = (
-                    f"Confidence is mostly model-driven because only {signal_count} "
-                    "historical matches were found."
+                    f"Confidence is mostly an alignment score because only {signal_count} "
+                    "historical matches were found; it is not a calibrated probability."
                 )
                 weaknesses.append(f"Historical validation is limited to {signal_count} similar signals.")
             elif direction != "neutral":
                 confidence = min(model_confidence, 82.0)
                 confidence_note = (
-                    "Confidence is model-driven; historical evidence is unavailable "
+                    "Confidence is an uncalibrated alignment score; historical evidence is unavailable "
                     "for this setup in the current backtest window."
                 )
                 weaknesses.append("Historical validation is unavailable for this setup in the current window.")
         elif direction != "neutral":
-            confidence_note = "Confidence is driven by live model alignment; historical evidence was not loaded."
+            confidence_note = (
+                "Confidence is an uncalibrated live signal-alignment score, not a probability; "
+                "historical evidence was not loaded."
+            )
 
         risk_score = 0
         if atr_pct >= 4.5:
@@ -676,7 +801,18 @@ class ScoringEngine:
         if historical and historical.get("signal_count", 0) < 12:
             risk_score += 1
 
-        confidence = float(np.clip(confidence, 38, 95))
+        if reversal_watch:
+            if direction == trend_direction:
+                confidence = min(confidence, 68.0)
+                risk_score += 2
+            elif direction != "neutral":
+                # One reversal candle can invalidate bearish certainty, but it
+                # still needs follow-through before it deserves top conviction.
+                confidence = min(confidence, 82.0)
+                risk_score += 1
+            confidence_note += " Reversal uncertainty is capped until follow-through confirms."
+
+        confidence = float(_clip(confidence, 38, 95))
         risk_level = self._risk_level(risk_score)
         alert_level = self._bucket(confidence, direction, risk_level)
 
@@ -691,7 +827,7 @@ class ScoringEngine:
             invalidation = self._safe(snapshot, "ema_20") or price
 
         move_quality = int(
-            np.clip(
+            _clip(
                 max(abs(edge) * 2.2, max(bullish, bearish) * 2.1) - (risk_score * 4) + (10 if direction != "neutral" else -8),
                 25,
                 98,
@@ -699,14 +835,19 @@ class ScoringEngine:
         )
         timeframe_label, timeframe_days = self._timeframe(snapshot, direction, move_quality)
 
-        if direction == "bullish":
+        if reversal_watch and reversal_bias == "bullish" and trend_direction == "bearish":
+            setup_label = "Bullish reversal candidate inside a prior bearish trend"
+        elif reversal_watch and reversal_bias == "bearish" and trend_direction == "bullish":
+            setup_label = "Bearish reversal risk inside a prior bullish trend"
+        elif direction == "bullish":
             setup_label = "Strong bullish setup" if confidence >= 80 and risk_level != "high" else "Constructive bullish setup" if confidence >= 65 else "Weak bullish setup"
         elif direction == "bearish":
             setup_label = "Strong bearish setup" if confidence >= 80 and risk_level != "high" else "Constructive bearish setup" if confidence >= 65 else "Weak bearish setup"
         else:
             setup_label = "No clear edge"
 
-        probability = 0.5 if direction == "neutral" else round(confidence / 100, 4)
+        # Do not manufacture a probability from a heuristic alignment score.
+        probability = None
         signal_summary = "; ".join(reasons[:3]) if reasons else "Confirmation is still weak."
         pattern_context = self._pattern_context(snapshot, direction=direction, price=price)
         pattern_target = self._safe(advanced_pattern, "target_1")
@@ -835,6 +976,9 @@ class ScoringEngine:
         elif demand_supply.get("status") == "supply_pressure":
             tags.extend(["supply_pressure", "seller_pressure"])
             risk_factors.append(demand_supply.get("smartMoneyRead", "Supply pressure is elevated."))
+        if demand_supply.get("reversalWatch"):
+            tags.extend(["reversal_watch", f"{demand_supply.get('reversalBias', 'unknown')}_reversal_watch"])
+            reasons.append(demand_supply.get("visibleFootprintRead", "Reversal evidence needs confirmation."))
         if direction == "bullish" and entry_timing.get("profit_booking_risk") in {"high", "very_high"}:
             tags.extend(["profit_booking_zone", "seller_pressure", "avoid_late_entry"])
             risk_factors.extend(entry_timing.get("reasons", [])[:2])
@@ -880,6 +1024,12 @@ class ScoringEngine:
         if live_pattern_ready and not entry_blocks_fresh_buy:
             signal_stage = "LIVE_PATTERN_READY" if advanced_pattern_stage == "READY_TO_BREAK" else "CONFIRMED_BREAKOUT"
             action = str(advanced_pattern.get("action") or "BUY_ONLY_ON_TRIGGER_HOLD")
+        elif reversal_watch and reversal_bias == "bullish" and trend_direction == "bearish":
+            signal_stage = "BULLISH_REVERSAL_CANDIDATE"
+            action = "WATCH_FOR_CONFIRMATION"
+        elif reversal_watch and reversal_bias == "bearish" and trend_direction == "bullish":
+            signal_stage = "BEARISH_REVERSAL_RISK"
+            action = "REDUCE_OR_WAIT"
         elif "support_bounce" in pattern_context.get("pattern_labels", []) and not entry_blocks_fresh_buy and direction == "bullish":
             signal_stage = "SUPPORT_BOUNCE"
             action = "BUY"
@@ -924,12 +1074,17 @@ class ScoringEngine:
             if live_pattern_ready and not entry_blocks_fresh_buy
             else
             False
-            if (pre_breakout.get("is_pre_breakout") and not live_pattern_ready) or entry_blocks_fresh_buy
+            if (
+                (pre_breakout.get("is_pre_breakout") and not live_pattern_ready)
+                or entry_blocks_fresh_buy
+                or reversal_watch
+            )
             else bool(chase["allow_buy_call"] and entry_timing.get("allow_buy_call", True))
         )
         eval_attention_only = False if (live_pattern_ready or eval_allow_buy_call) else (
             (bool(pre_breakout.get("is_pre_breakout")) and not live_pattern_ready)
             or bool(continuation.get("is_momentum_continuation"))
+            or reversal_watch
             or chase["attention_only"]
             or bool(entry_timing.get("attention_only"))
         )
@@ -940,11 +1095,17 @@ class ScoringEngine:
             "setup_label": setup_label,
             "alert_level": alert_level,
             "confidence": round(confidence, 1),
+            "alignment_score": round(confidence, 1),
             "model_confidence": round(model_confidence, 1),
+            "model_alignment_score": round(model_confidence, 1),
             "evidence_confidence": round(evidence_confidence, 1) if evidence_confidence is not None else None,
             "historical_evidence_status": evidence_status,
             "confidence_note": confidence_note,
             "probability": probability,
+            "probability_available": False,
+            "probability_note": (
+                "No calibrated probability is available; confidence is signal alignment only."
+            ),
             "move_quality": move_quality,
             "expected_move_pct": round(expected_move_pct, 2),
             **pattern_context,
@@ -1031,6 +1192,19 @@ class ScoringEngine:
             "supply_score": demand_supply.get("supplyScore"),
             "trap_risk": demand_supply.get("trapRisk"),
             "trap_risk_score": demand_supply.get("trapRiskScore"),
+            "trend_direction": trend_direction,
+            "trend_strength_score": round(trend_strength_score, 1),
+            "trend_assessment": {
+                "direction": trend_direction,
+                "strength_score": round(trend_strength_score, 1),
+                "score_is_probability": False,
+            },
+            "reversal_watch": reversal_watch,
+            "reversal_bias": reversal_bias,
+            "reversal_risk_score": round(reversal_risk_score, 1),
+            "bullish_reversal_score": round(bullish_reversal_score, 1),
+            "bearish_reversal_score": round(bearish_reversal_score, 1),
+            "selling_exhaustion_score": round(selling_exhaustion_score, 1),
             "attention_only": eval_attention_only,
             "allow_buy_call": eval_allow_buy_call,
             "live_pattern_ready": live_pattern_ready,

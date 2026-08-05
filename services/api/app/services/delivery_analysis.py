@@ -74,7 +74,7 @@ def analyse_delivery(frame: pd.DataFrame) -> Dict:
             signal = "accumulation"
             reason = (
                 f"Delivery ratio {latest:.1%} is {spike_vs_20:.2f}x the 20-day avg "
-                f"with price flat/up — institutional accumulation likely."
+                "with price flat/up — positional accumulation evidence is visible; participant identity is unknown."
             )
         elif delivery_rising and price_change_3d < -0.5:
             signal = "distribution_risk"
@@ -104,6 +104,9 @@ def analyse_delivery(frame: pd.DataFrame) -> Dict:
             "deliveryAvg20d": round(avg_20, 3),
             "deliveryReason": reason,
             "deliveryAvailable": True,
+            "deliverySource": frame.attrs.get("delivery_source", "verified_delivery_column"),
+            "identityInferenceSupported": False,
+            "scoreIsCalibratedProbability": False,
         }
 
     except Exception as exc:
@@ -122,4 +125,7 @@ def _unknown(reason: str) -> Dict:
         "deliveryAvg20d": None,
         "deliveryReason": reason,
         "deliveryAvailable": False,
+        "deliverySource": None,
+        "identityInferenceSupported": False,
+        "scoreIsCalibratedProbability": False,
     }

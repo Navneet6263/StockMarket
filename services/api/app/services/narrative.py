@@ -26,7 +26,7 @@ class NarrativeService:
 
         if direction == "bullish":
             summary = (
-                f"{company_name} shows a {setup_label.lower()} with {confidence:.0f}% confidence. "
+                f"{company_name} shows a {setup_label.lower()} with an evidence alignment score of {confidence:.0f}/100. "
                 f"The current read favors upside continuation of about {abs(move):.2f}% over {timeframe} if support holds."
             )
             watch_next = [
@@ -36,7 +36,7 @@ class NarrativeService:
             ]
         elif direction == "bearish":
             summary = (
-                f"{company_name} shows a {setup_label.lower()} with {confidence:.0f}% confidence. "
+                f"{company_name} shows a {setup_label.lower()} with an evidence alignment score of {confidence:.0f}/100. "
                 f"The current read favors downside continuation of about {abs(move):.2f}% over {timeframe} if resistance holds."
             )
             watch_next = [

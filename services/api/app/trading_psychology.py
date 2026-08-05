@@ -7,15 +7,15 @@ class TradingPsychology:
     def __init__(self):
         self.alert_types = {
             'FALSE_BREAKOUT': '⚠️ FAKE MOVE ALERT',
-            'DONT_EXIT': '🛡️ DIAMOND HANDS',
-            'HARD_EXIT': '🚨 GET OUT NOW',
-            'SAFE_ENTRY': '✅ SAFE TO ENTER',
+            'DONT_EXIT': '🛡️ STOP STILL INTACT',
+            'HARD_EXIT': '🚨 STRUCTURAL INVALIDATION',
+            'SAFE_ENTRY': '✅ CONFIRMATION CANDIDATE',
             'WAIT': '⏸️ WAIT & WATCH'
         }
     
     def analyze_psychology(self, df: pd.DataFrame, prediction: Dict, mtf_data: Dict = None) -> Dict:
         """
-        Main psychology analyzer - Acts as your trading Guru
+        Rule-based behaviour guard. Scores are evidence alignment, not probabilities.
         """
         latest = df.iloc[-1]
         prev = df.iloc[-2]
@@ -48,13 +48,13 @@ class TradingPsychology:
         if self._is_false_breakout(current_price, prev['Close'], vol_ratio, breadth_sentiment, resistance, support):
             return self._false_breakout_alert(current_price, vol_ratio, breadth_sentiment)
         
-        # 2. DON'T EXIT LOGIC (Diamond Hands)
-        if self._should_hold_position(current_price, support, rsi, breadth_sentiment, mtf_sync):
-            return self._dont_exit_alert(current_price, support, rsi, breadth_sentiment)
-        
-        # 3. HARD EXIT LOGIC (Capital Saver)
+        # 2. Structural invalidation always outranks a hold suggestion.
         if self._should_hard_exit(current_price, support, resistance, mtf_sync, vol_ratio):
             return self._hard_exit_alert(current_price, mtf_sync)
+
+        # 3. HOLD/REVIEW LOGIC
+        if self._should_hold_position(current_price, support, rsi, breadth_sentiment, mtf_sync):
+            return self._dont_exit_alert(current_price, support, rsi, breadth_sentiment)
         
         # 4. SAFE ENTRY LOGIC
         if self._is_safe_entry(vol_ratio, breadth_sentiment, mtf_sync, rsi):
@@ -166,21 +166,22 @@ class TradingPsychology:
             'action': 'WAIT',
             'alert_type': 'FALSE_BREAKOUT_DETECTED',
             'risk_status': 'HIGH_RISK',
-            'advice': f"⚠️ FAKE MOVE ALERT! Price is at ₹{price:.2f} but Volume is dying ({vol_ratio:.1f}x). Market breadth is {breadth}. Don't Enter/Exit now. Wait for volume confirmation.",
+            'advice': f"⚠️ Possible failed move at ₹{price:.2f}: volume is {vol_ratio:.1f}x and breadth is {breadth}. Block a fresh entry; manage an existing position only by its structural stop.",
             'confidence': 0.85,
+            'confidence_is_probability': False,
             'emoji': '⚠️',
             'color': '#f97316'
         }
     
     def _dont_exit_alert(self, price: float, support: float, rsi: float, breadth: str) -> Dict:
         """Generate don't exit alert"""
-        bounce_prob = 75 if breadth == 'bullish' else 65
         return {
-            'action': 'HOLD',
-            'alert_type': 'DONT_PANIC_EXIT',
+            'action': 'HOLD_IF_STOP_INTACT',
+            'alert_type': 'SUPPORT_REACTION_WATCH',
             'risk_status': 'CONTROLLED',
-            'advice': f"🛡️ RELAX! Price is at ₹{price:.2f}, near Strong Support ₹{support:.2f}. RSI {rsi:.0f} is oversold. Don't panic exit, reversal expected. Probability of bounce: {bounce_prob}%.",
+            'advice': f"🛡️ Price ₹{price:.2f} is near support ₹{support:.2f} with RSI {rsi:.0f}. A bounce is not guaranteed; hold only while the planned structural stop remains intact and wait for a reclaim candle.",
             'confidence': 0.75,
+            'confidence_is_probability': False,
             'emoji': '🛡️',
             'color': '#22c55e'
         }
@@ -188,11 +189,12 @@ class TradingPsychology:
     def _hard_exit_alert(self, price: float, mtf_sync: str) -> Dict:
         """Generate hard exit alert"""
         return {
-            'action': 'EXIT_NOW',
-            'alert_type': 'HARD_EXIT_REQUIRED',
+            'action': 'EXIT_OR_REDUCE',
+            'alert_type': 'STRUCTURAL_INVALIDATION',
             'risk_status': 'CRITICAL',
-            'advice': f"🚨 GET OUT NOW! Price at ₹{price:.2f}. Trend has FLIPPED ({mtf_sync}). All timeframes turned bearish. Capital preservation is priority. Exit immediately!",
+            'advice': f"🚨 Price ₹{price:.2f} has met the configured structural-exit rule ({mtf_sync}). Do not average down; execute the position's predefined exit/reduction plan.",
             'confidence': 0.90,
+            'confidence_is_probability': False,
             'emoji': '🚨',
             'color': '#ef4444'
         }
@@ -200,11 +202,12 @@ class TradingPsychology:
     def _safe_entry_alert(self, price: float, vol_ratio: float, breadth: str) -> Dict:
         """Generate safe entry alert"""
         return {
-            'action': 'ENTER',
-            'alert_type': 'SAFE_ENTRY_ZONE',
+            'action': 'WAIT_FOR_LIVE_CONFIRMATION',
+            'alert_type': 'ENTRY_CONFIRMATION_CANDIDATE',
             'risk_status': 'LOW_RISK',
-            'advice': f"✅ SAFE TO ENTER at ₹{price:.2f}! Volume is strong ({vol_ratio:.1f}x), Market breadth is {breadth}, and all timeframes aligned. Good risk-reward setup.",
+            'advice': f"✅ Entry candidate near ₹{price:.2f}: volume is {vol_ratio:.1f}x and breadth is {breadth}. Enter only after the live trigger confirms and the structural stop/target pass the risk gate.",
             'confidence': 0.80,
+            'confidence_is_probability': False,
             'emoji': '✅',
             'color': '#22c55e'
         }
@@ -217,6 +220,7 @@ class TradingPsychology:
             'risk_status': 'NEUTRAL',
             'advice': "⏸️ WAIT & WATCH. Signals are mixed. No clear edge right now. Patience is key. Wait for volume confirmation or timeframe alignment.",
             'confidence': 0.50,
+            'confidence_is_probability': False,
             'emoji': '⏸️',
             'color': '#9ca3af'
         }

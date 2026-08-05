@@ -157,7 +157,7 @@ function HotPickCard({ pick, compact = false, onSelect }: { pick: HotPick; compa
           <span className="micro-copy">Updated {formatUpdated(pick.lastUpdated)}</span>
         </div>
         <div className="confidence-ring" style={{ color: toneForDirection(pick.direction) }}>
-          {fmt(pick.confidence, 0)}%
+          {fmt(pick.confidence, 0)}/100
         </div>
       </div>
 
@@ -217,7 +217,7 @@ function BaseFormationCard({ pick }: { pick: BaseFormationPick }) {
           </div>
           <span className="micro-copy">{pick.tradeDecision || "Early accumulation - wait for confirmation"}</span>
         </div>
-        <div className="confidence-ring" style={{ color: toneForDirection(direction) }}>{fmt(pick.accumulationScore, 0)}%</div>
+        <div className="confidence-ring" style={{ color: toneForDirection(direction) }}>{fmt(pick.accumulationScore, 0)}/100</div>
       </div>
       <p className="pick-reason">{pick.whyInteresting}</p>
       {pick.confirmationText ? <div className={`decision-strip ${direction}`}>{pick.confirmationText}</div> : null}
@@ -243,7 +243,7 @@ function BaseFormationCard({ pick }: { pick: BaseFormationPick }) {
 }
 
 function toneForOptionStatus(status: string) {
-  if (status === "STRICT_READY") return "#34d399";
+  if (status === "WATCH_CONTRACT") return "#fbbf24";
   if (status === "WATCH_TRIGGER") return "#fbbf24";
   return "#94a3b8";
 }
@@ -261,7 +261,7 @@ function StrictOptionCard({ idea }: { idea: StrictOptionIdea }) {
           <span className="micro-copy">{idea.bucket} | Nifty gate: {humanize(idea.niftyGate)}</span>
         </div>
         <div className="confidence-ring" style={{ color: toneForOptionStatus(idea.status) }}>
-          {fmt(idea.confidence, 0)}%
+          {fmt(idea.confidence, 0)}/100
         </div>
       </div>
 
@@ -300,7 +300,7 @@ function StrictOptionsPanel({ data }: { data?: HotPicksResponse["strictOptions"]
         <StatCard label="Nifty Gate" value={humanize(data.niftyGate.status)} tone={gateTone} />
         <StatCard label="Nifty Score" value={fmt(data.niftyGate.marketScore, 0)} />
         <StatCard label="PCR" value={data.niftyGate.pcr != null ? fmt(Number(data.niftyGate.pcr), 2) : "-"} />
-        <StatCard label="Ready Options" value={data.summary.strictReady} tone="#34d399" />
+        <StatCard label="Executable Options" value={data.summary.strictReady} tone="#94a3b8" />
         <StatCard label="Watch Options" value={data.summary.watchOnly} tone="#fbbf24" />
       </div>
 
@@ -310,7 +310,7 @@ function StrictOptionsPanel({ data }: { data?: HotPicksResponse["strictOptions"]
         {data.radar.map((idea) => <StrictOptionCard key={`${idea.symbol}-${idea.side}`} idea={idea} />)}
         {!data.radar.length ? (
           <div className="empty-state">
-            No strict option entries right now. Wait for Nifty alignment, trigger confirmation, volume, and tight invalidation.
+            No option research candidates right now. Wait for Nifty alignment, trigger confirmation, volume, and tight invalidation.
           </div>
         ) : null}
       </div>

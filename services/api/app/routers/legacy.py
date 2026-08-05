@@ -56,13 +56,32 @@ async def predict(req: PredictRequest, hub: MarketHubService = Depends(get_marke
     prediction = detail["prediction"]
     explanation = detail["explanation"]
     backtest = detail["backtest"]
+    calibrated_probability = (
+        prediction.get("probability")
+        if prediction.get("probability_available") and prediction.get("probability") is not None
+        else None
+    )
+    if calibrated_probability is None:
+        probability_up = None
+        probability_down = None
+    elif prediction["direction"] == "bullish":
+        probability_up = round(float(calibrated_probability), 4)
+        probability_down = round(1 - float(calibrated_probability), 4)
+    elif prediction["direction"] == "bearish":
+        probability_up = round(1 - float(calibrated_probability), 4)
+        probability_down = round(float(calibrated_probability), 4)
+    else:
+        probability_up = 0.5
+        probability_down = 0.5
     return {
         "symbol": detail["symbol"],
         "horizon": req.horizon,
         "direction": _legacy_direction(prediction["direction"]),
         "confidence": round(prediction["confidence"] / 100, 4),
-        "probability_up": round(prediction["probability"], 4) if prediction["direction"] == "bullish" else round(1 - prediction["probability"], 4) if prediction["direction"] == "bearish" else 0.5,
-        "probability_down": round(1 - prediction["probability"], 4) if prediction["direction"] == "bullish" else round(prediction["probability"], 4) if prediction["direction"] == "bearish" else 0.5,
+        "probability_up": probability_up,
+        "probability_down": probability_down,
+        "probability_available": calibrated_probability is not None,
+        "alignment_score": prediction.get("model_alignment_score", prediction.get("confidence")),
         "predicted_return": round(prediction["expected_move_pct"] / 100, 4),
         "patterns": [],
         "volume_analysis": {

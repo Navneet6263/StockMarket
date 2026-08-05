@@ -250,6 +250,15 @@ class TelegramMarketAlertService:
     def _is_buy_zone(self, item: dict[str, Any]) -> bool:
         if (item.get("direction") or "").lower() not in {"bullish", "up"}:
             return False
+        if (
+            item.get("marketGateBlocked")
+            or item.get("blockedBuyReason")
+            or item.get("tradePlanGateBlocked")
+            or item.get("entry_plan_blocked")
+            or item.get("attention_only")
+            or item.get("allow_buy_call") is False
+        ):
+            return False
 
         action = str(item.get("action") or item.get("effectiveAction") or item.get("recommended_action") or "").upper()
         if action and action not in {"BUY", "REENTRY_BUY", "ALERT", "WATCH", "ALERT_ABOVE_LEVEL"}:
@@ -487,6 +496,13 @@ class TelegramMarketAlertService:
         category: str,
         item: dict[str, Any],
     ) -> None:
+        if (
+            item.get("marketGateBlocked")
+            or item.get("blockedBuyReason")
+            or item.get("tradePlanGateBlocked")
+            or item.get("entry_plan_blocked")
+        ):
+            return
         symbol = item.get("symbol")
         if not symbol:
             return

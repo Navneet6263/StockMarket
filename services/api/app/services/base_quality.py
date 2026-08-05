@@ -104,7 +104,7 @@ def score_base_quality(frame: pd.DataFrame) -> Dict:
         if vol_avg > 0 and vol_late_avg < vol_avg * 0.75:
             score += 15
             labels.append("volume_dryup")
-            reasons.append("Volume has dried up during base — institutional accumulation pattern.")
+            reasons.append("Volume has dried up during the base — a visible contraction pattern; participant identity is unknown.")
         elif vol_avg > 0 and vol_late_avg < vol_avg * 0.9:
             score += 7
             reasons.append("Volume is declining during consolidation.")

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
-JSON_FIELDS = {"reasons", "risk_factors", "tags"}
+JSON_FIELDS = {"reasons", "risk_factors", "tags", "rearm_evidence"}
 BOOL_FIELDS = {"pinned", "ignored", "archived"}
 SCHEMA_COLUMNS = {
     "suggested_at": "TEXT",
@@ -26,6 +27,28 @@ SCHEMA_COLUMNS = {
     "last_checked_at": "TEXT",
     "closed_at": "TEXT",
     "exit_reason": "TEXT",
+    "lifecycle_state": "TEXT",
+    "memory_sessions": "INTEGER DEFAULT 60",
+    "memory_expires_at": "TEXT",
+    "parent_setup_id": "TEXT",
+    "setup_generation": "INTEGER DEFAULT 1",
+    "rearmed_at": "TEXT",
+    "rearmed_setup_id": "TEXT",
+    "continuation_rearmed_at": "TEXT",
+    "target_2_hit_at": "TEXT",
+    "trailing_activated_at": "TEXT",
+    "last_retest_at": "TEXT",
+    "continuation_pivot": "REAL",
+    "post_target_high": "REAL",
+    "post_target_low": "REAL",
+    "rearm_reason": "TEXT",
+    "rearm_evidence": "TEXT",
+    "rearm_blocked_at": "TEXT",
+    "rearm_block_reason": "TEXT",
+    "last_bar_date": "TEXT",
+    "last_bar_low": "REAL",
+    "last_bar_high": "REAL",
+    "last_bar_close": "REAL",
 }
 
 
@@ -35,10 +58,15 @@ class SetupStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _ensure_schema(self):
         with self._connect() as connection:
@@ -90,7 +118,29 @@ class SetupStore:
                     notes TEXT,
                     pinned INTEGER DEFAULT 0,
                     ignored INTEGER DEFAULT 0,
-                    archived INTEGER DEFAULT 0
+                    archived INTEGER DEFAULT 0,
+                    lifecycle_state TEXT,
+                    memory_sessions INTEGER DEFAULT 60,
+                    memory_expires_at TEXT,
+                    parent_setup_id TEXT,
+                    setup_generation INTEGER DEFAULT 1,
+                    rearmed_at TEXT,
+                    rearmed_setup_id TEXT,
+                    continuation_rearmed_at TEXT,
+                    target_2_hit_at TEXT,
+                    trailing_activated_at TEXT,
+                    last_retest_at TEXT,
+                    continuation_pivot REAL,
+                    post_target_high REAL,
+                    post_target_low REAL,
+                    rearm_reason TEXT,
+                    rearm_evidence TEXT,
+                    rearm_blocked_at TEXT,
+                    rearm_block_reason TEXT,
+                    last_bar_date TEXT,
+                    last_bar_low REAL,
+                    last_bar_high REAL,
+                    last_bar_close REAL
                 );
                 CREATE INDEX IF NOT EXISTS idx_tracked_setups_symbol_status ON tracked_setups(symbol, status);
                 CREATE INDEX IF NOT EXISTS idx_tracked_setups_detected_at ON tracked_setups(detected_at DESC);
@@ -114,6 +164,48 @@ class SetupStore:
             for column, definition in SCHEMA_COLUMNS.items():
                 if column not in existing:
                     connection.execute(f"ALTER TABLE tracked_setups ADD COLUMN {column} {definition}")
+            # Backfill lifecycle metadata without rewriting historical outcomes.
+            # datetime(..., '+90 days') is a migration-safe approximation of the
+            # default 60-session memory window for rows created by older builds.
+            connection.execute(
+                """
+                UPDATE tracked_setups
+                SET lifecycle_state = CASE
+                    WHEN status = 'failed' THEN 'INVALIDATED'
+                    WHEN status = 'expired' THEN 'EXPIRED'
+                    WHEN status = 'passed' THEN 'TARGET_1_HIT'
+                    WHEN status = 'watch_only' THEN 'WATCH'
+                    ELSE 'ARMED'
+                END
+                WHERE lifecycle_state IS NULL OR lifecycle_state = ''
+                """
+            )
+            connection.execute(
+                "UPDATE tracked_setups SET memory_sessions = 60 WHERE memory_sessions IS NULL"
+            )
+            connection.execute(
+                """
+                UPDATE tracked_setups
+                SET memory_expires_at = datetime(detected_at, '+90 days')
+                WHERE memory_expires_at IS NULL OR memory_expires_at = ''
+                """
+            )
+            connection.execute(
+                "UPDATE tracked_setups SET setup_generation = 1 WHERE setup_generation IS NULL OR setup_generation < 1"
+            )
+            connection.execute(
+                """
+                UPDATE tracked_setups
+                SET continuation_pivot = COALESCE(target_1, target_price)
+                WHERE continuation_pivot IS NULL AND target_hit_at IS NOT NULL
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tracked_setups_memory
+                ON tracked_setups(symbol, direction, memory_expires_at DESC)
+                """
+            )
 
     def _encode(self, values: dict[str, Any]) -> dict[str, Any]:
         payload = dict(values)
@@ -149,6 +241,38 @@ class SetupStore:
                 (values["id"],),
             ).fetchone()
         return self._decode_row(row) or {}
+
+    def insert_setup_if_no_open(self, values: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """Insert a fresh lifecycle only when no open symbol/direction row exists."""
+        payload = self._encode(values)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT * FROM tracked_setups
+                WHERE symbol = ?
+                  AND direction = ?
+                  AND archived = 0
+                  AND ignored = 0
+                  AND status IN ('active', 'watch_only')
+                ORDER BY detected_at DESC
+                LIMIT 1
+                """,
+                (values["symbol"].upper(), values["direction"]),
+            ).fetchone()
+            if existing is not None:
+                return self._decode_row(existing) or {}, False
+            columns = ", ".join(payload.keys())
+            placeholders = ", ".join(f":{key}" for key in payload)
+            connection.execute(
+                f"INSERT INTO tracked_setups ({columns}) VALUES ({placeholders})",
+                payload,
+            )
+            created = connection.execute(
+                "SELECT * FROM tracked_setups WHERE id = ?",
+                (values["id"],),
+            ).fetchone()
+        return self._decode_row(created) or {}, True
 
     def update_setup(self, setup_id: str, values: dict[str, Any]) -> dict[str, Any] | None:
         if not values:
@@ -192,6 +316,103 @@ class SetupStore:
                 (symbol.upper(), direction),
             ).fetchone()
         return self._decode_row(row)
+
+    def get_rearm_candidate(
+        self,
+        symbol: str,
+        direction: str,
+        now_iso: str,
+        *,
+        include_manual: bool = False,
+    ) -> dict[str, Any] | None:
+        source_clause = "" if include_manual else "AND source_mode != 'manual'"
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT *
+                FROM tracked_setups
+                WHERE symbol = ?
+                  AND direction = ?
+                  AND archived = 0
+                  AND ignored = 0
+                  AND status IN ('passed', 'failed', 'expired')
+                  AND memory_expires_at >= ?
+                  AND (rearmed_setup_id IS NULL OR rearmed_setup_id = '')
+                  {source_clause}
+                ORDER BY COALESCE(last_evaluated_at, detected_at) DESC
+                LIMIT 1
+                """,
+                (symbol.upper(), direction, now_iso),
+            ).fetchone()
+        return self._decode_row(row)
+
+    def insert_rearmed_setup(
+        self,
+        values: dict[str, Any],
+        parent_setup_id: str,
+        rearmed_at: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically create one fresh generation and link its resolved parent.
+
+        The open-row check makes repeated live scans idempotent even when the
+        same symbol remains in several scanner buckets.
+        """
+        payload = self._encode(values)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT * FROM tracked_setups
+                WHERE symbol = ?
+                  AND direction = ?
+                  AND archived = 0
+                  AND ignored = 0
+                  AND status IN ('active', 'watch_only')
+                ORDER BY detected_at DESC
+                LIMIT 1
+                """,
+                (values["symbol"].upper(), values["direction"]),
+            ).fetchone()
+            if existing is not None:
+                return self._decode_row(existing) or {}, False
+
+            parent = connection.execute(
+                """
+                SELECT * FROM tracked_setups
+                WHERE id = ?
+                  AND status IN ('passed', 'failed', 'expired')
+                  AND (rearmed_setup_id IS NULL OR rearmed_setup_id = '')
+                """,
+                (parent_setup_id,),
+            ).fetchone()
+            if parent is None:
+                linked = connection.execute(
+                    "SELECT * FROM tracked_setups WHERE parent_setup_id = ? ORDER BY detected_at DESC LIMIT 1",
+                    (parent_setup_id,),
+                ).fetchone()
+                return self._decode_row(linked) or {}, False
+
+            columns = ", ".join(payload.keys())
+            placeholders = ", ".join(f":{key}" for key in payload)
+            connection.execute(
+                f"INSERT INTO tracked_setups ({columns}) VALUES ({placeholders})",
+                payload,
+            )
+            connection.execute(
+                """
+                UPDATE tracked_setups
+                SET rearmed_at = ?, rearmed_setup_id = ?,
+                    last_update_label = 'Setup re-armed',
+                    last_update_note = 'A fresh confirmed setup created a new lifecycle generation.'
+                WHERE id = ?
+                """,
+                (rearmed_at, values["id"], parent_setup_id),
+            )
+            created = connection.execute(
+                "SELECT * FROM tracked_setups WHERE id = ?",
+                (values["id"],),
+            ).fetchone()
+        return self._decode_row(created) or {}, True
 
     def list_setups(self, query: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
         with self._connect() as connection:
