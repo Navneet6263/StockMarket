@@ -133,6 +133,140 @@ def _is_watch_only(signal: dict[str, Any]) -> bool:
     )
 
 
+def _dashboard_profile(signal: dict[str, Any], *, score: float) -> dict[str, Any]:
+    """Classify static setups without presenting a watch as a live entry."""
+    direction = _direction(signal)
+    action = _action_value(signal)
+    demand = signal.get("demand_supply") or {}
+    trap_risk = str(demand.get("trapRisk") or signal.get("trap_risk") or "").lower()
+    risk_pct = _safe_float(signal.get("riskPct") or signal.get("risk_pct"))
+    rr = _safe_float(signal.get("risk_reward"))
+    relative_volume = _safe_float(signal.get("relative_volume") or signal.get("volume_ratio"), 1.0)
+    return_20d = _safe_float(signal.get("return_20d"))
+    return_60d = _safe_float(signal.get("return_60d"))
+    setup_text = " ".join(
+        str(value or "").lower()
+        for value in (signal.get("setup_type"), signal.get("setup_label"), signal.get("signal_stage"))
+    )
+    tags = {str(tag).lower() for tag in (signal.get("tags") or [])}
+    labels = {str(label).lower() for label in (signal.get("pattern_labels") or [])}
+    base_reset = bool(
+        abs(return_20d) <= 8
+        and (
+            {"base_building", "tight_consolidation", "bollinger_squeeze", "vcp_contraction"}.intersection(tags | labels)
+            or any(word in setup_text for word in ("base", "squeeze", "consolidation"))
+        )
+    )
+    long_term_extended = return_60d >= 35 and not base_reset
+    reversal = bool(
+        signal.get("reversal_watch")
+        or signal.get("countertrend_reversal_plan")
+        or str(signal.get("reversal_bias") or "").lower() == "bullish"
+        or action == "REENTRY_BUY"
+        or any(word in setup_text for word in ("reversal", "support bounce", "retest"))
+    )
+    momentum = bool(
+        signal.get("is_momentum_continuation")
+        or signal.get("is_valid_entry_after_move")
+        or "momentum" in setup_text
+        or "confirmed_breakout" in setup_text
+    )
+    hard_blocked = bool(
+        direction != "bullish"
+        or signal.get("marketGateBlocked")
+        or signal.get("blockedBuyReason")
+        or signal.get("tradePlanGateBlocked")
+        or signal.get("entry_plan_blocked")
+        or trap_risk == "high"
+        or action in {"AVOID", "EXIT", "SELL", "NO_TRADE", "WAIT_FOR_BETTER_ENTRY"}
+    )
+    action_ready = bool(
+        action in {"BUY", "REENTRY_BUY"}
+        and signal.get("allow_buy_call", True) is not False
+        and not signal.get("attention_only")
+    )
+    fast_move_valid = bool(
+        signal.get("is_valid_entry_after_move")
+        and 0 < risk_pct <= 3.0
+        and rr >= 1.5
+        and relative_volume >= 1.2
+    )
+
+    if hard_blocked:
+        bucket = "NO_TRADE"
+        label = "No fresh trade"
+        reason = "Regime, structure, trap, or trade-plan gate blocks a fresh long."
+    elif long_term_extended:
+        bucket = "LONG_TERM_EXTENDED"
+        label = "Extended - base required"
+        reason = f"About {return_60d:.1f}% up over 60 sessions without a confirmed base reset; do not chase."
+    elif _has_late_entry_risk(signal) and not fast_move_valid:
+        bucket = "WAIT_RETEST"
+        label = "Retest only"
+        reason = "Fast/extended move lacks a tight validated continuation plan; wait for a new base or retest."
+    elif reversal:
+        bucket = "REVERSAL_READY" if action_ready else "REVERSAL_WATCH"
+        label = "Reversal ready" if action_ready else "Reversal trigger watch"
+        reason = "Base/reclaim evidence is present; live price-volume confirmation is still required."
+    elif momentum:
+        bucket = "MOMENTUM_READY" if action_ready or fast_move_valid else "MOMENTUM_WATCH"
+        label = "Momentum ready" if bucket == "MOMENTUM_READY" else "Momentum trigger watch"
+        reason = "Volume-backed continuation structure is present; live confirmation decides the entry."
+    elif action_ready:
+        bucket = "SETUP_READY"
+        label = "Setup ready"
+        reason = "The static setup passed structure and risk gates; wait for the live trigger."
+    else:
+        bucket = "TRIGGER_WATCH"
+        label = "Trigger watch"
+        reason = "Good setup evidence exists, but the entry trigger has not confirmed yet."
+
+    dashboard_eligible = bucket in {
+        "REVERSAL_READY", "REVERSAL_WATCH", "MOMENTUM_READY",
+        "MOMENTUM_WATCH", "SETUP_READY", "TRIGGER_WATCH",
+    }
+    footprint = signal.get("large_money_footprint") or {}
+    footprint_score = _safe_float(
+        footprint.get("score") if isinstance(footprint, dict) else signal.get("large_money_footprint_score")
+    )
+    mtf_risk_fit = bool(
+        bucket in {"REVERSAL_READY", "MOMENTUM_READY", "SETUP_READY"}
+        and score >= 75
+        and 0 < risk_pct <= 2.5
+        and rr >= 2.0
+        and relative_volume >= 1.5
+        and footprint_score >= 20
+        and not long_term_extended
+    )
+    return {
+        "sourceAction": action or "WATCH",
+        "dashboardBucket": bucket,
+        "dashboardAction": label,
+        "dashboardReason": reason,
+        "dashboardEligible": dashboard_eligible,
+        "longTermExtended": long_term_extended,
+        "return20d": round(return_20d, 2),
+        "return60d": round(return_60d, 2),
+        "mtfRiskFit": mtf_risk_fit,
+        "mtfRiskNote": (
+            "Technical risk fits the strict MTF screen; broker eligibility, funding cost, and live confirmation remain mandatory."
+            if mtf_risk_fit
+            else "Not cleared by the strict MTF risk screen."
+        ),
+    }
+
+
+def _dashboard_candidate_allowed(item: dict[str, Any], tracked_symbols: set[str]) -> bool:
+    raw = item.get("raw") or {}
+    live_watch = bool(raw.get("requires_live_confirmation"))
+    return bool(
+        (item.get("score", 0) >= 70 or item.get("symbol") in tracked_symbols)
+        and item.get("dashboardEligible", False)
+        and (not raw.get("attention_only") or live_watch)
+        and (item.get("freshEntryAllowed", True) or live_watch)
+    )
+
+
 def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: float | None = None) -> dict[str, str]:
     direction = _direction(signal)
     price = _safe_float(signal.get("current_price") or signal.get("price"))
@@ -477,6 +611,7 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
     trigger = _signal_trigger(signal)
     stop = _signal_fail_level(signal)
     guidance = _guidance(signal, trigger=trigger, fail=stop)
+    dashboard = _dashboard_profile(signal, score=score)
     demand_supply = signal.get("demand_supply") or {}
     reason_parts = [
         _prediction_wording(signal, score),
@@ -543,6 +678,7 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "trapRisk": demand_supply.get("trapRisk") or signal.get("trap_risk"),
         "trapRiskScore": demand_supply.get("trapRiskScore") or signal.get("trap_risk_score"),
         "smartMoneyRead": demand_supply.get("smartMoneyRead"),
+        **dashboard,
         "raw": signal,
         "freshEntryAllowed": bool(
             not signal.get("marketGateBlocked")
@@ -818,12 +954,23 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         else:
             eligible.append(item)
 
-    hot = [
+    dashboard_priority = {
+        "REVERSAL_READY": 60,
+        "MOMENTUM_READY": 55,
+        "SETUP_READY": 50,
+        "REVERSAL_WATCH": 40,
+        "MOMENTUM_WATCH": 35,
+        "TRIGGER_WATCH": 30,
+    }
+    dashboard_candidates = [
         item for item in eligible
-        if (item["score"] >= 70 or item["symbol"] in tracked_symbols)
-        and not item.get("raw", {}).get("attention_only")
-        and item.get("freshEntryAllowed", True)
-    ][:12]
+        if _dashboard_candidate_allowed(item, tracked_symbols)
+    ]
+    dashboard_candidates.sort(
+        key=lambda item: (dashboard_priority.get(item.get("dashboardBucket"), 0), item["score"]),
+        reverse=True,
+    )
+    hot = dashboard_candidates[:12]
 
     # Enrich top hot picks with AI analysis (Finnhub + Gemini)
     if AI_AVAILABLE:
@@ -864,7 +1011,10 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
             except Exception:
                 pass  # AI failure should never break hot picks
 
-    hot.sort(key=lambda item: item["score"], reverse=True)
+    hot.sort(
+        key=lambda item: (dashboard_priority.get(item.get("dashboardBucket"), 0), item["score"]),
+        reverse=True,
+    )
     hot_symbols = {item["symbol"] for item in hot}
     watchlist = [
         item for item in eligible

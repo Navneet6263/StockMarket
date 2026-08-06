@@ -137,8 +137,15 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
 
   const change = item.change_pct ?? item.changePct ?? item.raw?.change_pct ?? 0;
   const price = item.currentPrice ?? item.current_price ?? item.price ?? item.raw?.current_price ?? item.raw?.price ?? 0;
-  const action = item.action ?? item.effectiveAction ?? item.display_action ?? item.recommended_action ?? "WATCH";
-  const actionClass = action === "BUY" || action === "REENTRY_BUY" ? "buy" : action === "SELL" ? "sell" : "watch";
+  const sourceAction = item.action ?? item.effectiveAction ?? item.display_action ?? item.recommended_action ?? item.sourceAction ?? "WATCH";
+  const action = tab === "dashboard" ? (item.dashboardAction || sourceAction) : sourceAction;
+  const actionBucket = item.dashboardBucket || "";
+  const actionClass = actionBucket.endsWith("_READY") || action === "BUY" || action === "REENTRY_BUY"
+    ? "buy"
+    : action === "SELL" || actionBucket === "NO_TRADE" ? "sell" : "watch";
+  const actionText = tab === "dashboard"
+    ? action
+    : action === "BUY" ? "✅ BUY" : action === "SELL" ? "🛑 SELL" : "👁️ WATCH";
   const direction = item.direction || "neutral";
   const chartPattern = item.chartPattern ?? item.setupType ?? item.setup_type ?? item.raw?.setup_type;
   const patternLabels = item.patternLabels ?? item.pattern_labels ?? item.raw?.pattern_labels ?? [];
@@ -210,7 +217,9 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
         <span className={`stock-change ${change >= 0 ? "up" : "down"}`}>{fmtPct(change)}</span>
       </div>
       <div className="stock-meta">
-        <span className={`tag ${actionClass}`}>{action === 'BUY' ? '✅ BUY' : action === 'SELL' ? '🛑 SELL' : '👁️ WATCH'}</span>
+        <span className={`tag ${actionClass}`}>{actionText}</span>
+        {item.mtfRiskFit ? <span className="tag buy">MTF RISK FIT · BROKER CHECK</span> : null}
+        {item.return60d != null && Math.abs(item.return60d) >= 20 ? <span className="tag">60-session move {fmtPct(item.return60d)}</span> : null}
         {(item.risk_reward || item.rr) ? <span className="tag">⚖️ RR 1:{fmt(item.risk_reward ?? item.rr, 1)}</span> : null}
         {item.riskPct != null ? <span className="tag">Stop risk {fmt(item.riskPct, 2)}%</span> : null}
         {item.maxPositionPctAt1PctAccountRisk != null ? (
@@ -244,6 +253,12 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
         <div className="demand-panel" style={{ marginTop: 10, borderColor: "var(--orange)" }}>
           <div className="stock-meta"><span className="tag watch">WATCH ONLY - BETTER ENTRY NEEDED</span></div>
           <p className="stock-reason">{item.entry_plan_blocked_reason || "Current structural stop/target does not justify a live entry."}</p>
+        </div>
+      ) : null}
+      {tab === "dashboard" && item.dashboardReason ? (
+        <div className="demand-panel" style={{ marginTop: 10, borderColor: actionClass === "buy" ? "var(--green)" : "var(--yellow)" }}>
+          <p className="stock-reason">{item.dashboardReason}</p>
+          {item.mtfRiskFit ? <p className="stock-reason">{item.mtfRiskNote}</p> : null}
         </div>
       ) : null}
       {liveStatus ? (
@@ -824,23 +839,9 @@ function extractItems(tab: string, data: any): any[] {
   }
   if (tab === "volume-boomers") return data.volumeBoomers || (data.hotPicks || data.top_opportunities || []).filter((x: any) => (x.relative_volume ?? x.raw?.relative_volume ?? 1) >= 3);
   if (tab === "live-action") {
-    const confirmed = data.entries || data.liveAction || [];
-    const confirmedSymbols = new Set(confirmed.map((item: any) => item.symbol));
-    const assessments = (data.assessments || [])
-      .filter((item: any) => !confirmedSymbols.has(item.symbol))
-      .map((item: any) => ({
-        ...item,
-        current_price: item.features?.price,
-        entry_trigger: item.entryLevel,
-        action: item.status,
-        liveTriggerStatus: item.status,
-        liveTriggerScore: item.score,
-        liveTriggerScoreMeaning: item.scoreMeaning,
-        liveConfirmationMode: item.confirmationMode,
-        liveConfirmation: item,
-        setup_label: item.status === "WAIT" ? "Waiting for live evidence" : "Live setup rejected for now",
-      }));
-    return [...confirmed, ...assessments];
+    // Execution tab: render only fresh broker-tick confirmations. WAIT/REJECT
+    // remain available in the diagnostic counters above the cards.
+    return data.entries || data.liveAction || [];
   }
   if (tab === "traps") return data.trap_signals || [];
   if (tab === "pbs") return data.pbsRadar || [];
