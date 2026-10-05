@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_URL, humanize, fmt, fmtPct, asNumber } from "./lib/market";
 import { stockCardModel } from "./lib/stock-card-model";
@@ -508,6 +508,200 @@ function StockDetail({ symbol, onClose }: { symbol: string; onClose: () => void 
 }
 
 // ── Options Dashboard — REBUILT ──────────────────────────────────────────────
+// Smart Options Intelligence Panel
+function SmartOptionsPanel() {
+  const [activeSmartIndex, setActiveSmartIndex] = useState("NIFTY");
+  const [smartData, setSmartData] = useState<Record<string, any>>({});
+  const [fnoData, setFnoData] = useState<any>(null);
+  const [loadingSmart, setLoadingSmart] = useState(false);
+  const [loadingFno, setLoadingFno] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const INDEX_SMART = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
+  const fetchSmart = async (sym: string) => {
+    setLoadingSmart(true);
+    try {
+      const r = await fetch(`${API_URL}/api/market/smart-options?symbol=${sym}`, { cache: "no-store" });
+      if (r.ok) {
+        const json = await r.json();
+        setSmartData(prev => ({ ...prev, [sym]: json }));
+        setLastUpdate(new Date());
+      }
+    } catch {}
+    setLoadingSmart(false);
+  };
+  const fetchFno = async () => {
+    setLoadingFno(true);
+    try {
+      const r = await fetch(`${API_URL}/api/market/fno-options-scan`, { cache: "no-store" });
+      if (r.ok) setFnoData(await r.json());
+    } catch {}
+    setLoadingFno(false);
+  };
+  useEffect(() => {
+    fetchSmart(activeSmartIndex);
+    const t = setInterval(() => fetchSmart(activeSmartIndex), 60000);
+    return () => clearInterval(t);
+  }, [activeSmartIndex]);
+  useEffect(() => {
+    fetchFno();
+    const t = setInterval(fetchFno, 180000);
+    return () => clearInterval(t);
+  }, []);
+  const sd = smartData[activeSmartIndex];
+  const ss = sd?.smart_signals;
+  const vc = (d: string) => d === "bullish" ? "var(--green)" : d === "bearish" ? "var(--red)" : "var(--orange)";
+  const confBar = (c: number) => (
+    <div style={{ height: 5, borderRadius: 3, background: "var(--border)", marginTop: 4, overflow: "hidden" }}>
+      <div style={{ height: "100%", width: `${Math.min(c, 100)}%`, background: c >= 65 ? "var(--green)" : c >= 40 ? "var(--orange)" : "var(--red)", transition: "width 0.5s" }} />
+    </div>
+  );
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <h2 className="section-title" style={{ margin: 0 }}>🧠 Smart Options Intelligence</h2>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {lastUpdate && <span style={{ fontSize: 11, color: "var(--muted)" }}>1-min refresh · {lastUpdate.toLocaleTimeString()}</span>}
+          <button onClick={() => { fetchSmart(activeSmartIndex); fetchFno(); }} className="refresh-btn" disabled={loadingSmart} style={{ fontSize: 12, padding: "4px 10px" }}>{loadingSmart ? "⟳" : "↻ Now"}</button>
+        </div>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>
+        📡 OI velocity · IV skew · gamma · max pain — <strong style={{ color: "var(--red)" }}>Delivery excluded</strong>, options/intraday only
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {INDEX_SMART.map(sym => (
+          <button key={sym} className={`options-index-tab ${activeSmartIndex === sym ? "active" : ""}`}
+            onClick={() => setActiveSmartIndex(sym)} style={{ fontSize: 13, padding: "6px 14px" }}>
+            {sym === "BANKNIFTY" ? "Bank Nifty" : sym === "FINNIFTY" ? "Fin Nifty" : sym === "MIDCPNIFTY" ? "Midcap" : "Nifty 50"}
+          </button>
+        ))}
+      </div>
+      {loadingSmart && !ss ? (
+        <div className="empty-msg">⟳ Loading {activeSmartIndex} signals…</div>
+      ) : ss ? (
+        <>
+          <div style={{ background: "rgba(20,20,30,0.95)", border: `2px solid ${vc(ss.verdict?.direction)}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>Combined Verdict · {activeSmartIndex}</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: vc(ss.verdict?.direction) }}>{ss.verdict?.action_label || ss.verdict?.action || "WAIT"}</div>
+                <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 4 }}>{ss.verdict?.reason}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>Confidence</div>
+                <div style={{ fontSize: 28, fontWeight: 900, color: vc(ss.verdict?.direction) }}>{ss.verdict?.confidence ?? 0}%</div>
+                {confBar(ss.verdict?.confidence ?? 0)}
+              </div>
+            </div>
+            {ss.verdict?.reasons?.length > 0 && (
+              <div style={{ marginTop: 10 }}>{ss.verdict.reasons.map((r: string, i: number) => <div key={i} style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>• {r}</div>)}</div>
+            )}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12, marginBottom: 16 }}>
+            <div className="demand-panel" style={{ borderColor: vc(ss.oi_velocity?.direction || "neutral") }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>⚡ OI Velocity (1-min)</div>
+              {ss.oi_velocity?.available ? (
+                <>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: vc(ss.oi_velocity.direction) }}>{ss.oi_velocity.signal}</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>{ss.oi_velocity.label}</div>
+                  {confBar(ss.oi_velocity.confidence ?? 0)}
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 5 }}>CE +{fmt(ss.oi_velocity.total_ce_oi_added)} | PE +{fmt(ss.oi_velocity.total_pe_oi_added)}</div>
+                  {ss.oi_velocity.top_strikes?.slice(0, 3).map((s: any, i: number) => (
+                    <div key={i} style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>Strike {s.strike}: {s.net_activity === "PE_BUILD" ? "🔴 PE" : "🟢 CE"} +{fmt(Math.abs(s.pe_oi_added || s.ce_oi_added))}</div>
+                  ))}
+                  <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4 }}>{ss.oi_velocity.snapshots_used} snaps · {ss.oi_velocity.elapsed_minutes}min</div>
+                </>
+              ) : <div style={{ fontSize: 12, color: "var(--muted)" }}>Building 1-min buffer ({ss.oi_velocity?.snapshots_held ?? 0}/2)…</div>}
+            </div>
+            <div className="demand-panel" style={{ borderColor: vc(ss.iv_skew?.direction || "neutral") }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>📐 IV Skew</div>
+              {ss.iv_skew?.available ? (
+                <>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: vc(ss.iv_skew.direction) }}>{ss.iv_skew.signal?.replace(/_/g, " ")}</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>{ss.iv_skew.label}</div>
+                  {confBar(ss.iv_skew.confidence ?? 0)}
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 5 }}>CE IV: {ss.iv_skew.avg_ce_iv_pct}% · PE IV: {ss.iv_skew.avg_pe_iv_pct}%</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>Ratio: <strong style={{ color: "#fff" }}>{ss.iv_skew.skew_ratio}</strong> · ATM: {ss.iv_skew.atm_strike}</div>
+                </>
+              ) : <div style={{ fontSize: 12, color: "var(--muted)" }}>No IV data: {ss.iv_skew?.reason}</div>}
+            </div>
+            <div className="demand-panel" style={{ borderColor: ss.gamma_exposure?.squeeze_imminent ? "var(--orange)" : "var(--border)" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>🌀 Gamma Exposure</div>
+              {ss.gamma_exposure?.available ? (
+                <>
+                  {ss.gamma_exposure.squeeze_imminent && <div style={{ fontSize: 12, fontWeight: 700, color: "var(--orange)", marginBottom: 4 }}>🚨 SQUEEZE IMMINENT</div>}
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>{ss.gamma_exposure.label}</div>
+                  {ss.gamma_exposure.flip_point && <div style={{ fontSize: 12, color: "var(--yellow)", marginTop: 6 }}>🔀 Flip: <strong>{ss.gamma_exposure.flip_point}</strong></div>}
+                  {ss.gamma_exposure.high_gamma_strikes?.slice(0, 3).map((s: any, i: number) => (
+                    <div key={i} style={{ fontSize: 11, color: s.squeeze_probability === "high" ? "var(--orange)" : "var(--muted)", marginTop: 3 }}>
+                      {s.squeeze_probability === "high" ? "🔥" : "🟡"} {s.strike} ({s.distance_pct}% away)
+                    </div>
+                  ))}
+                </>
+              ) : <div style={{ fontSize: 12, color: "var(--muted)" }}>No Greek data</div>}
+            </div>
+            <div className="demand-panel" style={{ borderColor: ss.max_pain_gravity?.pin_probability === "very_high" ? "var(--orange)" : ss.max_pain_gravity?.pin_probability === "high" ? "var(--yellow)" : "var(--border)" }}>
+              <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>🧲 Max Pain</div>
+              {ss.max_pain_gravity?.available ? (
+                <>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: "#fff" }}>₹{fmt(ss.max_pain_gravity.max_pain)}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>Band: ₹{fmt(ss.max_pain_gravity.gravity_band?.[0])} – ₹{fmt(ss.max_pain_gravity.gravity_band?.[1])}</div>
+                  <div style={{ fontSize: 12, color: ss.max_pain_gravity.pin_probability === "very_high" ? "var(--orange)" : "var(--yellow)", marginTop: 5, fontWeight: 600 }}>{ss.max_pain_gravity.pin_label}</div>
+                  <div style={{ fontSize: 11, color: vc(ss.max_pain_gravity.gravity_direction), marginTop: 3 }}>{ss.max_pain_gravity.gravity_label}</div>
+                  <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 3 }}>Dist: {ss.max_pain_gravity.distance_pct}% · {ss.max_pain_gravity.days_to_expiry}d expiry</div>
+                </>
+              ) : <div style={{ fontSize: 12, color: "var(--muted)" }}>Max pain unavailable</div>}
+            </div>
+          </div>
+        </>
+      ) : !loadingSmart && <div className="empty-msg">Smart signals loading…</div>}
+      <div style={{ marginTop: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <h3 style={{ margin: 0, fontSize: 15, color: "#fff" }}>📋 F&O Stock Options Scan <span style={{ fontSize: 11, color: "var(--red)", fontWeight: 400 }}>(NO delivery)</span></h3>
+          {loadingFno && <span style={{ fontSize: 11, color: "var(--muted)", animation: "pulse 1s infinite" }}>⟳</span>}
+        </div>
+        {fnoData ? (
+          <>
+            <div style={{ fontSize: 12, marginBottom: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span className={`tag ${fnoData.nifty_gate?.side === "bullish" ? "buy" : fnoData.nifty_gate?.side === "bearish" ? "sell" : "watch"}`}>Gate: {fnoData.nifty_gate?.status?.replace(/_/g, " ")}</span>
+              <span className="tag">Scanned: {fnoData.total_fno_scanned} F&O stocks</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              <div>
+                <div style={{ fontSize: 13, color: "var(--green)", fontWeight: 700, marginBottom: 8 }}>📈 CE Candidates</div>
+                {fnoData.ce_candidates?.length ? fnoData.ce_candidates.slice(0, 8).map((c: any, i: number) => (
+                  <div key={i} style={{ background: "rgba(34,197,94,0.07)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 8, padding: "8px 10px", marginBottom: 7 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <strong style={{ color: "#fff" }}>{c.symbol}</strong>
+                      <span className="tag buy" style={{ fontSize: 10 }}>CE WATCH</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>₹{fmt(c.underlying_price)} · Trigger: ₹{fmt(c.underlying_trigger)}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>SL: ₹{fmt(c.underlying_invalidation)} · Tgt: ₹{fmt(c.underlying_structure_target)}</div>
+                    {c.strategy && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 2 }}>{c.strategy}</div>}
+                  </div>
+                )) : <div style={{ fontSize: 12, color: "var(--muted)" }}>No CE setups right now</div>}
+              </div>
+              <div>
+                <div style={{ fontSize: 13, color: "var(--red)", fontWeight: 700, marginBottom: 8 }}>📉 PE Candidates</div>
+                {fnoData.pe_candidates?.length ? fnoData.pe_candidates.slice(0, 8).map((c: any, i: number) => (
+                  <div key={i} style={{ background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "8px 10px", marginBottom: 7 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <strong style={{ color: "#fff" }}>{c.symbol}</strong>
+                      <span className="tag sell" style={{ fontSize: 10 }}>PE WATCH</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>₹{fmt(c.underlying_price)} · Trigger: ₹{fmt(c.underlying_trigger)}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>SL: ₹{fmt(c.underlying_invalidation)} · Tgt: ₹{fmt(c.underlying_structure_target)}</div>
+                    {c.strategy && <div style={{ fontSize: 11, color: "var(--red)", marginTop: 2 }}>{c.strategy}</div>}
+                  </div>
+                )) : <div style={{ fontSize: 12, color: "var(--muted)" }}>No PE setups right now</div>}
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8, padding: "6px 10px", background: "rgba(255,165,0,0.07)", borderRadius: 6 }}>⚠️ {fnoData.note}</div>
+          </>
+        ) : loadingFno ? <div className="empty-msg">⟳ Scanning…</div> : <div className="empty-msg">FNO scan unavailable</div>}
+      </div>
+    </div>
+  );
+}
 function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
   const [activeIndex, setActiveIndex] = useState("NIFTY");
   const [data, setData] = useState<any>(null);
@@ -552,6 +746,7 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
 
   return (
     <div className="options-dashboard">
+      <SmartOptionsPanel />
       {/* ── Index Selector ── */}
       <div className="options-index-tabs">
         {INDEX_LIST.map(idx => (
@@ -1113,6 +1308,7 @@ export default function Page() {
             <StockDetail symbol={selectedSymbol} onClose={() => setSelectedSymbol(null)} />
           ) : (
             <>
+              {tab === "dashboard" && <SmartOptionsPanel />}
               <div className="stats-row">
                 <div className="stat-card"><span>📊 Scanned</span><strong>{stats.totalScanned ?? stats.total_scanned_universe ?? "..."}</strong></div>
                 <div className="stat-card"><span>🔥 Hot Picks</span><strong style={{ color: "var(--green)" }}>{stats.highConfidence ?? stats.high_priority ?? 0}</strong></div>

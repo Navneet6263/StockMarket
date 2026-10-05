@@ -378,3 +378,121 @@ async def market_indices():
     except Exception as e:
         logger.exception("Failed to fetch index quotes")
         return []
+
+
+@router.get("/market/smart-options")
+async def market_smart_options(
+    symbol: str = Query("NIFTY"),
+):
+    """
+    Smart Options Intelligence — 4 proprietary signals:
+    1. OI Change Velocity (1-min institutional build/unwind rate per strike)
+    2. IV Skew Asymmetry (smart money directional bet)
+    3. Gamma Exposure (MM delta-hedging acceleration zones)
+    4. Max Pain Gravity (option writer pin zone + expiry magnet)
+    Works for: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY
+    """
+    from app.services.options_intelligence import run_options_intelligence
+
+    normalized = str(symbol or "").strip().upper()
+    if normalized not in SUPPORTED_INDEX_SYMBOLS:
+        normalized = "NIFTY"
+    try:
+        analyzer = OptionsAnalyzer()
+        raw = await asyncio.to_thread(analyzer.get_full_analysis, normalized)
+        chain_snapshot = {
+            "symbol": normalized,
+            "spot_price": raw.get("spot_price", 0),
+            "max_pain": raw.get("max_pain", 0),
+            "days_to_expiry": raw.get("days_to_expiry", 10),
+            "strikes": [
+                {
+                    "strike": row.get("strike", 0),
+                    "ce_oi": row.get("call_oi", 0),
+                    "pe_oi": row.get("put_oi", 0),
+                    "ce_iv": row.get("call_iv", 0),
+                    "pe_iv": row.get("put_iv", 0),
+                    "ce_greeks": {"gamma": row.get("call_gamma", 0), "iv": row.get("call_iv", 0)},
+                    "pe_greeks": {"gamma": row.get("put_gamma", 0), "iv": row.get("put_iv", 0)},
+                }
+                for row in raw.get("chain_data", [])
+            ],
+        }
+        smart_signals = await asyncio.to_thread(run_options_intelligence, normalized, chain_snapshot, True)
+        return {
+            "symbol": normalized,
+            "spot_price": raw.get("spot_price"),
+            "max_pain": raw.get("max_pain"),
+            "pcr": raw.get("pcr"),
+            "days_to_expiry": raw.get("days_to_expiry"),
+            "smart_signals": smart_signals,
+            "base_recommendation": raw.get("recommendation", {}),
+        }
+    except Exception as e:
+        logger.exception("Smart options intelligence failed for %s", symbol)
+        return {"symbol": normalized, "error": str(e), "smart_signals": None}
+
+
+@router.get("/market/fno-options-scan")
+async def market_fno_options_scan(
+    hub: MarketHubService = Depends(get_market_hub),
+):
+    """
+    Scan F&O stocks for strong options setups.
+    Delivery excluded — options/intraday only.
+    Returns top CE and PE candidates from live market scan.
+    """
+    from app.services.strict_options import build_nifty_option_gate, build_strict_option_idea, is_fno_symbol
+
+    try:
+        payload = await scan_market_with_timeout(hub, False)
+        nifty_gate = build_nifty_option_gate(payload)
+
+        all_items = (
+            payload.get("hotPicks", [])
+            + payload.get("top_opportunities", [])
+            + payload.get("breakout_radar", [])
+            + payload.get("momentumRadar", [])
+        )
+
+        fno_items = []
+        seen: set = set()
+        for item in all_items:
+            sym = str(item.get("symbol", "")).upper()
+            if not sym or sym in seen:
+                continue
+            if not is_fno_symbol(sym):
+                continue
+            conf = item.get("confidence", item.get("score", 0)) or 0
+            if conf < 65:
+                continue
+            direction = str(item.get("direction", "")).lower()
+            if direction not in ("bullish", "bearish"):
+                continue
+            seen.add(sym)
+            fno_items.append(item)
+
+        ce_ideas, pe_ideas = [], []
+        for item in fno_items[:30]:
+            direction = str(item.get("direction", "")).lower()
+            option_idea = build_strict_option_idea(item, nifty_gate, "fno_scan")
+            if not option_idea.get("blocked"):
+                if direction == "bullish":
+                    ce_ideas.append(option_idea)
+                else:
+                    pe_ideas.append(option_idea)
+
+        ce_ideas.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+        pe_ideas.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+
+        return {
+            "generated_at": payload.get("generated_at", datetime.now(timezone.utc).isoformat()),
+            "nifty_gate": nifty_gate,
+            "ce_candidates": ce_ideas[:10],
+            "pe_candidates": pe_ideas[:10],
+            "total_fno_scanned": len(fno_items),
+            "note": "Delivery excluded. Options/intraday only. Confirm with price action.",
+        }
+    except Exception as e:
+        logger.exception("FNO options scan failed")
+        return {"error": str(e), "ce_candidates": [], "pe_candidates": []}
