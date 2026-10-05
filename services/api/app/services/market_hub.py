@@ -47,8 +47,15 @@ def _select_gtf_zone(zones: list[Dict], current_price: float, zone_type: str) ->
 
     candidates: list[Dict] = []
     for zone in zones:
-        proximal = float(zone["proximal"])
-        distal = float(zone["distal"])
+        try:
+            prox_val = zone.get("proximal")
+            dist_val = zone.get("distal")
+            if prox_val is None or dist_val is None:
+                continue
+            proximal = float(prox_val)
+            distal = float(dist_val)
+        except (TypeError, ValueError):
+            continue
         if zone_type == "demand":
             inside = distal <= current_price <= proximal
             nearby = proximal < current_price <= proximal * 1.05
@@ -958,7 +965,9 @@ class MarketHubService:
             signal["current_price"] = round(safe_float(quote.get("price"), signal["current_price"]), 2)
             signal["change_pct"] = round(safe_float(quote.get("change_percent"), signal["change_pct"]), 2)
             signal["volume"] = safe_int(quote.get("volume"), signal["volume"])
-        return signal | {"backtest": backtest}
+        from app.services.book_strategy import apply_candle_gate, build_candle_context
+        signal["candle_setup"] = build_candle_context(frame, intraday_frame, enhanced=with_backtest)
+        return apply_candle_gate(signal) | {"backtest": backtest}
 
     def _catalyst_summary(self, symbol: str) -> Dict:
         try:
@@ -1194,7 +1203,7 @@ class MarketHubService:
                 item.get("live_pattern_ready")
                 and item.get("direction") == "bullish"
                 and not item.get("pattern_late_entry_risk")
-                and item.get("risk_reward", 0) >= 1.3
+                and (item.get("risk_reward") or 0) >= 1.3
                 and item.get("allow_buy_call", True)
             )
 
@@ -1206,7 +1215,7 @@ class MarketHubService:
                 and not item.get("attention_only", False)
                 and not item.get("overextended_fresh_entry", False)
                 and item.get("setup_stage") not in {"CHASE_RISK", "AVOID_LATE_ENTRY", "PROFIT_BOOKING_RISK"}
-                and item.get("risk_reward", 0) >= 1.0
+                and (item.get("risk_reward") or 0) >= 1.0
             ],
             key=lambda item: (
                 is_live_pattern_ready(item),
@@ -1233,7 +1242,7 @@ class MarketHubService:
                 or item.get("continuation_type") == "pullback"
                 or "support_bounce" in item.get("pattern_labels", [])
             ],
-            key=lambda item: (item.get("confidence", 0), item.get("risk_reward", 0), item.get("benchmark_relative_strength", 0)),
+            key=lambda item: (item.get("confidence", 0), item.get("risk_reward") or 0, item.get("benchmark_relative_strength", 0)),
             reverse=True,
         ))[:500]
 
@@ -1487,6 +1496,7 @@ class MarketHubService:
                     "symbol": symbol,
                     "rank": rank,
                     "reason": reason,
+                    "candle_setup": item.get("candle_setup"),
                     "direction": item.get("direction", "neutral"),
                     "confidence": item.get("confidence"),
                     "large_money_footprint_score": (
@@ -1540,6 +1550,7 @@ class MarketHubService:
             if entry > 0:
                 all_entry_levels.append({
                     "symbol": symbol,
+                    "candle_setup": item.get("candle_setup"),
                     "entry_trigger": entry,
                     "safe_entry_price": item.get("safe_entry_price"),
                     "stop_loss": item.get("invalidation_level") or item.get("stop_loss"),
@@ -1687,6 +1698,15 @@ class MarketHubService:
             "live_candidate_symbols": live_candidate_symbols,
             "live_candidate_pool": live_candidate_pool,
             "all_entry_levels": all_entry_levels,
+            # Keep contextual candle watches visible even when static BUY
+            # buckets are empty. The existing live shortlist bounds this list.
+            "candle_watch_setups": [
+                item for item in results
+                if str(item.get("symbol") or "").upper() in live_candidate_set
+                and isinstance(item.get("candle_setup"), dict)
+                and item["candle_setup"].get("available")
+                and item["candle_setup"].get("pattern")
+            ],
         }
 
     def _refresh_scan_market(self, force_refresh: bool = False) -> Dict:
