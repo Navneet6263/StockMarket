@@ -436,11 +436,18 @@ async def market_smart_options(
                 for i in range(-5, 6)
             ]
 
+        from app.services.options_intelligence import run_options_intelligence, get_instrument_expiry_info
+
+        expiry_info = get_instrument_expiry_info(normalized, raw.get("expiryDates") or raw.get("expiry_dates"))
+        days_to_expiry = expiry_info["days_to_expiry"]
+        expiry_date = expiry_info["expiry_date"]
+
         chain_snapshot = {
             "symbol": normalized,
             "spot_price": spot,
             "max_pain": raw.get("max_pain") or atm_strike,
-            "days_to_expiry": raw.get("days_to_expiry", 3),
+            "days_to_expiry": days_to_expiry,
+            "expiry_date": expiry_date,
             "strikes": [
                 {
                     "strike": float(row.get("strikePrice") or row.get("strike", 0)),
@@ -460,7 +467,10 @@ async def market_smart_options(
             "spot_price": spot,
             "max_pain": raw.get("max_pain") or atm_strike,
             "pcr": raw.get("pcr") or 1.0,
-            "days_to_expiry": raw.get("days_to_expiry", 3),
+            "days_to_expiry": days_to_expiry,
+            "expiry_date": expiry_date,
+            "expiry_day_name": expiry_info.get("expiry_day_name"),
+            "is_expiry_today": expiry_info.get("is_expiry_today", False),
             "smart_signals": smart_signals,
             "base_recommendation": raw.get("recommendation", {}),
         }
@@ -479,6 +489,7 @@ async def market_fno_options_scan(
     Returns top CE and PE candidates from live market scan.
     """
     from app.services.strict_options import build_nifty_option_gate, is_fno_symbol
+    from app.services.options_intelligence import get_instrument_expiry_info
 
     try:
         payload = await scan_market_with_timeout(hub, False)
@@ -519,15 +530,24 @@ async def market_fno_options_scan(
             stop = item.get("stop_loss") or item.get("stoploss") or (price * 0.98 if direction == "bullish" else price * 1.02)
             target = item.get("target_1") or item.get("target_price") or (price * 1.04 if direction == "bullish" else price * 0.96)
 
+            sym = str(item.get("symbol", "")).upper()
+            stock_exp = get_instrument_expiry_info(sym)
             card = {
-                "symbol": item.get("symbol"),
+                "symbol": sym,
                 "direction": direction,
                 "confidence": item.get("confidence") or item.get("score") or 70,
                 "underlying_price": round(float(price), 2) if price else 0,
                 "underlying_trigger": round(float(trigger), 2) if trigger else 0,
                 "underlying_invalidation": round(float(stop), 2) if stop else 0,
                 "underlying_structure_target": round(float(target), 2) if target else 0,
-                "strategy": f"Watch ATM CE above trigger" if direction == "bullish" else f"Watch ATM PE below trigger",
+                "expiry_date": stock_exp.get("expiry_date"),
+                "days_to_expiry": stock_exp.get("days_to_expiry"),
+                "expiry_day_name": stock_exp.get("expiry_day_name"),
+                "strategy": (
+                    f"Watch ATM CE above trigger (Exp {stock_exp.get('expiry_date')})"
+                    if direction == "bullish"
+                    else f"Watch ATM PE below trigger (Exp {stock_exp.get('expiry_date')})"
+                ),
                 "blocked": False,
             }
 

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_URL, humanize, fmt, fmtPct, asNumber } from "./lib/market";
 import { stockCardModel } from "./lib/stock-card-model";
@@ -516,6 +516,12 @@ function SmartOptionsPanel() {
   const [loadingSmart, setLoadingSmart] = useState(false);
   const [loadingFno, setLoadingFno] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const INDEX_CONFIG: Record<string, { label: string; weekday: string }> = {
+    NIFTY: { label: "Nifty 50", weekday: "Thu" },
+    BANKNIFTY: { label: "Bank Nifty", weekday: "Wed" },
+    FINNIFTY: { label: "Fin Nifty", weekday: "Tue" },
+    MIDCPNIFTY: { label: "Midcap", weekday: "Mon" },
+  };
   const INDEX_SMART = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
   const fetchSmart = async (sym: string) => {
     setLoadingSmart(true);
@@ -539,6 +545,16 @@ function SmartOptionsPanel() {
   };
   useEffect(() => {
     fetchSmart(activeSmartIndex);
+    INDEX_SMART.forEach(sym => {
+      if (sym !== activeSmartIndex) {
+        fetch(`${API_URL}/api/market/smart-options?symbol=${sym}`, { cache: "no-store" })
+          .then(r => (r.ok ? r.json() : null))
+          .then(json => {
+            if (json) setSmartData(prev => ({ ...prev, [sym]: json }));
+          })
+          .catch(() => {});
+      }
+    });
     const t = setInterval(() => fetchSmart(activeSmartIndex), 60000);
     return () => clearInterval(t);
   }, [activeSmartIndex]);
@@ -568,12 +584,59 @@ function SmartOptionsPanel() {
         📡 OI velocity · IV skew · gamma · max pain — <strong style={{ color: "var(--red)" }}>Delivery excluded</strong>, options/intraday only
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {INDEX_SMART.map(sym => (
-          <button key={sym} className={`options-index-tab ${activeSmartIndex === sym ? "active" : ""}`}
-            onClick={() => setActiveSmartIndex(sym)} style={{ fontSize: 13, padding: "6px 14px" }}>
-            {sym === "BANKNIFTY" ? "Bank Nifty" : sym === "FINNIFTY" ? "Fin Nifty" : sym === "MIDCPNIFTY" ? "Midcap" : "Nifty 50"}
-          </button>
-        ))}
+        {INDEX_SMART.map(sym => {
+          const cfg = INDEX_CONFIG[sym] || { label: sym, weekday: "" };
+          const itemData = smartData[sym];
+          const isToday = itemData?.is_expiry_today;
+          const isTmrw = itemData?.days_to_expiry === 1;
+          const dte = itemData?.days_to_expiry;
+          return (
+            <button
+              key={sym}
+              className={`options-index-tab ${activeSmartIndex === sym ? "active" : ""}`}
+              onClick={() => setActiveSmartIndex(sym)}
+              style={{
+                fontSize: 13,
+                padding: "6px 14px",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                borderColor: isToday ? "rgba(239,68,68,0.7)" : undefined,
+              }}
+            >
+              <span>{cfg.label}</span>
+              <span
+                style={{
+                  fontSize: 10,
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  fontWeight: 700,
+                  background: isToday
+                    ? "rgba(239,68,68,0.25)"
+                    : isTmrw
+                    ? "rgba(245,158,11,0.25)"
+                    : "rgba(255,255,255,0.08)",
+                  color: isToday
+                    ? "#ef4444"
+                    : isTmrw
+                    ? "#f59e0b"
+                    : "var(--muted)",
+                  border: isToday
+                    ? "1px solid rgba(239,68,68,0.4)"
+                    : undefined,
+                }}
+              >
+                {isToday
+                  ? "🔥 TODAY"
+                  : isTmrw
+                  ? "⚡ TMRW"
+                  : dte !== undefined
+                  ? `${cfg.weekday} (${dte}d)`
+                  : cfg.weekday}
+              </span>
+            </button>
+          );
+        })}
       </div>
       {loadingSmart && !ss ? (
         <div className="empty-msg">⟳ Loading {activeSmartIndex} signals…</div>
@@ -582,7 +645,42 @@ function SmartOptionsPanel() {
           <div style={{ background: "rgba(20,20,30,0.95)", border: `2px solid ${vc(ss.verdict?.direction)}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
               <div>
-                <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 6 }}>Combined Verdict · {activeSmartIndex}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Combined Verdict · {activeSmartIndex}</span>
+                  {sd?.expiry_date && (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        padding: "2px 8px",
+                        borderRadius: 4,
+                        fontWeight: 700,
+                        background: sd.is_expiry_today
+                          ? "rgba(239,68,68,0.2)"
+                          : sd.days_to_expiry === 1
+                          ? "rgba(245,158,11,0.2)"
+                          : "rgba(255,255,255,0.08)",
+                        color: sd.is_expiry_today
+                          ? "var(--red)"
+                          : sd.days_to_expiry === 1
+                          ? "var(--orange)"
+                          : "#93c5fd",
+                        border: `1px solid ${
+                          sd.is_expiry_today
+                            ? "var(--red)"
+                            : sd.days_to_expiry === 1
+                            ? "var(--orange)"
+                            : "rgba(147,197,253,0.3)"
+                        }`,
+                      }}
+                    >
+                      {sd.is_expiry_today
+                        ? `🔥 EXPIRY TODAY (${sd.expiry_date})`
+                        : sd.days_to_expiry === 1
+                        ? `⚡ Expiry Tomorrow (${sd.expiry_date})`
+                        : `📅 ${sd.expiry_day_name || ""} Expiry: ${sd.expiry_date} (${sd.days_to_expiry}d left)`}
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: vc(ss.verdict?.direction) }}>{ss.verdict?.action_label || ss.verdict?.action || "WAIT"}</div>
                 <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 4 }}>{ss.verdict?.reason}</div>
               </div>
@@ -647,7 +745,9 @@ function SmartOptionsPanel() {
                   <div style={{ fontSize: 11, color: "var(--muted)" }}>Band: ₹{fmt(ss.max_pain_gravity.gravity_band?.[0])} – ₹{fmt(ss.max_pain_gravity.gravity_band?.[1])}</div>
                   <div style={{ fontSize: 12, color: ss.max_pain_gravity.pin_probability === "very_high" ? "var(--orange)" : "var(--yellow)", marginTop: 5, fontWeight: 600 }}>{ss.max_pain_gravity.pin_label}</div>
                   <div style={{ fontSize: 11, color: vc(ss.max_pain_gravity.gravity_direction), marginTop: 3 }}>{ss.max_pain_gravity.gravity_label}</div>
-                  <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 3 }}>Dist: {ss.max_pain_gravity.distance_pct}% · {ss.max_pain_gravity.days_to_expiry}d expiry</div>
+                  <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 3 }}>
+                    Dist: {ss.max_pain_gravity.distance_pct}% · {sd?.expiry_date ? `${sd.expiry_date} (${sd.days_to_expiry === 0 ? "🔥 Today" : sd.days_to_expiry === 1 ? "⚡ Tomorrow" : `${sd.days_to_expiry}d expiry`})` : `${ss.max_pain_gravity.days_to_expiry}d expiry`}
+                  </div>
                 </>
               ) : <div style={{ fontSize: 12, color: "var(--muted)" }}>Max pain unavailable</div>}
             </div>
@@ -670,9 +770,12 @@ function SmartOptionsPanel() {
                 <div style={{ fontSize: 13, color: "var(--green)", fontWeight: 700, marginBottom: 8 }}>📈 CE Candidates</div>
                 {fnoData.ce_candidates?.length ? fnoData.ce_candidates.slice(0, 8).map((c: any, i: number) => (
                   <div key={i} style={{ background: "rgba(34,197,94,0.07)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 8, padding: "8px 10px", marginBottom: 7 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <strong style={{ color: "#fff" }}>{c.symbol}</strong>
-                      <span className="tag buy" style={{ fontSize: 10 }}>CE WATCH</span>
+                      <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                        {c.expiry_date && <span style={{ fontSize: 10, color: "#93c5fd", background: "rgba(59,130,246,0.15)", padding: "1px 5px", borderRadius: 4 }}>Exp {c.expiry_date}</span>}
+                        <span className="tag buy" style={{ fontSize: 10 }}>CE WATCH</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>₹{fmt(c.underlying_price)} · Trigger: ₹{fmt(c.underlying_trigger)}</div>
                     <div style={{ fontSize: 11, color: "var(--muted)" }}>SL: ₹{fmt(c.underlying_invalidation)} · Tgt: ₹{fmt(c.underlying_structure_target)}</div>
@@ -684,9 +787,12 @@ function SmartOptionsPanel() {
                 <div style={{ fontSize: 13, color: "var(--red)", fontWeight: 700, marginBottom: 8 }}>📉 PE Candidates</div>
                 {fnoData.pe_candidates?.length ? fnoData.pe_candidates.slice(0, 8).map((c: any, i: number) => (
                   <div key={i} style={{ background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "8px 10px", marginBottom: 7 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <strong style={{ color: "#fff" }}>{c.symbol}</strong>
-                      <span className="tag sell" style={{ fontSize: 10 }}>PE WATCH</span>
+                      <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                        {c.expiry_date && <span style={{ fontSize: 10, color: "#93c5fd", background: "rgba(59,130,246,0.15)", padding: "1px 5px", borderRadius: 4 }}>Exp {c.expiry_date}</span>}
+                        <span className="tag sell" style={{ fontSize: 10 }}>PE WATCH</span>
+                      </div>
                     </div>
                     <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>₹{fmt(c.underlying_price)} · Trigger: ₹{fmt(c.underlying_trigger)}</div>
                     <div style={{ fontSize: 11, color: "var(--muted)" }}>SL: ₹{fmt(c.underlying_invalidation)} · Tgt: ₹{fmt(c.underlying_structure_target)}</div>
@@ -709,10 +815,10 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
 
   const INDEX_LIST = [
-    { key: "NIFTY",      label: "Nifty 50" },
-    { key: "BANKNIFTY",  label: "Bank Nifty" },
-    { key: "FINNIFTY",   label: "Fin Nifty" },
-    { key: "MIDCPNIFTY", label: "Midcap" },
+    { key: "NIFTY",      label: "Nifty 50 (Thu)" },
+    { key: "BANKNIFTY",  label: "Bank Nifty (Wed)" },
+    { key: "FINNIFTY",   label: "Fin Nifty (Tue)" },
+    { key: "MIDCPNIFTY", label: "Midcap (Mon)" },
   ];
 
   const fetchData = async (sym: string) => {

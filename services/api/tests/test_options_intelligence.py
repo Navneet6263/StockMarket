@@ -16,6 +16,7 @@ from app.services.options_intelligence import (
     analyze_max_pain_gravity,
     synthesize_verdict,
     run_options_intelligence,
+    get_instrument_expiry_info,
 )
 
 
@@ -146,6 +147,33 @@ class TestOptionsIntelligence(unittest.TestCase):
         self.assertIn("iv_skew", result)
         self.assertIn("gamma_exposure", result)
         self.assertIn("max_pain_gravity", result)
+
+    def test_instrument_expiry_info(self):
+        midcap = get_instrument_expiry_info("MIDCPNIFTY")
+        finnifty = get_instrument_expiry_info("FINNIFTY")
+        banknifty = get_instrument_expiry_info("BANKNIFTY")
+        nifty = get_instrument_expiry_info("NIFTY")
+        stock = get_instrument_expiry_info("RELIANCE")
+
+        # Midcap Monday, FinNifty Tuesday, BankNifty Wednesday, Nifty Thursday
+        self.assertEqual(midcap["expiry_day_name"], "Monday")
+        self.assertEqual(finnifty["expiry_day_name"], "Tuesday")
+        self.assertEqual(banknifty["expiry_day_name"], "Wednesday")
+        self.assertEqual(nifty["expiry_day_name"], "Thursday")
+        self.assertEqual(stock["expiry_day_name"], "Thursday (Monthly)")
+
+        # Verify each index has its own distinct days_to_expiry
+        self.assertIn("days_to_expiry", midcap)
+        self.assertIn("expiry_date", midcap)
+        self.assertIn("days_to_expiry", finnifty)
+        self.assertIn("days_to_expiry", banknifty)
+        self.assertIn("days_to_expiry", nifty)
+        self.assertIn("days_to_expiry", stock)
+
+        # Expiry with explicit chain dates
+        chain_dates = ["20-Oct-2026", "13-Oct-2026", "06-Oct-2026"]
+        custom = get_instrument_expiry_info("NIFTY", chain_dates)
+        self.assertIn("expiry_date", custom)
 
 
 if __name__ == "__main__":

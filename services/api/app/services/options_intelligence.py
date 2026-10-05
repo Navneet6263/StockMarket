@@ -12,11 +12,12 @@ Works for: NIFTY, BANKNIFTY, FINNIFTY + individual F&O stocks
 """
 from __future__ import annotations
 
+import calendar
 import logging
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,104 @@ SKEW_BULLISH_THRESHOLD = 1.15  # CE IV / PE IV > 1.15 = call skew (bullish insti
 SKEW_BEARISH_THRESHOLD = 0.87  # CE IV / PE IV < 0.87 = put skew (smart money protection)
 GAMMA_SQUEEZE_THRESHOLD = 0.08 # gamma > 0.08 at a strike = high-gamma zone
 MAX_PAIN_GRAVITY_PCT = 0.01    # ±1% around max pain = gravity band
+
+
+def get_instrument_expiry_info(symbol: str, raw_expiry_dates: list | None = None) -> dict:
+    """
+    Returns exact nearest expiry info for Indian indices and F&O stocks:
+    - MIDCPNIFTY: Monday (weekday 0)
+    - FINNIFTY:   Tuesday (weekday 1)
+    - BANKNIFTY:  Wednesday (weekday 2)
+    - NIFTY:      Thursday (weekday 3)
+    - SENSEX:     Friday (weekday 4)
+    - F&O Stocks: Last Thursday of the current month (Monthly expiry only)
+    """
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now = datetime.now(ist)
+    today = now.date()
+
+    # 1. If explicit unexpired expiry dates are provided in the option chain, parse and use the nearest one:
+    if raw_expiry_dates:
+        parsed_dates = []
+        for d_str in raw_expiry_dates:
+            for fmt in ("%d-%b-%Y", "%d%b%Y", "%Y-%m-%d"):
+                try:
+                    dt = datetime.strptime(str(d_str).strip(), fmt).date()
+                    if dt >= today:
+                        parsed_dates.append((dt, str(d_str)))
+                    break
+                except ValueError:
+                    continue
+        if parsed_dates:
+            parsed_dates.sort(key=lambda x: x[0])
+            nearest_date, original_str = parsed_dates[0]
+            days = (nearest_date - today).days
+            return {
+                "expiry_date": nearest_date.strftime("%d-%b-%Y"),
+                "days_to_expiry": max(0, days),
+                "is_expiry_today": days == 0,
+                "expiry_day_name": nearest_date.strftime("%A"),
+            }
+
+    # 2. Precise Exchange Rules based on Symbol:
+    sym = symbol.upper().strip()
+
+    index_expiry_weekdays = {
+        "MIDCPNIFTY": 0,  # Monday
+        "FINNIFTY": 1,    # Tuesday
+        "BANKNIFTY": 2,   # Wednesday
+        "NIFTY": 3,       # Thursday
+        "NIFTY 50": 3,
+        "SENSEX": 4,      # Friday
+    }
+
+    if sym in index_expiry_weekdays:
+        target_wd = index_expiry_weekdays[sym]
+        today_wd = today.weekday()
+
+        if today_wd == target_wd:
+            if now.time() > dtime(15, 30):
+                days = 7
+            else:
+                days = 0
+        else:
+            days = (target_wd - today_wd) % 7
+
+        target_date = today + timedelta(days=days)
+        return {
+            "expiry_date": target_date.strftime("%d-%b-%Y"),
+            "days_to_expiry": days,
+            "is_expiry_today": days == 0,
+            "expiry_day_name": target_date.strftime("%A"),
+        }
+    else:
+        # F&O Stock: Monthly Expiry (Last Thursday of the current month)
+        year = today.year
+        month = today.month
+        last_day = calendar.monthrange(year, month)[1]
+        last_date = date(year, month, last_day)
+
+        while last_date.weekday() != 3:
+            last_date -= timedelta(days=1)
+
+        if last_date < today or (last_date == today and now.time() > dtime(15, 30)):
+            if month == 12:
+                year += 1
+                month = 1
+            else:
+                month += 1
+            last_day = calendar.monthrange(year, month)[1]
+            last_date = date(year, month, last_day)
+            while last_date.weekday() != 3:
+                last_date -= timedelta(days=1)
+
+        days = (last_date - today).days
+        return {
+            "expiry_date": last_date.strftime("%d-%b-%Y"),
+            "days_to_expiry": max(0, days),
+            "is_expiry_today": days == 0,
+            "expiry_day_name": "Thursday (Monthly)",
+        }
 
 
 # ── Rolling OI Snapshot Buffer ───────────────────────────────────────────────
@@ -334,26 +433,22 @@ def analyze_max_pain_gravity(chain_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     spot_in_band = gravity_low <= spot <= gravity_high
 
     # Pin probability increases as expiry approaches and price is near max pain
-    if days_to_expiry <= 1:
+    expiry_date_str = chain_snapshot.get("expiry_date") or ""
+    if days_to_expiry == 0:
+        pin_prob = "very_high"
         if distance_pct < 0.5:
-            pin_prob = "very_high"
-            pin_label = "🧲 EXPIRY TODAY — Price is pinned to max pain. Options will decay to near zero."
-        elif distance_pct < 1.5:
-            pin_prob = "high"
-            pin_label = f"🧲 Expiry today — max pain gravity strong at ₹{max_pain:.0f}"
+            pin_label = f"🧲 EXPIRY TODAY ({expiry_date_str}) — Pinned to max pain. Extreme theta decay."
         else:
-            pin_prob = "medium"
-            pin_label = f"⚠️ Expiry today — price {distance_pct:.1f}% from max pain ₹{max_pain:.0f}"
+            pin_label = f"🧲 EXPIRY TODAY ({expiry_date_str}) — Max pain gravity strong at ₹{max_pain:.0f}"
+    elif days_to_expiry == 1:
+        pin_prob = "high"
+        pin_label = f"⚡ Expiry Tomorrow ({expiry_date_str}) — Strong magnet to ₹{max_pain:.0f}"
     elif days_to_expiry <= 3:
-        if distance_pct < 1.0:
-            pin_prob = "high"
-            pin_label = f"🧲 {days_to_expiry}d to expiry — max pain gravity pulling to ₹{max_pain:.0f}"
-        else:
-            pin_prob = "medium"
-            pin_label = f"📌 {days_to_expiry}d to expiry — watch for drift toward ₹{max_pain:.0f}"
+        pin_prob = "high" if distance_pct < 1.0 else "medium"
+        pin_label = f"📌 {days_to_expiry}d to expiry ({expiry_date_str}) — Pulling toward ₹{max_pain:.0f}"
     else:
         pin_prob = "low"
-        pin_label = f"📅 {days_to_expiry}d to expiry — max pain at ₹{max_pain:.0f} (low gravity for now)"
+        pin_label = f"📅 {days_to_expiry}d to expiry ({expiry_date_str}) — Max pain at ₹{max_pain:.0f}"
 
     # Direction from spot to max pain
     if spot > gravity_high:
