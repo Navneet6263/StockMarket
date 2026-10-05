@@ -517,10 +517,10 @@ function SmartOptionsPanel() {
   const [loadingFno, setLoadingFno] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const INDEX_CONFIG: Record<string, { label: string; weekday: string }> = {
-    NIFTY: { label: "Nifty 50", weekday: "Thu" },
-    BANKNIFTY: { label: "Bank Nifty", weekday: "Wed" },
-    FINNIFTY: { label: "Fin Nifty", weekday: "Tue" },
-    MIDCPNIFTY: { label: "Midcap", weekday: "Mon" },
+    NIFTY: { label: "Nifty 50", weekday: "Tue" },
+    BANKNIFTY: { label: "Bank Nifty", weekday: "Monthly" },
+    FINNIFTY: { label: "Fin Nifty", weekday: "Monthly" },
+    MIDCPNIFTY: { label: "Midcap", weekday: "Monthly" },
   };
   const INDEX_SMART = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
   const fetchSmart = async (sym: string) => {
@@ -815,10 +815,10 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
 
   const INDEX_LIST = [
-    { key: "NIFTY",      label: "Nifty 50 (Thu)" },
-    { key: "BANKNIFTY",  label: "Bank Nifty (Wed)" },
-    { key: "FINNIFTY",   label: "Fin Nifty (Tue)" },
-    { key: "MIDCPNIFTY", label: "Midcap (Mon)" },
+    { key: "NIFTY",      label: "Nifty 50 (Tue)" },
+    { key: "BANKNIFTY",  label: "Bank Nifty (Monthly)" },
+    { key: "FINNIFTY",   label: "Fin Nifty (Monthly)" },
+    { key: "MIDCPNIFTY", label: "Midcap (Monthly)" },
   ];
 
   const fetchData = async (sym: string) => {

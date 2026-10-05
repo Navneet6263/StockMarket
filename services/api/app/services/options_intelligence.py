@@ -34,12 +34,12 @@ MAX_PAIN_GRAVITY_PCT = 0.01    # ±1% around max pain = gravity band
 def get_instrument_expiry_info(symbol: str, raw_expiry_dates: list | None = None) -> dict:
     """
     Returns exact nearest expiry info for Indian indices and F&O stocks:
-    - MIDCPNIFTY: Monday (weekday 0)
-    - FINNIFTY:   Tuesday (weekday 1)
-    - BANKNIFTY:  Wednesday (weekday 2)
-    - NIFTY:      Thursday (weekday 3)
-    - SENSEX:     Friday (weekday 4)
-    - F&O Stocks: Last Thursday of the current month (Monthly expiry only)
+    Under SEBI regulations:
+    - NIFTY 50: Weekly expiry every Tuesday (e.g., 06-Oct-2026)
+    - SENSEX:   Weekly expiry every Thursday (e.g., 08-Oct-2026)
+    - BANKNIFTY, FINNIFTY, MIDCPNIFTY: Weekly contracts discontinued by SEBI.
+      Monthly contracts expire on the last Tuesday of the month.
+    - F&O Stocks: Monthly contracts expire on the last Thursday of the month.
     """
     ist = timezone(timedelta(hours=5, minutes=30))
     now = datetime.now(ist)
@@ -71,62 +71,87 @@ def get_instrument_expiry_info(symbol: str, raw_expiry_dates: list | None = None
     # 2. Precise Exchange Rules based on Symbol:
     sym = symbol.upper().strip()
 
-    index_expiry_weekdays = {
-        "MIDCPNIFTY": 0,  # Monday
-        "FINNIFTY": 1,    # Tuesday
-        "BANKNIFTY": 2,   # Wednesday
-        "NIFTY": 3,       # Thursday
-        "NIFTY 50": 3,
-        "SENSEX": 4,      # Friday
-    }
+    def get_last_weekday_of_month(year: int, month: int, target_weekday: int) -> date:
+        last_day = calendar.monthrange(year, month)[1]
+        last_d = date(year, month, last_day)
+        while last_d.weekday() != target_weekday:
+            last_d -= timedelta(days=1)
+        return last_d
 
-    if sym in index_expiry_weekdays:
-        target_wd = index_expiry_weekdays[sym]
+    # NIFTY 50: Weekly Expiry on Tuesday (Weekday 1)
+    if sym in ("NIFTY", "NIFTY 50"):
+        target_wd = 1  # Tuesday
         today_wd = today.weekday()
-
         if today_wd == target_wd:
-            if now.time() > dtime(15, 30):
-                days = 7
-            else:
-                days = 0
+            days = 7 if now.time() > dtime(15, 30) else 0
         else:
             days = (target_wd - today_wd) % 7
-
         target_date = today + timedelta(days=days)
         return {
             "expiry_date": target_date.strftime("%d-%b-%Y"),
             "days_to_expiry": days,
             "is_expiry_today": days == 0,
-            "expiry_day_name": target_date.strftime("%A"),
+            "expiry_day_name": "Tuesday (Weekly)",
         }
-    else:
-        # F&O Stock: Monthly Expiry (Last Thursday of the current month)
+
+    # SENSEX: Weekly Expiry on Thursday (Weekday 3)
+    if sym in ("SENSEX", "BSE:SENSEX"):
+        target_wd = 3  # Thursday
+        today_wd = today.weekday()
+        if today_wd == target_wd:
+            days = 7 if now.time() > dtime(15, 30) else 0
+        else:
+            days = (target_wd - today_wd) % 7
+        target_date = today + timedelta(days=days)
+        return {
+            "expiry_date": target_date.strftime("%d-%b-%Y"),
+            "days_to_expiry": days,
+            "is_expiry_today": days == 0,
+            "expiry_day_name": "Thursday (Weekly)",
+        }
+
+    # BANKNIFTY, FINNIFTY, MIDCPNIFTY: Monthly Expiry on Last Tuesday of the month
+    if sym in ("BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
         year = today.year
         month = today.month
-        last_day = calendar.monthrange(year, month)[1]
-        last_date = date(year, month, last_day)
+        last_tuesday = get_last_weekday_of_month(year, month, 1)
 
-        while last_date.weekday() != 3:
-            last_date -= timedelta(days=1)
-
-        if last_date < today or (last_date == today and now.time() > dtime(15, 30)):
+        if last_tuesday < today or (last_tuesday == today and now.time() > dtime(15, 30)):
             if month == 12:
                 year += 1
                 month = 1
             else:
                 month += 1
-            last_day = calendar.monthrange(year, month)[1]
-            last_date = date(year, month, last_day)
-            while last_date.weekday() != 3:
-                last_date -= timedelta(days=1)
+            last_tuesday = get_last_weekday_of_month(year, month, 1)
 
-        days = (last_date - today).days
+        days = (last_tuesday - today).days
         return {
-            "expiry_date": last_date.strftime("%d-%b-%Y"),
+            "expiry_date": last_tuesday.strftime("%d-%b-%Y"),
             "days_to_expiry": max(0, days),
             "is_expiry_today": days == 0,
-            "expiry_day_name": "Thursday (Monthly)",
+            "expiry_day_name": "Tuesday (Monthly)",
         }
+
+    # F&O Stock: Monthly Expiry (Last Thursday of the current month)
+    year = today.year
+    month = today.month
+    last_thursday = get_last_weekday_of_month(year, month, 3)
+
+    if last_thursday < today or (last_thursday == today and now.time() > dtime(15, 30)):
+        if month == 12:
+            year += 1
+            month = 1
+        else:
+            month += 1
+        last_thursday = get_last_weekday_of_month(year, month, 3)
+
+    days = (last_thursday - today).days
+    return {
+        "expiry_date": last_thursday.strftime("%d-%b-%Y"),
+        "days_to_expiry": max(0, days),
+        "is_expiry_today": days == 0,
+        "expiry_day_name": "Thursday (Monthly)",
+    }
 
 
 # ── Rolling OI Snapshot Buffer ───────────────────────────────────────────────

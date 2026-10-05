@@ -155,11 +155,11 @@ class TestOptionsIntelligence(unittest.TestCase):
         nifty = get_instrument_expiry_info("NIFTY")
         stock = get_instrument_expiry_info("RELIANCE")
 
-        # Midcap Monday, FinNifty Tuesday, BankNifty Wednesday, Nifty Thursday
-        self.assertEqual(midcap["expiry_day_name"], "Monday")
-        self.assertEqual(finnifty["expiry_day_name"], "Tuesday")
-        self.assertEqual(banknifty["expiry_day_name"], "Wednesday")
-        self.assertEqual(nifty["expiry_day_name"], "Thursday")
+        # Nifty 50 is Tuesday weekly, BankNifty/FinNifty/Midcap are Tuesday monthly, Stock is Thursday monthly
+        self.assertEqual(nifty["expiry_day_name"], "Tuesday (Weekly)")
+        self.assertEqual(midcap["expiry_day_name"], "Tuesday (Monthly)")
+        self.assertEqual(finnifty["expiry_day_name"], "Tuesday (Monthly)")
+        self.assertEqual(banknifty["expiry_day_name"], "Tuesday (Monthly)")
         self.assertEqual(stock["expiry_day_name"], "Thursday (Monthly)")
 
         # Verify each index has its own distinct days_to_expiry
