@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import math
 import queue
 import threading
 import time
@@ -41,15 +42,20 @@ LIVE_NOTIFICATION_QUEUE_MAX = max(1, int(os.getenv("LIVE_NOTIFICATION_QUEUE_MAX"
 
 
 def _safe_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         v = float(value)
-        return v if v > 0 else None
+        return v if math.isfinite(v) and v > 0 else None
     except (TypeError, ValueError):
         return None
 
 
 def _entry_level(item: Dict) -> float | None:
     """Return the actionable entry price for a scanned item."""
+    candle = item.get("candle_setup")
+    if isinstance(candle, dict) and candle.get("status") == "READY" and "trigger" in candle:
+        return _safe_float(candle.get("trigger"))
     return (
         _safe_float(item.get("safe_entry_price"))
         or _safe_float(item.get("entry_trigger"))
@@ -59,18 +65,28 @@ def _entry_level(item: Dict) -> float | None:
 
 
 def _stop_loss(item: Dict) -> float | None:
+    candle = item.get("candle_setup")
+    if isinstance(candle, dict) and candle.get("status") == "READY" and "invalidation" in candle:
+        return _safe_float(candle.get("invalidation"))
     return (
-        _safe_float(item.get("invalidation_level"))
+        _safe_float(item.get("structural_invalidation"))
+        or _safe_float(item.get("invalidation_level"))
         or _safe_float(item.get("stop_loss"))
+        or _safe_float(item.get("stopLoss"))
+        or _safe_float(item.get("stoploss"))
         or _safe_float(item.get("invalidation"))
     )
 
 
 def _target(item: Dict) -> float | None:
+    candle = item.get("candle_setup")
+    if isinstance(candle, dict) and candle.get("status") == "READY" and "target" in candle:
+        return _safe_float(candle.get("target"))
     return (
         _safe_float(item.get("new_target"))
         or _safe_float(item.get("target_1"))
         or _safe_float(item.get("target_price"))
+        or _safe_float(item.get("target"))
     )
 
 
@@ -106,12 +122,16 @@ def _plan_direction(item: Dict, entry: float, stop: float | None, target: float 
 
 
 def _structure_gate(item: Dict, entry: float, stop: float | None, target: float | None) -> tuple[bool, List[str]]:
-    """Reject only explicit invalidation or an internally impossible plan."""
+    """Reject invalidated and impossible plans; candle-watch rows stay observed."""
     direction = _normalise_direction(item.get("direction"))
     side = -1 if direction == "bearish" else 1
     reasons: List[str] = []
     if direction == "neutral":
         reasons.append("Neutral setup has no actionable trade direction.")
+    candle = item.get("candle_setup")
+    candle_pending = isinstance(candle, dict) and candle.get("status") in {"WAIT", "WATCH", "UNAVAILABLE"}
+    if not candle_pending and (stop is None or target is None):
+        reasons.append("A finite positive stop and target are mandatory before live entry.")
     state_values = {
         str(item.get(key) or "").strip().upper().replace(" ", "_")
         for key in ("status", "lifecycle_state", "tracking_status", "signal_stage", "action")
@@ -230,11 +250,12 @@ class EntryMonitor:
             "setupType": watched.get("setup_type"),
             "signalStage": watched.get("signal_stage"),
             "confidence": watched.get("confidence"),
-            "rr": watched.get("rr"),
-            "risk_reward": watched.get("rr"),
-            "riskPct": watched.get("risk_pct"),
-            "riskPerShare": watched.get("risk_per_share"),
-            "maxPositionPctAt1PctAccountRisk": watched.get("max_position_pct_at_1pct_risk"),
+            "rr": assessment.get("liveRiskReward"),
+            "risk_reward": assessment.get("liveRiskReward"),
+            "plannedRiskReward": watched.get("rr"),
+            "riskPct": assessment.get("liveRiskPct"),
+            "riskPerShare": assessment.get("liveRiskPerShare"),
+            "maxPositionPctAt1PctAccountRisk": self._position_cap(assessment),
             "timeHorizon": watched.get("time_horizon"),
             "marketMood": watched.get("market_mood"),
             "counterRegime": watched.get("counter_regime", False),
@@ -245,11 +266,14 @@ class EntryMonitor:
             **assessment,
         }
         with self._lock:
+            if self._watched.get(symbol) is not watched:
+                # A scan replaced this plan during feature computation.
+                # Only a tick evaluated against the current plan may publish.
+                return self._latest_assessments.get(symbol)
             self._latest_assessments[symbol] = assessment_snapshot
 
         price = _safe_float(features.get("price"))
-        if price is not None:
-            self._check_entry(symbol, price, watched, assessment)
+        self._check_entry(symbol, price, watched, assessment)
         return assessment_snapshot
 
     def get_live_entries(self) -> List[Dict]:
@@ -439,6 +463,10 @@ class EntryMonitor:
                 "live_min_confirmations": item.get("live_min_confirmations"),
                 "counter_regime": bool(item.get("counterRegime")),
                 "market_mood": item.get("marketMood") or item.get("market_mood"),
+                "candle_setup": item.get("candle_setup"),
+                "min_live_rr": item.get("min_live_rr") or item.get("min_risk_reward"),
+                "enforce_structural_risk_cap": bool(item.get("enforce_structural_risk_cap")),
+                "max_structural_risk_pct": item.get("max_structural_risk_pct") or 4.0,
             }
 
         # StockScanner's pre-registration path can contain hundreds of rows and
@@ -448,6 +476,26 @@ class EntryMonitor:
             new_watched = dict(list(new_watched.items())[:LIVE_WATCH_MAX])
 
         with self._lock:
+            for symbol in list(self._live_by_symbol):
+                previous_plan = self._watched.get(symbol) or {}
+                new_plan = new_watched.get(symbol) or {}
+                candle = new_plan.get("candle_setup")
+                plan_changed = any(
+                    previous_plan.get(key) != new_plan.get(key)
+                    for key in ("entry", "stop", "target", "direction", "candle_setup")
+                )
+                candle_pending = isinstance(candle, dict) and (
+                    candle.get("status") != "READY" or candle.get("entry_ready") is not True
+                )
+                if not new_plan or plan_changed or not new_plan.get("structure_valid") or candle_pending:
+                    # A new scan must not leave the old plan actionable until
+                    # another tick happens to arrive.
+                    self._live_by_symbol.pop(symbol, None)
+                    self._latest_assessments.pop(symbol, None)
+            self._live_entries = deque(
+                (symbol for symbol in self._live_entries if symbol in self._live_by_symbol),
+                maxlen=LIVE_ENTRIES_MAX,
+            )
             self._watched = new_watched
             self._latest_assessments = {
                 symbol: value
@@ -462,12 +510,17 @@ class EntryMonitor:
         self._features.retain_symbols(new_watched)
         logger.info("[ENTRY_MONITOR] Watching %d symbols for entry triggers", len(new_watched))
 
-    def _check_entry(self, symbol: str, price: float, watched: Dict, assessment: Dict) -> None:
+    @staticmethod
+    def _position_cap(assessment: Dict) -> float | None:
+        risk_pct = _safe_float(assessment.get("liveRiskPct"))
+        return round(min(100.0, 100.0 / risk_pct), 2) if risk_pct else None
+
+    def _check_entry(self, symbol: str, price: float | None, watched: Dict, assessment: Dict) -> None:
         entry = watched["entry"]
         if not entry:
             return
 
-        distance_pct = ((price - entry) / entry) * 100
+        distance_pct = ((price - entry) / entry) * 100 if price is not None else None
         now = time.time()
         live_status = assessment.get("status", "WAIT")
         features = assessment.get("features") or {}
@@ -476,17 +529,38 @@ class EntryMonitor:
         # evidence changes to WAIT/REJECT.
         if live_status != "CONFIRMED":
             with self._lock:
+                if self._watched.get(symbol) is not watched:
+                    return
                 existing = self._live_by_symbol.get(symbol)
                 if existing:
                     existing.update({
-                        "livePrice": round(price, 2),
-                        "distancePct": round(distance_pct, 2),
+                        "livePrice": round(price, 2) if price is not None else None,
+                        "distancePct": round(distance_pct, 2) if distance_pct is not None else None,
                         "liveTriggerStatus": live_status,
                         "liveTriggerScore": assessment.get("score"),
+                        "liveConfirmationMode": assessment.get("confirmationMode"),
+                        "rr": assessment.get("liveRiskReward"),
+                        "risk_reward": assessment.get("liveRiskReward"),
+                        "riskPct": assessment.get("liveRiskPct"),
+                        "riskPerShare": assessment.get("liveRiskPerShare"),
+                        "liveRiskReward": assessment.get("liveRiskReward"),
+                        "liveRiskPct": assessment.get("liveRiskPct"),
+                        "liveRiskPerShare": assessment.get("liveRiskPerShare"),
+                        "minimumRiskReward": assessment.get("minimumRiskReward"),
+                        "maxPositionPctAt1PctAccountRisk": self._position_cap(assessment),
+                        "candle_setup": assessment.get("candle_setup"),
+                        "liveEvidence": list(assessment.get("evidence") or []),
+                        "liveRisks": list(assessment.get("risks") or []),
+                        "liveDataQuality": assessment.get("dataQuality") or {},
+                        "isFresh": features.get("isFresh"),
+                        "tickAgeSec": features.get("tickAgeSec"),
                         "liveConfirmation": assessment,
                         "label": f"{live_status} — LIVE GATE",
                         "lastTickAtEpoch": now,
                     })
+            return
+
+        if price is None or distance_pct is None:
             return
 
         alert = {
@@ -500,10 +574,19 @@ class EntryMonitor:
             "setupType": watched["setup_type"],
             "signalStage": watched["signal_stage"],
             "confidence": watched["confidence"],
-            "rr": watched["rr"],
-            "riskPct": watched.get("risk_pct"),
-            "riskPerShare": watched.get("risk_per_share"),
-            "maxPositionPctAt1PctAccountRisk": watched.get("max_position_pct_at_1pct_risk"),
+            "stop_loss": watched["stop"],
+            "target_1": watched["target"],
+            "rr": assessment.get("liveRiskReward"),
+            "risk_reward": assessment.get("liveRiskReward"),
+            "plannedRiskReward": watched.get("rr"),
+            "riskPct": assessment.get("liveRiskPct"),
+            "riskPerShare": assessment.get("liveRiskPerShare"),
+            "liveRiskReward": assessment.get("liveRiskReward"),
+            "liveRiskPct": assessment.get("liveRiskPct"),
+            "liveRiskPerShare": assessment.get("liveRiskPerShare"),
+            "minimumRiskReward": assessment.get("minimumRiskReward"),
+            "candle_setup": watched.get("candle_setup"),
+            "maxPositionPctAt1PctAccountRisk": self._position_cap(assessment),
             "timeHorizon": watched["time_horizon"],
             "relative_volume": watched["relative_volume"],
             "detected_at": datetime.now(timezone.utc).isoformat(),
@@ -537,6 +620,8 @@ class EntryMonitor:
         }
 
         with self._lock:
+            if self._watched.get(symbol) is not watched:
+                return
             previous = self._live_by_symbol.get(symbol)
             if previous is not None:
                 previous.update(alert)

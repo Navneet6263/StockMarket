@@ -171,6 +171,7 @@ def build_smart_scan_payload(
         + scan_payload.get("breakout_candidates", [])
         + scan_payload.get("candidates", [])
         + scan_payload.get("unusual_volume", [])
+        + scan_payload.get("candle_watch_setups", [])
     )
     all_results: List[Dict] = []
     seen_symbols: set[str] = set()
@@ -261,6 +262,7 @@ def build_smart_scan_payload(
 
     def final_gate(raw_signal: Dict) -> Dict:
         """Apply one authoritative eligibility decision to every consumer."""
+        from app.services.book_strategy import apply_candle_gate
 
         symbol = str(raw_signal.get("symbol") or "").upper()
         enriched = enriched_map.get(symbol)
@@ -319,7 +321,7 @@ def build_smart_scan_payload(
             if plan_blocked_reason not in risks:
                 risks.append(plan_blocked_reason)
             signal["risk_factors"] = risks
-            return signal
+            return apply_candle_gate(signal)
 
         coherent_bullish_reversal = bool(
             direction == "bullish"
@@ -398,9 +400,10 @@ def build_smart_scan_payload(
             )
         else:
             signal["marketGateDecision"] = "ALIGNED_OR_NEUTRAL"
-        return signal
+        return apply_candle_gate(signal)
 
     authoritative_bucket_names = (
+        "candle_watch_setups",
         "top_opportunities", "breakout_candidates", "bearish_risks", "unusual_volume",
         "candidates", "pre_breakout_setups", "pattern_forming_setups",
         "alert_above_setups", "retest_entry", "momentum_continuation",

@@ -8,6 +8,7 @@ risk leaves the setup watch-only.
 from __future__ import annotations
 
 import os
+import math
 from typing import Any, Iterable
 
 
@@ -20,11 +21,13 @@ MIN_STRUCTURAL_RISK_REWARD = max(
 
 
 def _number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number > 0 else None
+    return number if math.isfinite(number) and number > 0 else None
 
 
 def nearest_opposing_structure(
@@ -78,6 +81,9 @@ def assess_structural_plan(
         "targetMethod": "nearest_observed_opposing_structure",
     }
 
+    if str(direction).lower() not in {"bullish", "bearish"}:
+        result.update(blockCode="INVALID_DIRECTION", blockReason="A directional trade plan is required.")
+        return result
     if entry_value is None or stop_value is None:
         result.update(
             blockCode="INCOMPLETE_PLAN",

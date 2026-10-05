@@ -60,6 +60,8 @@ def _direction(signal: dict[str, Any]) -> str:
 
 
 def _signal_trigger(signal: dict[str, Any]) -> float:
+    if isinstance(signal.get("candle_setup"), dict):
+        return _safe_float(signal.get("safe_entry_price") or signal.get("entry_trigger"))
     return _safe_float(
         signal.get("safe_entry_price")
         or signal.get("entry_trigger")
@@ -74,6 +76,8 @@ def _signal_trigger(signal: dict[str, Any]) -> float:
 
 
 def _signal_fail_level(signal: dict[str, Any]) -> float:
+    if isinstance(signal.get("candle_setup"), dict):
+        return _safe_float(signal.get("stop_loss") or signal.get("invalidation_level"))
     return _safe_float(
         signal.get("stop_loss")
         or signal.get("invalidation")
@@ -191,6 +195,11 @@ def _dashboard_profile(signal: dict[str, Any], *, score: float) -> dict[str, Any
         and rr >= 1.5
         and relative_volume >= 1.2
     )
+    candle = signal.get("candle_setup")
+    if isinstance(candle, dict):
+        # Closed-candle READY still waits on the separate live execution gate.
+        action_ready = False
+        fast_move_valid = False
 
     if hard_blocked:
         bucket = "NO_TRADE"
@@ -277,6 +286,18 @@ def _guidance(signal: dict[str, Any], *, trigger: float | None = None, fail: flo
 
     trigger_text = _fmt_price(trigger)
     fail_text = _fmt_price(fail)
+
+    candle = signal.get("candle_setup")
+    if isinstance(candle, dict):
+        ready = bool(signal.get("candleGateReady"))
+        reasons = "; ".join(str(x).replace("_", " ") for x in candle.get("reasons", []))
+        return {
+            "biasLabel": _display_label(candle.get("phase"), "Candle context pending"),
+            "entryStatus": "Candle confirmed - await live gate" if ready else "Watch - " + str(candle.get("status") or "UNAVAILABLE"),
+            "tradeDecision": (f"Closed candle confirmed. Entry needs fresh live price/volume and valid RR; trigger {trigger_text}, stop {fail_text}."
+                              if ready else f"No fresh entry. {reasons}"[:260]),
+            "confirmationText": "Candle shape alone is not an entry or a win probability. " + reasons[:200],
+        }
 
     if direction == "bearish":
         if trigger:
@@ -628,13 +649,16 @@ def map_pick(signal: dict[str, Any], last_updated: str) -> dict[str, Any]:
         "currentPrice": _fmt_price(signal.get("current_price") or signal.get("price")),
         "current_price": round(price_value, 2) if price_value else None,
         "price": round(price_value, 2) if price_value else None,
-        "change_pct": round(_safe_float(signal.get("change_pct")), 2),
+        "change_pct": round(_safe_float(signal.get("change_pct")), 2) if signal.get("change_pct") is not None else None,
         "relative_volume": round(_safe_float(signal.get("relative_volume") or signal.get("volume_ratio"), 1.0), 2),
-        "risk_reward": _safe_float(signal.get("risk_reward")),
+        "risk_reward": _safe_float(signal.get("risk_reward")) if signal.get("risk_reward") is not None else None,
         "riskPct": signal.get("riskPct"),
         "riskPerShare": signal.get("riskPerShare"),
         "maxPositionPctAt1PctAccountRisk": signal.get("maxPositionPctAt1PctAccountRisk"),
         "entry_plan_status": signal.get("entry_plan_status"),
+        "candle_setup": signal.get("candle_setup"),
+        "candleGateReady": bool(signal.get("candleGateReady")),
+        "candleGateReason": signal.get("candleGateReason"),
         "entry_plan_blocked": bool(signal.get("entry_plan_blocked")),
         "entry_plan_blocked_reason": signal.get("entry_plan_blocked_reason"),
         "proposed_entry": signal.get("proposed_entry"),
@@ -880,6 +904,7 @@ def _base_formation(signal: dict[str, Any], last_updated: str) -> dict[str, Any]
 def _all_signals(scan: dict[str, Any]) -> list[dict[str, Any]]:
     pools = [
         *(scan.get("top_opportunities") or []),
+        *(scan.get("candle_watch_setups") or []),
         *(scan.get("breakout_candidates") or []),
         *(scan.get("bearish_risks") or []),
         *(scan.get("unusual_volume") or []),

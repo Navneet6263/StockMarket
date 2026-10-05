@@ -38,16 +38,69 @@ class MarketDataService:
         safe_sym = resolved_symbol.replace("^", "").replace(".", "_")
         return self.cache_dir / f"{safe_sym}_{period}_{interval}.parquet"
 
-    def _load_from_parquet(self, path: Path) -> pd.DataFrame | None:
+    def _load_from_parquet(
+        self, path: Path, interval: str = "1d", *, now: datetime | None = None,
+    ) -> pd.DataFrame | None:
+        """Reuse daily history as before, but never recycle stale intraday bars.
+
+        Intraday parquet indexes use this provider's UTC-naive convention. During
+        a regular NSE session both the file age and the most recent bar matter:
+        re-reading an old file must not renew its RAM cache lifetime indefinitely.
+        Fully completed sessions may be reused off-hours without extra downloads.
+        No exchange holiday calendar is inferred here; live entry gates remain
+        responsible for current-session/closed-candle validation.
+        """
         if not path.exists():
             return None
         try:
+            intraday_minutes = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "10m": 10,
+                                "15m": 15, "30m": 30, "60m": 60, "1h": 60, "90m": 90}.get(str(interval).lower())
+            if intraday_minutes is not None:
+                clock = pd.Timestamp(now if now is not None else datetime.now(timezone.utc))
+                clock = clock.tz_localize("UTC") if clock.tz is None else clock.tz_convert("UTC")
+                file_time = pd.Timestamp(path.stat().st_mtime, unit="s", tz="UTC")
+                age_seconds = (clock - file_time).total_seconds()
+                if age_seconds < -5:
+                    return None
+                local_clock = clock.tz_convert("Asia/Kolkata")
+                minute_of_day = local_clock.hour * 60 + local_clock.minute
+                session_active = local_clock.dayofweek < 5 and 555 <= minute_of_day < 930
+                ttl = max(0, self._history_ttl(interval))
+                if session_active and age_seconds >= ttl:
+                    return None
             df = pd.read_parquet(path)
             if df.empty:
                 return None
+            if intraday_minutes is not None:
+                if not isinstance(df.index, pd.DatetimeIndex) or df.index.hasnans:
+                    return None
+                last_bar = pd.Timestamp(df.index[-1])
+                last_bar = last_bar.tz_localize("UTC") if last_bar.tz is None else last_bar.tz_convert("UTC")
+                if last_bar > clock + pd.Timedelta(seconds=5):
+                    return None
+                local_bar = last_bar.tz_convert("Asia/Kolkata")
+                bar_minute = local_bar.hour * 60 + local_bar.minute
+                if local_bar.dayofweek >= 5 or not 555 <= bar_minute < 930:
+                    return None
+                bar_session_close = local_bar.normalize() + pd.Timedelta(hours=15, minutes=30)
+                bar_close = min(local_bar + pd.Timedelta(minutes=intraday_minutes), bar_session_close)
+                if session_active:
+                    if local_bar.date() != local_clock.date():
+                        return None
+                    if (local_clock - bar_close).total_seconds() > max(intraday_minutes * 180, ttl):
+                        return None
+                else:
+                    expected_day = local_clock.normalize()
+                    if local_clock.dayofweek >= 5 or minute_of_day < 555:
+                        expected_day -= pd.offsets.BDay(1)
+                    expected_close = expected_day + pd.Timedelta(hours=15, minutes=30)
+                    completed_session = bar_close == expected_close and file_time >= expected_close
+                    if not completed_session and age_seconds >= ttl:
+                        return None
+                return df
             import numpy as np
             last_date = df.index[-1].date()
-            today = datetime.now().date()
+            today = now.date() if now is not None else datetime.now().date()
             bus_days_diff = np.busday_count(last_date, today)
             if bus_days_diff > 1:
                 return None
@@ -110,7 +163,7 @@ class MarketDataService:
             return cached.copy()
             
         pq_path = self._get_parquet_path(resolved, period, interval)
-        pq_df = self._load_from_parquet(pq_path)
+        pq_df = self._load_from_parquet(pq_path, interval=interval)
         if pq_df is not None:
             self.history_cache.set(cache_key, pq_df, ttl_seconds=self._history_ttl(interval))
             return pq_df.copy()
@@ -166,7 +219,7 @@ class MarketDataService:
                 results[clean] = cached.copy()
             else:
                 pq_path = self._get_parquet_path(resolved, period, interval)
-                pq_df = self._load_from_parquet(pq_path)
+                pq_df = self._load_from_parquet(pq_path, interval=interval)
                 if pq_df is not None:
                     self.history_cache.set(cache_key, pq_df, ttl_seconds=self._history_ttl(interval))
                     results[clean] = pq_df.copy()

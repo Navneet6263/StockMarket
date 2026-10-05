@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API_URL, humanize, fmt, fmtPct, asNumber } from "./lib/market";
+import { stockCardModel } from "./lib/stock-card-model";
 import TradingChart from "./components/TradingChart";
 
 const TABS = [
@@ -135,22 +136,18 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
     );
   }
 
-  const change = item.change_pct ?? item.changePct ?? item.raw?.change_pct ?? 0;
-  const price = item.currentPrice ?? item.current_price ?? item.price ?? item.raw?.current_price ?? item.raw?.price ?? 0;
-  const sourceAction = item.action ?? item.effectiveAction ?? item.display_action ?? item.recommended_action ?? item.sourceAction ?? "WATCH";
-  const action = tab === "dashboard" ? (item.dashboardAction || sourceAction) : sourceAction;
+  const { change, price, sourceAction, action, direction, entryValue, targetValue, stopValue,
+    liveStatus, livePlanValid, inferredReady, riskReward, riskPct, hasLiveRisk, candle, label: cardLabel } = stockCardModel(item, tab);
   const actionBucket = item.dashboardBucket || "";
-  const actionClass = actionBucket.endsWith("_READY") || action === "BUY" || action === "REENTRY_BUY"
+  const actionClass = (tab === "dashboard" && actionBucket.endsWith("_READY")) || action === "BUY" || action === "REENTRY_BUY" || action === "ENTRY_READY"
     ? "buy"
     : action === "SELL" || actionBucket === "NO_TRADE" ? "sell" : "watch";
   const actionText = tab === "dashboard"
     ? action
-    : action === "BUY" ? "✅ BUY" : action === "SELL" ? "🛑 SELL" : "👁️ WATCH";
-  const direction = item.direction || "neutral";
+    : action === "ENTRY_READY" ? "✅ ENTRY READY" : action === "BUY" || action === "REENTRY_BUY" ? `✅ ${humanize(action)}` : action === "SELL" ? "🛑 SELL" : action === "WATCH" ? "👁️ WATCH" : humanize(action);
   const chartPattern = item.chartPattern ?? item.setupType ?? item.setup_type ?? item.raw?.setup_type;
   const patternLabels = item.patternLabels ?? item.pattern_labels ?? item.raw?.pattern_labels ?? [];
   const entryLabel = item.entryLabel ?? item.entry_label ?? (item.entryMissed || item.entry_missed ? "Retest" : "Entry");
-  const entryValue = item.proposed_entry ?? item.entryZone ?? item.entry_zone_text ?? item.entry_trigger ?? item.entryTrigger ?? item.breakoutTrigger ?? price;
   const aiReason = item.aiReason || "";
   const aiTradePlan = item.aiTradePlan || "";
   const aiRisks = item.aiRisks || [];
@@ -168,7 +165,6 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
   const footprint = item.large_money_footprint || item.raw?.large_money_footprint || {};
   const footprintScore = footprint.score ?? item.large_money_footprint_score ?? item.raw?.large_money_footprint_score;
   const footprintQuality = footprint.data_quality?.grade ?? item.footprint_data_quality?.grade ?? item.raw?.footprint_data_quality?.grade;
-  const liveStatus = item.liveTriggerStatus || item.liveConfirmation?.status;
   const liveScore = item.liveTriggerScore ?? item.liveConfirmation?.score;
   const liveScoreMeaning = item.liveTriggerScoreMeaning || item.liveConfirmation?.scoreMeaning;
   const liveEvidence = item.liveEvidence || item.liveConfirmation?.evidence || [];
@@ -200,7 +196,7 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
       <div className="stock-card-top">
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <h3>{item.symbol}</h3>
-          {item.label && <span className="tag" style={{ background: "var(--red, #ef4444)", color: "#fff", fontWeight: "bold" }}>{item.label}</span>}
+          {cardLabel && <span className="tag" style={{ background: "var(--red, #ef4444)", color: "#fff", fontWeight: "bold" }}>{cardLabel}</span>}
           {item.quality_grade && <span className="tag" style={{ 
             background: item.quality_grade === 'A' ? 'var(--green)' : item.quality_grade === 'B' ? 'var(--yellow)' : item.quality_grade === 'C' ? 'var(--orange)' : 'var(--red)',
             color: '#fff',
@@ -213,15 +209,15 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
       </div>
       {chartPattern ? <div className="stock-reason" style={{ marginTop: 4 }}>{humanize(chartPattern)}</div> : null}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <span className="stock-price">₹{fmt(price)}</span>
-        <span className={`stock-change ${change >= 0 ? "up" : "down"}`}>{fmtPct(change)}</span>
+        <span className="stock-price">{priceText(price)}</span>
+        <span className={`stock-change ${change == null ? "" : change >= 0 ? "up" : "down"}`} title={change == null ? "Price change unavailable" : undefined}>{change == null ? "—" : fmtPct(change)}</span>
       </div>
       <div className="stock-meta">
         <span className={`tag ${actionClass}`}>{actionText}</span>
         {item.mtfRiskFit ? <span className="tag buy">MTF RISK FIT · BROKER CHECK</span> : null}
         {item.return60d != null && Math.abs(item.return60d) >= 20 ? <span className="tag">60-session move {fmtPct(item.return60d)}</span> : null}
-        {(item.risk_reward || item.rr) ? <span className="tag">⚖️ RR 1:{fmt(item.risk_reward ?? item.rr, 1)}</span> : null}
-        {item.riskPct != null ? <span className="tag">Stop risk {fmt(item.riskPct, 2)}%</span> : null}
+        {riskReward != null && riskReward > 0 ? <span className="tag">⚖️ {hasLiveRisk ? "Live " : ""}RR 1:{fmt(riskReward, 1)}</span> : null}
+        {riskPct != null && riskPct > 0 ? <span className="tag">Stop risk {fmt(riskPct, 2)}%</span> : null}
         {item.maxPositionPctAt1PctAccountRisk != null ? (
           <span className="tag">1% account-risk cap: max {fmt(item.maxPositionPctAt1PctAccountRisk, 1)}% capital</span>
         ) : null}
@@ -261,6 +257,27 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
           {item.mtfRiskFit ? <p className="stock-reason">{item.mtfRiskNote}</p> : null}
         </div>
       ) : null}
+      {candle ? (
+        <div className="demand-panel" style={{ marginTop: 10 }}>
+          <div className="stock-meta">
+            <span className={`tag ${candle.status === "READY" && candle.entry_ready ? "buy" : candle.status === "INVALID" ? "sell" : "watch"}`}>Candle setup {humanize(candle.status || "UNAVAILABLE")}</span>
+            {candle.higher_timeframe_trend ? <span className="tag">Higher timeframe: {humanize(candle.higher_timeframe_trend)}</span> : null}
+            {candle.timeframe ? <span className="tag">{candle.timeframe}</span> : null}
+          </div>
+          {(candle.pattern || candle.phase) ? <p className="stock-reason">{[candle.pattern, candle.phase].filter(Boolean).map(humanize).join(" · ")}</p> : null}
+          {(Array.isArray(candle.reasons) ? candle.reasons : []).slice(0, 2).map((reason: string, index: number) => (
+            <p className="stock-reason" key={`${item.symbol}-candle-${index}`}>• {reason}</p>
+          ))}
+          {(candle.trigger != null || candle.invalidation != null) ? (
+            <div className="stock-targets">
+              <div><span>Candle trigger</span><strong>{priceText(candle.trigger)}</strong></div>
+              <div><span>Invalidation</span><strong>{priceText(candle.invalidation)}</strong></div>
+              {candle.target != null ? <div><span>Setup target</span><strong>{priceText(candle.target)}</strong></div> : null}
+            </div>
+          ) : null}
+          <p className="stock-reason" style={{ color: "var(--muted)", fontSize: 11 }}>Setup rules, not a success probability. {candle.rules_version ? `Rules ${candle.rules_version}.` : ""}</p>
+        </div>
+      ) : null}
       {liveStatus ? (
         <div className="demand-panel" style={{ marginTop: 10 }}>
           <div className="stock-meta">
@@ -269,6 +286,9 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
             {item.liveConfirmationMode ? <span className="tag">{humanize(item.liveConfirmationMode)}</span> : null}
           </div>
           {liveScoreMeaning ? <p className="stock-reason">{liveScoreMeaning}</p> : null}
+          {liveStatus === "CONFIRMED" && !livePlanValid ? <p className="stock-reason" style={{ color: "var(--orange)" }}>Live tick conditions passed, but a valid entry/stop/target and ready candle setup must still be available. Do not treat this gate alone as an entry instruction.</p> : null}
+          {liveStatus === "CONFIRMED" && livePlanValid && sourceAction === "WATCH" ? <p className="stock-reason">Live tick conditions passed; the scanner action remains WATCH. Entry permission has not changed.</p> : null}
+          {inferredReady ? <p className="stock-reason">Entry conditions and risk geometry are available; verify the current quote and order risk before trading.</p> : null}
           {liveEvidence.slice(0, 2).map((reason: string, index: number) => (
             <p className="stock-reason" key={`${item.symbol}-live-evidence-${index}`}>• {reason}</p>
           ))}
@@ -373,8 +393,8 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
       ) : null}
       <div className="stock-targets">
         <div><span>{entryLabel}</span><strong>{priceText(entryValue)}</strong></div>
-        <div><span>Target</span><strong>{priceText(item.opposing_structure_target ?? item.target_1 ?? item.target_price ?? item.target ?? item.keyResistance)}</strong></div>
-        <div><span>Stop</span><strong>{priceText(item.structural_invalidation ?? item.stop_loss ?? item.stoploss ?? item.invalidation ?? item.invalidationLevel)}</strong></div>
+        <div><span>Target</span><strong>{priceText(targetValue)}</strong></div>
+        <div><span>Stop</span><strong>{priceText(stopValue)}</strong></div>
       </div>
     </div>
   );
