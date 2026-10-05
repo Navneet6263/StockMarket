@@ -1033,24 +1033,39 @@ function OptionsDashboard({ hotPicksData }: { hotPicksData: any }) {
 // ── Extract items from API data ──────────────────────────────────────────────
 function extractItems(tab: string, data: any): any[] {
   if (!data) return [];
-  if (tab === "dashboard") return data.hotPicks || data.top_opportunities || [];
+  if (tab === "dashboard") {
+    const list = data.hotPicks || [];
+    if (list.length >= 4) return list;
+    const backfill = [
+      ...list,
+      ...(data.watchlist || []),
+      ...(data.momentumRadar || []),
+      ...(data.baseFormationRadar || []),
+      ...(data.volumeBoomers || []),
+      ...(data.top_opportunities || []),
+    ];
+    const seen = new Set();
+    return backfill.filter((item: any) => {
+      if (!item?.symbol || seen.has(item.symbol)) return false;
+      seen.add(item.symbol);
+      return true;
+    }).slice(0, 16);
+  }
   if (tab === "hot-picks") {
     const items = data.hotPicks || data.top_opportunities || [];
-    return items.filter((item: any) => {
+    const filtered = items.filter((item: any) => {
       const raw = item.raw || {};
       const patternLabels = item.patternLabels || [];
       const demandStatus = item.demandStatus || "";
       const smartMoneyRead = item.smartMoneyRead || "";
-      
       const hasVCP = (raw.tight_consolidation_pct ?? 100) < 4 || (raw.bb_width_ratio ?? 1) < 0.15 || patternLabels.some((l: string) => l.toLowerCase().includes('squeeze') || l.toLowerCase().includes('base'));
       const hasRS = (raw.relative_strength_delta_5d ?? 0) > 3 || (raw.rs_rating ?? 0) > 70 || (raw.relative_strength ?? 0) > 1;
       const hasIceberg = demandStatus === "strong_accumulation" || item.seller_pressure === "low" || smartMoneyRead.toLowerCase().includes("accumulation");
       const hasSector = (raw.sector_momentum ?? 0) > 0 || raw.sector_strength === "strong";
       const hasOptions = (raw.options_activity === "bullish" || (raw.put_oi_chg ?? 0) > (raw.call_oi_chg ?? 0) * 1.5);
-      
-      // Keep only if it has at least one strong evidence metric and score > 70.
-      return (hasVCP || hasRS || hasIceberg || hasSector || hasOptions) && (item.confidence ?? item.score ?? 0) >= 70;
+      return (hasVCP || hasRS || hasIceberg || hasSector || hasOptions) && (item.confidence ?? item.score ?? 0) >= 65;
     });
+    return filtered.length > 0 ? filtered : items;
   }
   if (tab === "volume-boomers") return data.volumeBoomers || (data.hotPicks || data.top_opportunities || []).filter((x: any) => (x.relative_volume ?? x.raw?.relative_volume ?? 1) >= 3);
   if (tab === "live-action") {

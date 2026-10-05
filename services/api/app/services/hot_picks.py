@@ -175,15 +175,6 @@ def _dashboard_profile(signal: dict[str, Any], *, score: float) -> dict[str, Any
         or "momentum" in setup_text
         or "confirmed_breakout" in setup_text
     )
-    hard_blocked = bool(
-        direction != "bullish"
-        or signal.get("marketGateBlocked")
-        or signal.get("blockedBuyReason")
-        or signal.get("tradePlanGateBlocked")
-        or signal.get("entry_plan_blocked")
-        or trap_risk == "high"
-        or action in {"AVOID", "EXIT", "SELL", "NO_TRADE", "WAIT_FOR_BETTER_ENTRY"}
-    )
     action_ready = bool(
         action in {"BUY", "REENTRY_BUY"}
         and signal.get("allow_buy_call", True) is not False
@@ -197,11 +188,27 @@ def _dashboard_profile(signal: dict[str, Any], *, score: float) -> dict[str, Any
     )
     candle = signal.get("candle_setup")
     if isinstance(candle, dict):
-        # Closed-candle READY still waits on the separate live execution gate.
         action_ready = False
         fast_move_valid = False
 
-    if hard_blocked:
+    if direction == "bearish":
+        action_ready_short = bool(
+            action in {"SELL", "SHORT", "BREAKDOWN_ENTRY"}
+            or (score >= 65 and not signal.get("attention_only"))
+        )
+        if trap_risk == "high" or action in {"AVOID", "EXIT", "NO_TRADE"}:
+            bucket = "NO_TRADE"
+            label = "No fresh trade"
+            reason = "High risk or invalid setup blocks short/PE."
+        elif "breakdown" in setup_text or signal.get("is_breakdown"):
+            bucket = "BREAKDOWN_READY" if action_ready_short else "BREAKDOWN_WATCH"
+            label = "Breakdown ready (PE)" if action_ready_short else "Breakdown watch (PE)"
+            reason = "Breakdown structure confirmed; watch for put / short entry."
+        else:
+            bucket = "SHORT_READY" if action_ready_short else "SHORT_WATCH"
+            label = "Bearish setup ready (PE)" if action_ready_short else "Bearish trigger watch (PE)"
+            reason = "Bearish weakness confirmed; watch for lower levels."
+    elif trap_risk == "high" or action in {"AVOID", "EXIT", "NO_TRADE"}:
         bucket = "NO_TRADE"
         label = "No fresh trade"
         reason = "Regime, structure, trap, or trade-plan gate blocks a fresh long."
@@ -214,14 +221,14 @@ def _dashboard_profile(signal: dict[str, Any], *, score: float) -> dict[str, Any
         label = "Retest only"
         reason = "Fast/extended move lacks a tight validated continuation plan; wait for a new base or retest."
     elif reversal:
-        bucket = "REVERSAL_READY" if action_ready else "REVERSAL_WATCH"
-        label = "Reversal ready" if action_ready else "Reversal trigger watch"
+        bucket = "REVERSAL_READY" if (action_ready and not signal.get("marketGateBlocked")) else "REVERSAL_WATCH"
+        label = "Reversal ready" if (action_ready and not signal.get("marketGateBlocked")) else "Reversal trigger watch"
         reason = "Base/reclaim evidence is present; live price-volume confirmation is still required."
     elif momentum:
-        bucket = "MOMENTUM_READY" if action_ready or fast_move_valid else "MOMENTUM_WATCH"
+        bucket = "MOMENTUM_READY" if ((action_ready or fast_move_valid) and not signal.get("marketGateBlocked")) else "MOMENTUM_WATCH"
         label = "Momentum ready" if bucket == "MOMENTUM_READY" else "Momentum trigger watch"
         reason = "Volume-backed continuation structure is present; live confirmation decides the entry."
-    elif action_ready:
+    elif action_ready and not signal.get("marketGateBlocked"):
         bucket = "SETUP_READY"
         label = "Setup ready"
         reason = "The static setup passed structure and risk gates; wait for the live trigger."
@@ -233,6 +240,7 @@ def _dashboard_profile(signal: dict[str, Any], *, score: float) -> dict[str, Any
     dashboard_eligible = bucket in {
         "REVERSAL_READY", "REVERSAL_WATCH", "MOMENTUM_READY",
         "MOMENTUM_WATCH", "SETUP_READY", "TRIGGER_WATCH",
+        "BREAKDOWN_READY", "BREAKDOWN_WATCH", "SHORT_READY", "SHORT_WATCH",
     }
     footprint = signal.get("large_money_footprint") or {}
     footprint_score = _safe_float(
@@ -568,10 +576,10 @@ def score_signal(signal: dict[str, Any]) -> dict[str, Any]:
         rejection_reasons.append("missing_price")
     if direction == "neutral":
         rejection_reasons.append("unclear_direction")
-    if signal.get("marketGateBlocked") or signal.get("blockedBuyReason"):
-        rejection_reasons.append("market_regime_gate")
+    if direction == "bullish" and (signal.get("marketGateBlocked") or signal.get("blockedBuyReason")):
+        soft_reasons.append("market_regime_gate")
     if signal.get("tradePlanGateBlocked") or signal.get("entry_plan_blocked"):
-        rejection_reasons.append("structural_trade_plan_gate")
+        soft_reasons.append("structural_trade_plan_gate")
     if volume and volume < 30000:
         soft_reasons.append("low_volume")
     if not invalidation:
@@ -981,10 +989,14 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
 
     dashboard_priority = {
         "REVERSAL_READY": 60,
+        "BREAKDOWN_READY": 58,
         "MOMENTUM_READY": 55,
+        "SHORT_READY": 52,
         "SETUP_READY": 50,
         "REVERSAL_WATCH": 40,
+        "BREAKDOWN_WATCH": 38,
         "MOMENTUM_WATCH": 35,
+        "SHORT_WATCH": 32,
         "TRIGGER_WATCH": 30,
     }
     dashboard_candidates = [
@@ -995,7 +1007,15 @@ def build_hot_picks_response(scan: dict[str, Any], tracker_dashboard: dict[str, 
         key=lambda item: (dashboard_priority.get(item.get("dashboardBucket"), 0), item["score"]),
         reverse=True,
     )
-    hot = dashboard_candidates[:12]
+    hot = list(dashboard_candidates[:12])
+    if len(hot) < 8 and eligible:
+        hot_symbols_temp = {item["symbol"] for item in hot}
+        for item in eligible:
+            if item["symbol"] not in hot_symbols_temp and item.get("score", 0) >= 50:
+                hot.append(item)
+                hot_symbols_temp.add(item["symbol"])
+                if len(hot) >= 12:
+                    break
 
     # Enrich top hot picks with AI analysis (Finnhub + Gemini)
     if AI_AVAILABLE:
