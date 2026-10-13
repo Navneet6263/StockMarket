@@ -156,7 +156,7 @@ def build_candles(
     if daily.empty:
         return pd.DataFrame(columns=columns)
     periods = _period_index(pd.DatetimeIndex(daily.index), timeframe, params.year_definition)
-    grouped = daily.groupby(periods, sort=True)
+    grouped = daily.assign(_session=daily.index).groupby(periods, sort=True)
     candles = pd.DataFrame(
         {
             "open": grouped["open"].first(),
@@ -164,8 +164,8 @@ def build_candles(
             "low": grouped["low"].min(),
             "close": grouped["close"].last(),
             "volume": grouped["volume"].sum(min_count=1),
-            "start": grouped.apply(lambda g: g.index[0].date(), include_groups=False),
-            "end": grouped.apply(lambda g: g.index[-1].date(), include_groups=False),
+            "start": [ts.date() for ts in grouped["_session"].first()],
+            "end": [ts.date() for ts in grouped["_session"].last()],
         }
     )
     candles["period_end"] = [period.end_time.date() for period in candles.index]

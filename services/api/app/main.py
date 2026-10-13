@@ -25,7 +25,6 @@ from app.routers import (
 from app.routers.live import router as live_router
 from app.routers.ai import router as ai_router
 from app.routers.performance import router as performance_router
-from app.routers.fresh_zones import router as fresh_zones_router
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +86,15 @@ fastapi_app.include_router(legacy_router)
 fastapi_app.include_router(live_router)
 fastapi_app.include_router(ai_router)
 fastapi_app.include_router(performance_router)
-fastapi_app.include_router(fresh_zones_router)
+
+# The fresh-zone scanner is optional: a failure while loading it must never
+# stop the rest of the API from starting.
+try:
+    from app.routers.fresh_zones import router as fresh_zones_router
+
+    fastapi_app.include_router(fresh_zones_router)
+except Exception:
+    logger.exception("[FRESH-ZONES] router disabled: failed to load")
 
 
 @fastapi_app.on_event("startup")
@@ -98,8 +105,11 @@ async def start_market_background_scanner():
     get_market_hub().start_background_scanner()
 
     # Fresh demand/resistance zone scanner (opt-in via FRESH_ZONE_SCHEDULER_ENABLED)
-    from app.fresh_zones.service import start_scheduler_if_enabled
-    start_scheduler_if_enabled()
+    try:
+        from app.fresh_zones.service import start_scheduler_if_enabled
+        start_scheduler_if_enabled()
+    except Exception:
+        logger.exception("[FRESH-ZONES] scheduler not started")
     
     # Start Performance Auto-Exit Loop
     async def auto_exit_loop():

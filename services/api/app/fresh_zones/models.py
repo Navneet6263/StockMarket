@@ -9,8 +9,18 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import asdict, dataclass, field
-from enum import StrEnum
+from enum import Enum
 from typing import Any
+
+
+class StrEnum(str, Enum):
+    """``enum.StrEnum`` equivalent that also runs on Python 3.10."""
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    def __format__(self, spec: str) -> str:
+        return format(str(self.value), spec)
 
 
 class ZoneType(StrEnum):
