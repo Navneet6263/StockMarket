@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { API_URL, humanize, fmt, fmtPct, asNumber } from "./lib/market";
 import { stockCardModel } from "./lib/stock-card-model";
 import TradingChart from "./components/TradingChart";
+import FreshZonesPanel from "./components/FreshZonesPanel";
 
 const TABS = [
   { id: "dashboard",   label: "Dashboard",       api: "/api/market/hot-picks" },
@@ -12,6 +13,7 @@ const TABS = [
   { id: "watchlist",   label: "Watchlist",         api: "/api/market/hot-picks" },
   { id: "base-radar",  label: "Base Formation",    api: "/api/market/hot-picks" },
   { id: "momentum",    label: "Momentum",           api: "/api/market/hot-picks" },
+  { id: "fresh-zones", label: "🧱 Fresh Zones",     api: "/api/fresh-zones/opportunities" },
   { id: "traps",       label: "Traps & Risks",     api: "/api/market/traps" },
   { id: "options",     label: "⚡ Options",         api: "/api/market/options-analysis?symbol=NIFTY" },
 ];
@@ -1274,8 +1276,8 @@ export default function Page() {
       setRefreshing(true);
     }
 
-    // Options tab has its own internal fetch — skip here
-    if (tabId === "options") {
+    // Options and Fresh Zones tabs have their own internal fetch — skip here
+    if (tabId === "options" || tabId === "fresh-zones") {
       if (isCurrentTab) { setLoading(false); setRefreshing(false); }
       return;
     }
@@ -1427,6 +1429,8 @@ export default function Page() {
             <OptionsDashboard hotPicksData={dashboardData} />
           ) : selectedSymbol ? (
             <StockDetail symbol={selectedSymbol} onClose={() => setSelectedSymbol(null)} />
+          ) : tab === "fresh-zones" ? (
+            <FreshZonesPanel onSelect={setSelectedSymbol} />
           ) : (
             <>
               {tab === "dashboard" && <SmartOptionsPanel />}
