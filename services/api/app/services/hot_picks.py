@@ -207,7 +207,11 @@ def _dashboard_profile(signal: dict[str, Any], *, score: float) -> dict[str, Any
         else:
             bucket = "SHORT_READY" if action_ready_short else "SHORT_WATCH"
             label = "Bearish setup ready (PE)" if action_ready_short else "Bearish trigger watch (PE)"
-            reason = "Bearish weakness confirmed; watch for lower levels."
+            reason = (
+                "Bearish setup is active; act only with a defined stop."
+                if action_ready_short
+                else "Bearish bias; wait for a break below support before acting."
+            )
     elif trap_risk == "high" or action in {"AVOID", "EXIT", "NO_TRADE"}:
         bucket = "NO_TRADE"
         label = "No fresh trade"

@@ -6,16 +6,16 @@ import TradingChart from "./components/TradingChart";
 import FreshZonesPanel from "./components/FreshZonesPanel";
 
 const TABS = [
-  { id: "dashboard",   label: "Dashboard",       api: "/api/market/hot-picks" },
-  { id: "live-action", label: "🔴 Live Action",  api: "/api/market/live-entries" },
-  { id: "hot-picks",   label: "🌟 Pro Setup Scans", api: "/api/market/hot-picks" },
-  { id: "volume-boomers", label: "📦 3x+ Volume Boomers", api: "/api/market/hot-picks" },
-  { id: "watchlist",   label: "Watchlist",         api: "/api/market/hot-picks" },
-  { id: "base-radar",  label: "Base Formation",    api: "/api/market/hot-picks" },
-  { id: "momentum",    label: "Momentum",           api: "/api/market/hot-picks" },
-  { id: "fresh-zones", label: "🧱 Fresh Zones",     api: "/api/fresh-zones/opportunities" },
-  { id: "traps",       label: "Traps & Risks",     api: "/api/market/traps" },
-  { id: "options",     label: "⚡ Options",         api: "/api/market/options-analysis?symbol=NIFTY" },
+  { id: "dashboard",   group: "Overview", label: "🏠 Dashboard",          api: "/api/market/hot-picks" },
+  { id: "live-action", group: "Overview", label: "🔴 Live Action",        api: "/api/market/live-entries" },
+  { id: "hot-picks",   group: "Scans",    label: "🌟 Pro Setup Scans",    api: "/api/market/hot-picks" },
+  { id: "volume-boomers", group: "Scans", label: "📦 3x+ Volume Boomers", api: "/api/market/hot-picks" },
+  { id: "base-radar",  group: "Scans",    label: "🧘 Base Formation",     api: "/api/market/hot-picks" },
+  { id: "momentum",    group: "Scans",    label: "🚀 Momentum",           api: "/api/market/hot-picks" },
+  { id: "fresh-zones", group: "Scans",    label: "🧱 Fresh Zones",        api: "/api/fresh-zones/opportunities" },
+  { id: "watchlist",   group: "Watch & Risk", label: "👀 Watchlist",      api: "/api/market/hot-picks" },
+  { id: "traps",       group: "Watch & Risk", label: "⚠️ Traps & Risks",  api: "/api/market/traps" },
+  { id: "options",     group: "Derivatives", label: "⚡ Options",         api: "/api/market/options-analysis?symbol=NIFTY" },
 ];
 
 function priceText(value: any) {
@@ -112,6 +112,39 @@ function IndexTickerBar() {
   );
 }
 
+// Internal reason codes (snake_case) and status chatter are not user-facing.
+const INTERNAL_TEXT = /^[a-z0-9]+(_[a-z0-9]+)+$|gemini disabled|no key|invalidation level unavailable/i;
+
+// Generic verdict phrases already shown by the card's label; not evidence.
+const GENERIC_TEXT = /^(high alignment setup|watchlist setup|may move (lower|if)|needs confirmation)/i;
+
+function cleanReasons(reasons: any): string[] {
+  return (Array.isArray(reasons) ? reasons : []).map((r) => String(r || "").trim()).filter((r) => r && !INTERNAL_TEXT.test(r));
+}
+
+function reasonPoints(text: string): string[] {
+  const seen = new Set<string>();
+  return String(text || "")
+    .split(/;\s*|\.\s+(?=[A-Z0-9])/)
+    .map((part) => part.trim().replace(/\.$/, ""))
+    .filter((part) => part.length > 3 && !INTERNAL_TEXT.test(part) && !GENERIC_TEXT.test(part))
+    .filter((part) => (seen.has(part.toLowerCase()) ? false : (seen.add(part.toLowerCase()), true)));
+}
+
+const BULLISH_EVIDENCE = /higher lows|accumulation|relative strength vs nifty is positive|holding near .*support|demand/i;
+const BEARISH_EVIDENCE = /lower highs|distribution|supply|relative strength vs nifty is negative|below .*ema|breakdown/i;
+
+function mixedSignalNote(direction: string, points: string[], labels: string[], demandStatus?: string): string | null {
+  const evidence = [...points, ...(labels || []), demandStatus || ""].join(" | ");
+  if (direction === "bearish" && BULLISH_EVIDENCE.test(evidence)) {
+    return "Mixed signals: bearish label, but some evidence below is bullish. Wait for price to confirm a direction.";
+  }
+  if (direction === "bullish" && BEARISH_EVIDENCE.test(evidence) && /supply pressure|distribution/i.test(evidence)) {
+    return "Mixed signals: bullish label, but supply/distribution evidence is present. Wait for confirmation.";
+  }
+  return null;
+}
+
 // ── Stock Card ───────────────────────────────────────────────────────────────
 function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) => void; tab?: string }) {
   if (item.entryRule && item.instrumentRule) {
@@ -181,223 +214,172 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
   const volAccel = sb.volume_acceleration || 1;
   const volPriceDivergence = sb.vol_price_divergence || false;
 
+  const whyPoints = reasonPoints(fallbackReason);
+  const mixed = mixedSignalNote(direction, whyPoints, patternLabels, demandStatus);
+  const planMissing = (targetValue == null || priceText(targetValue) === "-") && (stopValue == null || priceText(stopValue) === "-");
+  const candleUseful = candle && String(candle.status || "UNAVAILABLE").toUpperCase() !== "UNAVAILABLE";
+  const ds = Number(demandScore ?? 0), ss = Number(supplyScore ?? 0);
+  const dsTotal = ds + ss;
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+
   return (
     <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: isHighTrap ? "var(--red)" : "var(--border)" }}>
       {isHighTrap ? (
         <div className="trap-alert">
-          <div className="trap-kicker">🚨 AVOID - VISIBLE TRAP EVIDENCE</div>
+          <div className="trap-kicker">🚨 AVOID — VISIBLE TRAP EVIDENCE</div>
           <div className="trap-desc">
-            {item.bull_trap?.bull_trap_detected ? "Fake Breakout Detected. Price broke resistance but failed to sustain." :
-             item.trap_warnings?.[0] || "Strong visible selling-pressure evidence detected; participant identity is unknown."}
-          </div>
-          <div className="stock-meta" style={{ marginTop: 4 }}>
-            <span className="tag sell" style={{ fontSize: 13, padding: '6px 12px' }}>🔴 DO NOT BUY / SELL TURANT</span>
+            {item.bull_trap?.bull_trap_detected ? "Fake breakout: price broke resistance but failed to hold." :
+             item.trap_warnings?.[0] || "Strong selling-pressure evidence; participant identity is unknown."}
           </div>
         </div>
-      ) : null}
-      <div className="stock-card-top">
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <h3>{item.symbol}</h3>
-          {cardLabel && <span className="tag" style={{ background: "var(--red, #ef4444)", color: "#fff", fontWeight: "bold" }}>{cardLabel}</span>}
-          {item.quality_grade && <span className="tag" style={{ 
-            background: item.quality_grade === 'A' ? 'var(--green)' : item.quality_grade === 'B' ? 'var(--yellow)' : item.quality_grade === 'C' ? 'var(--orange)' : 'var(--red)',
-            color: '#fff',
-            fontWeight: 'bold'
-          }}>Grade {item.quality_grade}</span>}
-        </div>
-        <span className={`badge ${isHighTrap ? 'bearish' : direction}`}>
-          {isHighTrap ? '🛑 AVOID' : direction === 'bullish' ? '📈 Bullish' : direction === 'bearish' ? '📉 Bearish' : humanize(direction)}
-        </span>
-      </div>
-      {chartPattern ? <div className="stock-reason" style={{ marginTop: 4 }}>{humanize(chartPattern)}</div> : null}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <span className="stock-price">{priceText(price)}</span>
-        <span className={`stock-change ${change == null ? "" : change >= 0 ? "up" : "down"}`} title={change == null ? "Price change unavailable" : undefined}>{change == null ? "—" : fmtPct(change)}</span>
-      </div>
-      <div className="stock-meta">
-        <span className={`tag ${actionClass}`}>{actionText}</span>
-        {item.mtfRiskFit ? <span className="tag buy">MTF RISK FIT · BROKER CHECK</span> : null}
-        {item.return60d != null && Math.abs(item.return60d) >= 20 ? <span className="tag">60-session move {fmtPct(item.return60d)}</span> : null}
-        {riskReward != null && riskReward > 0 ? <span className="tag">⚖️ {hasLiveRisk ? "Live " : ""}RR 1:{fmt(riskReward, 1)}</span> : null}
-        {riskPct != null && riskPct > 0 ? <span className="tag">Stop risk {fmt(riskPct, 2)}%</span> : null}
-        {item.maxPositionPctAt1PctAccountRisk != null ? (
-          <span className="tag">1% account-risk cap: max {fmt(item.maxPositionPctAt1PctAccountRisk, 1)}% capital</span>
-        ) : null}
-        {item.confidence ? <span className="tag" style={{ 
-          background: (item.confidence ?? 0) > 80 ? 'var(--green)' : (item.confidence ?? 0) > 60 ? 'var(--yellow)' : 'var(--orange)',
-          color: '#fff',
-          fontWeight: 'bold'
-        }}>🎯 Alignment {fmt(item.confidence ?? item.score, 0)}/100</span> : null}
-        {relVol > 0 ? <span className="tag" style={{
-          background: relVol >= 5 ? 'var(--orange)' : relVol >= 3 ? 'var(--green)' : 'transparent',
-          color: relVol >= 3 ? '#fff' : 'inherit',
-          fontWeight: relVol >= 3 ? 'bold' : 'normal',
-          border: relVol >= 3 ? 'none' : '1px solid var(--border)'
-        }}>{relVol >= 5 ? '🚀' : relVol >= 3 ? '🔥' : '📦'} {fmt(relVol, 1)}X VOL</span> : null}
-        {volBuilding && relVol < 3 ? <span className="tag" style={{ background: '#10b981', color: '#fff', fontWeight: 'bold' }}>📈 VOL BUILDING {volStreak}d</span> : null}
-        {stealthAccum ? <span className="tag" style={{ background: '#8b5cf6', color: '#fff', fontWeight: 'bold' }}>🕵️ ABSORPTION PROXY</span> : null}
-        {volAccel >= 1.5 && !volBuilding && !stealthAccum ? <span className="tag" style={{ background: '#f59e0b', color: '#fff', fontWeight: 'bold' }}>⚡ VOL ACCELERATING</span> : null}
-        {volPriceDivergence && !stealthAccum ? <span className="tag" style={{ background: '#6366f1', color: '#fff', fontWeight: 'bold' }}>🔍 PRICE-VOLUME DIVERGENCE</span> : null}
-        {footprintScore != null && Math.abs(footprintScore) >= 20 ? (
-          <span className="tag">Large-money footprint {footprintScore > 0 ? "+" : ""}{fmt(footprintScore, 0)}/100{footprintQuality ? ` · ${humanize(footprintQuality)} data` : ""}</span>
-        ) : null}
-        {item.entry_quality ? <span className="tag">{humanize(item.entry_quality)} entry</span> : null}
-        {item.seller_pressure ? <span className="tag">{humanize(item.seller_pressure)} sellers</span> : null}
-        {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking</span> : null}
-        {timeHorizon ? <span className="tag" style={{ color: "var(--yellow)", fontWeight: "bold" }}>⏳ Runs in: {timeHorizon}</span> : null}
-        {patternLabels.slice(0, 2).map((label: string) => <span key={label} className="tag">{humanize(label)}</span>)}
-      </div>
-      {item.entry_plan_blocked ? (
-        <div className="demand-panel" style={{ marginTop: 10, borderColor: "var(--orange)" }}>
-          <div className="stock-meta"><span className="tag watch">WATCH ONLY - BETTER ENTRY NEEDED</span></div>
-          <p className="stock-reason">{item.entry_plan_blocked_reason || "Current structural stop/target does not justify a live entry."}</p>
-        </div>
-      ) : null}
-      {tab === "dashboard" && item.dashboardReason ? (
-        <div className="demand-panel" style={{ marginTop: 10, borderColor: actionClass === "buy" ? "var(--green)" : "var(--yellow)" }}>
-          <p className="stock-reason">{item.dashboardReason}</p>
-          {item.mtfRiskFit ? <p className="stock-reason">{item.mtfRiskNote}</p> : null}
-        </div>
-      ) : null}
-      {candle ? (
-        <div className="demand-panel" style={{ marginTop: 10 }}>
-          <div className="stock-meta">
-            <span className={`tag ${candle.status === "READY" && candle.entry_ready ? "buy" : candle.status === "INVALID" ? "sell" : "watch"}`}>Candle setup {humanize(candle.status || "UNAVAILABLE")}</span>
-            {candle.higher_timeframe_trend ? <span className="tag">Higher timeframe: {humanize(candle.higher_timeframe_trend)}</span> : null}
-            {candle.timeframe ? <span className="tag">{candle.timeframe}</span> : null}
-          </div>
-          {(candle.pattern || candle.phase) ? <p className="stock-reason">{[candle.pattern, candle.phase].filter(Boolean).map(humanize).join(" · ")}</p> : null}
-          {(Array.isArray(candle.reasons) ? candle.reasons : []).slice(0, 2).map((reason: string, index: number) => (
-            <p className="stock-reason" key={`${item.symbol}-candle-${index}`}>• {reason}</p>
-          ))}
-          {(candle.trigger != null || candle.invalidation != null) ? (
-            <div className="stock-targets">
-              <div><span>Candle trigger</span><strong>{priceText(candle.trigger)}</strong></div>
-              <div><span>Invalidation</span><strong>{priceText(candle.invalidation)}</strong></div>
-              {candle.target != null ? <div><span>Setup target</span><strong>{priceText(candle.target)}</strong></div> : null}
-            </div>
-          ) : null}
-          <p className="stock-reason" style={{ color: "var(--muted)", fontSize: 11 }}>Setup rules, not a success probability. {candle.rules_version ? `Rules ${candle.rules_version}.` : ""}</p>
-        </div>
-      ) : null}
-      {liveStatus ? (
-        <div className="demand-panel" style={{ marginTop: 10 }}>
-          <div className="stock-meta">
-            <span className={`tag ${liveStatus === "CONFIRMED" ? "buy" : liveStatus === "REJECT" ? "sell" : "watch"}`}>Live gate {humanize(liveStatus)}</span>
-            {liveScore != null ? <span className="tag">Evidence {fmt(liveScore, 0)}/100</span> : null}
-            {item.liveConfirmationMode ? <span className="tag">{humanize(item.liveConfirmationMode)}</span> : null}
-          </div>
-          {liveScoreMeaning ? <p className="stock-reason">{liveScoreMeaning}</p> : null}
-          {liveStatus === "CONFIRMED" && !livePlanValid ? <p className="stock-reason" style={{ color: "var(--orange)" }}>Live tick conditions passed, but a valid entry/stop/target and ready candle setup must still be available. Do not treat this gate alone as an entry instruction.</p> : null}
-          {liveStatus === "CONFIRMED" && livePlanValid && sourceAction === "WATCH" ? <p className="stock-reason">Live tick conditions passed; the scanner action remains WATCH. Entry permission has not changed.</p> : null}
-          {inferredReady ? <p className="stock-reason">Entry conditions and risk geometry are available; verify the current quote and order risk before trading.</p> : null}
-          {liveEvidence.slice(0, 2).map((reason: string, index: number) => (
-            <p className="stock-reason" key={`${item.symbol}-live-evidence-${index}`}>• {reason}</p>
-          ))}
-        </div>
-      ) : null}
-      {tab === 'hot-picks' && (
-        <div className="pro-evidence-panel" style={{ background: "rgba(139, 92, 246, 0.1)", border: "1px solid var(--accent)", borderRadius: 8, padding: 12, marginTop: 12, marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700, marginBottom: 8 }}>
-            🛡️ Pro Setup Evidence
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {((item.raw?.tight_consolidation_pct ?? 100) < 4 || (item.raw?.bb_width_ratio ?? 1) < 0.15 || patternLabels.some((l: string) => l.toLowerCase().includes('squeeze') || l.toLowerCase().includes('base'))) && (
-              <span className="tag" style={{ background: "rgba(234, 179, 8, 0.2)", color: "#facc15", border: "1px solid rgba(250, 204, 21, 0.4)" }}>🌪️ VCP & Vol Dry-Up</span>
-            )}
-            {((item.raw?.relative_strength_delta_5d ?? 0) > 3 || (item.raw?.rs_rating ?? 0) > 70 || (item.raw?.relative_strength ?? 0) > 1) && (
-              <span className="tag" style={{ background: "rgba(52, 211, 153, 0.2)", color: "#34d399", border: "1px solid rgba(52, 211, 153, 0.4)" }}>💪 True Relative Strength</span>
-            )}
-            {(demandStatus === "strong_accumulation" || item.seller_pressure === "low" || smartMoneyRead?.toLowerCase().includes("accumulation")) && (
-              <span className="tag" style={{ background: "rgba(96, 165, 250, 0.2)", color: "#60a5fa", border: "1px solid rgba(96, 165, 250, 0.4)" }}>🧊 Demand / Accumulation Proxy</span>
-            )}
-            {((item.raw?.sector_momentum ?? 0) > 0 || item.raw?.sector_strength === "strong") && (
-              <span className="tag" style={{ background: "rgba(167, 139, 250, 0.2)", color: "#a78bfa", border: "1px solid rgba(167, 139, 250, 0.4)" }}>💸 Sector Rotation</span>
-            )}
-            {((item.raw?.iv_percentile ?? 0) > 80) ? (
-              <span className="tag" style={{ background: "rgba(244, 63, 94, 0.2)", color: "#f43f5e", border: "1px solid rgba(244, 63, 94, 0.4)" }}>🚫 IV Crush Risk</span>
-            ) : (item.raw?.options_activity === "bullish" || (item.raw?.put_oi_chg ?? 0) > (item.raw?.call_oi_chg ?? 0) * 1.5) ? (
-              <span className="tag" style={{ background: "rgba(52, 211, 153, 0.2)", color: "#34d399", border: "1px solid rgba(52, 211, 153, 0.4)" }}>🏦 Put OI Activity</span>
-            ) : null}
-            
-            {/* Fallback if no specific rule matches heavily */}
-            {!((item.raw?.tight_consolidation_pct ?? 100) < 4 || (item.raw?.bb_width_ratio ?? 1) < 0.15 || patternLabels.some((l: string) => l.toLowerCase().includes('squeeze') || l.toLowerCase().includes('base'))) && 
-             !((item.raw?.relative_strength_delta_5d ?? 0) > 3 || (item.raw?.rs_rating ?? 0) > 70 || (item.raw?.relative_strength ?? 0) > 1) &&
-             !(demandStatus === "strong_accumulation" || item.seller_pressure === "low" || smartMoneyRead?.toLowerCase().includes("accumulation")) &&
-             !((item.raw?.sector_momentum ?? 0) > 0 || item.raw?.sector_strength === "strong") &&
-             !((item.raw?.iv_percentile ?? 0) > 80) &&
-             !(item.raw?.options_activity === "bullish" || (item.raw?.put_oi_chg ?? 0) > (item.raw?.call_oi_chg ?? 0) * 1.5) && (
-               <span className="tag" style={{ color: "var(--muted)", background: "rgba(255,255,255,0.05)", border: "1px dashed var(--border)" }}>⚙️ Footprint Engine Active</span>
-            )}
-          </div>
-        </div>
-      )}
-      {hasAi ? (
-        <div className="ai-insight">
-          <div className="ai-insight-top">
-            <span className="ai-kicker">Gemini analysis</span>
-            <div className="stock-meta">
-              {aiActionLabel ? <span className={`tag ${aiActionClass(aiActionLabel)}`}>{humanize(aiActionLabel)}</span> : null}
-              {aiScore ? <span className="tag">AI {fmt(aiScore, 0)}%</span> : null}
-              {item.aiTimeframe ? <span className="tag">{item.aiTimeframe}</span> : null}
-            </div>
-          </div>
-          {aiReason ? <p className="stock-reason">{aiReason}</p> : null}
-          {aiTradePlan ? <p className="ai-plan">{aiTradePlan}</p> : null}
-          {aiRisks.length ? (
-            <div className="ai-risk-list">
-              {aiRisks.slice(0, 2).map((risk: string, index: number) => <span key={`${item.symbol}-ai-risk-${index}`}>{risk}</span>)}
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <>
-          <p className="stock-reason">{fallbackReason}</p>
-          {hasAiStatus ? (
-            <div className="stock-meta">
-              <span className="tag watch">Gemini: {humanize(item.aiStatus || "unavailable")}</span>
-            </div>
-          ) : null}
-        </>
-      )}
-      {(demandStatus || smartMoneyRead) ? (
-        <div className="demand-panel">
-          <div className="stock-meta">
-            {demandStatus ? <span className={`tag ${demandTone(demandStatus, trapRisk)}`}>{humanize(demandStatus)}</span> : null}
-            {demandScore != null ? <span className="tag">Demand {fmt(demandScore, 0)}</span> : null}
-            {supplyScore != null ? <span className="tag">Supply {fmt(supplyScore, 0)}</span> : null}
-            {trapRisk ? <span className={`tag ${demandTone(demandStatus, trapRisk)}`}>Trap {humanize(trapRisk)} {trapRiskScore != null ? fmt(trapRiskScore, 0) : ""}</span> : null}
-          </div>
-          {smartMoneyRead ? <p className="stock-reason">{smartMoneyRead}</p> : null}
-        </div>
-      ) : null}
-      
-      {item.bull_trap && item.bull_trap.bull_trap_detected && !isHighTrap ? (
-        <p className="stock-reason" style={{ color: "var(--red)", fontWeight: "bold" }}>⚠️ Bull Trap Warning</p>
       ) : null}
 
-      {item.newsHeadlines?.length ? (
-        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-          📰 {item.newsHeadlines[0]}
+      {/* 1 · Identity + price */}
+      <div className="stock-card-top">
+        <div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <h3>{item.symbol}</h3>
+            {cardLabel ? <span className="tag sell">{cardLabel}</span> : null}
+            {item.quality_grade ? <span className="tag">Grade {item.quality_grade}</span> : null}
+          </div>
+          {chartPattern ? <div className="card-subtitle">{humanize(chartPattern)}</div> : null}
         </div>
-      ) : null}
-      {item.aiWarnings?.length ? (
-        <p className="stock-reason" style={{ color: "var(--orange)" }}>⚠️ {item.aiWarnings[0]}</p>
-      ) : item.chase_warnings?.length ? (
-        <p className="stock-reason" style={{ color: "var(--orange)" }}>⚠️ {item.chase_warnings[0]}</p>
-      ) : null}
-      {item.newsSentiment && item.newsSentiment !== "unknown" ? (
-        <div className="stock-meta" style={{ marginTop: 4 }}>
-          <span className={`tag ${item.newsSentiment === "bullish" ? "buy" : item.newsSentiment === "bearish" ? "sell" : "watch"}`}>News: {item.newsSentiment}</span>
-          {item.insiderSignal && item.insiderSignal !== "unknown" && item.insiderSignal !== "neutral" ? <span className="tag">{item.insiderSignal === "insider_buying" ? "🟢 Insider Buy" : "🔴 Insider Sell"}</span> : null}
-          {item.analystConsensus && item.analystConsensus !== "unknown" ? <span className="tag">Analyst: {item.analystConsensus}</span> : null}
+        <div style={{ textAlign: "right" }}>
+          <div className="stock-price" style={{ fontSize: 22 }}>{priceText(price)}</div>
+          <span className={`stock-change ${change == null ? "" : change >= 0 ? "up" : "down"}`}>{change == null ? "—" : fmtPct(change)}</span>
         </div>
+      </div>
+
+      {/* 2 · Verdict */}
+      <div className="stock-meta" style={{ marginTop: 10 }}>
+        <span className={`badge ${isHighTrap ? "bearish" : direction}`}>
+          {isHighTrap ? "🛑 Avoid" : direction === "bullish" ? "📈 Bullish" : direction === "bearish" ? "📉 Bearish" : humanize(direction)}
+        </span>
+        <span className={`tag ${actionClass}`}>{actionText}</span>
+        {timeHorizon ? <span className="tag">⏳ {timeHorizon}</span> : null}
+      </div>
+      {mixed ? <div className="card-warning">⚠️ {mixed}</div> : null}
+      {tab === "dashboard" && item.dashboardReason ? <p className="card-verdict">{item.dashboardReason}</p> : null}
+
+      {/* 3 · Key numbers */}
+      <div className="metric-strip">
+        <div><span>Alignment</span><strong>{item.confidence != null || item.score != null ? `${fmt(item.confidence ?? item.score, 0)}/100` : "-"}</strong></div>
+        <div><span>Volume</span><strong style={{ color: relVol >= 3 ? "var(--green)" : undefined }}>{relVol > 0 ? `${fmt(relVol, 1)}×` : "-"}</strong></div>
+        <div>
+          <span>Demand vs supply</span>
+          {dsTotal > 0 ? (
+            <div className="ds-bar" title={`Demand ${fmt(ds, 0)} · Supply ${fmt(ss, 0)}`}>
+              <i style={{ width: `${(ds / dsTotal) * 100}%` }} />
+            </div>
+          ) : <strong>-</strong>}
+          {dsTotal > 0 ? <small>{fmt(ds, 0)} / {fmt(ss, 0)}</small> : null}
+        </div>
+      </div>
+
+      {/* 4 · Why */}
+      {whyPoints.length ? (
+        <ul className="card-why">
+          {whyPoints.slice(0, 4).map((point, i) => <li key={i}>{point}</li>)}
+        </ul>
       ) : null}
+      {item.entry_plan_blocked ? (
+        <div className="card-warning">Watch only — {item.entry_plan_blocked_reason || "the structural stop/target does not justify an entry yet."}</div>
+      ) : null}
+
+      {/* 5 · Plan */}
       <div className="stock-targets">
         <div><span>{entryLabel}</span><strong>{priceText(entryValue)}</strong></div>
         <div><span>Target</span><strong>{priceText(targetValue)}</strong></div>
         <div><span>Stop</span><strong>{priceText(stopValue)}</strong></div>
       </div>
+      {planMissing ? <p className="card-note">No stop or target yet — watch only, don’t trade without a stop.</p> : null}
+      {riskReward != null && riskReward > 0 ? (
+        <div className="stock-meta" style={{ marginTop: 8 }}>
+          <span className="tag">⚖️ {hasLiveRisk ? "Live " : ""}RR 1:{fmt(riskReward, 1)}</span>
+          {riskPct != null && riskPct > 0 ? <span className="tag">Stop risk {fmt(riskPct, 2)}%</span> : null}
+        </div>
+      ) : null}
+
+      {/* 6 · Everything else, folded */}
+      <details className="card-details" onClick={stop}>
+        <summary>Details</summary>
+        <div className="stock-meta" style={{ marginTop: 8 }}>
+          {patternLabels.slice(0, 4).map((label: string) => <span key={label} className="tag">{humanize(label)}</span>)}
+          {volBuilding ? <span className="tag buy">Volume building {volStreak}d</span> : null}
+          {stealthAccum ? <span className="tag">Absorption proxy</span> : null}
+          {volAccel >= 1.5 ? <span className="tag">Volume accelerating</span> : null}
+          {volPriceDivergence ? <span className="tag">Price-volume divergence</span> : null}
+          {footprintScore != null && Math.abs(footprintScore) >= 20 ? (
+            <span className="tag">Large-money footprint {footprintScore > 0 ? "+" : ""}{fmt(footprintScore, 0)}/100{footprintQuality ? ` · ${humanize(footprintQuality)} data` : ""}</span>
+          ) : null}
+          {item.seller_pressure ? <span className="tag">{humanize(item.seller_pressure)} sellers</span> : null}
+          {item.profit_booking_risk ? <span className="tag">{humanize(item.profit_booking_risk)} booking risk</span> : null}
+          {item.mtfRiskFit ? <span className="tag buy">MTF risk fit · broker check</span> : null}
+          {item.return60d != null && Math.abs(item.return60d) >= 20 ? <span className="tag">60-session move {fmtPct(item.return60d)}</span> : null}
+          {item.maxPositionPctAt1PctAccountRisk != null ? <span className="tag">1% risk cap: max {fmt(item.maxPositionPctAt1PctAccountRisk, 1)}% capital</span> : null}
+        </div>
+        {(demandStatus || smartMoneyRead) ? (
+          <div className="card-section">
+            <div className="stock-meta">
+              {demandStatus ? <span className={`tag ${demandTone(demandStatus, trapRisk)}`}>{humanize(demandStatus)}</span> : null}
+              {trapRisk ? <span className="tag">Trap risk {humanize(trapRisk)}{trapRiskScore != null ? ` ${fmt(trapRiskScore, 0)}` : ""}</span> : null}
+            </div>
+            {smartMoneyRead ? <p className="stock-reason">{smartMoneyRead}</p> : null}
+          </div>
+        ) : null}
+        {candleUseful ? (
+          <div className="card-section">
+            <div className="stock-meta">
+              <span className={`tag ${candle.status === "READY" && candle.entry_ready ? "buy" : candle.status === "INVALID" ? "sell" : "watch"}`}>Candle setup {humanize(candle.status)}</span>
+              {candle.higher_timeframe_trend ? <span className="tag">Higher TF: {humanize(candle.higher_timeframe_trend)}</span> : null}
+              {candle.timeframe ? <span className="tag">{candle.timeframe}</span> : null}
+            </div>
+            {(candle.pattern || candle.phase) ? <p className="stock-reason">{[candle.pattern, candle.phase].filter(Boolean).map(humanize).join(" · ")}</p> : null}
+            {cleanReasons(candle.reasons).slice(0, 2).map((reason: string, index: number) => <p className="stock-reason" key={index}>• {reason}</p>)}
+            {(candle.trigger != null || candle.invalidation != null) ? (
+              <div className="stock-targets">
+                <div><span>Candle trigger</span><strong>{priceText(candle.trigger)}</strong></div>
+                <div><span>Invalidation</span><strong>{priceText(candle.invalidation)}</strong></div>
+                {candle.target != null ? <div><span>Setup target</span><strong>{priceText(candle.target)}</strong></div> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {liveStatus ? (
+          <div className="card-section">
+            <div className="stock-meta">
+              <span className={`tag ${liveStatus === "CONFIRMED" ? "buy" : liveStatus === "REJECT" ? "sell" : "watch"}`}>Live gate {humanize(liveStatus)}</span>
+              {liveScore != null ? <span className="tag">Evidence {fmt(liveScore, 0)}/100</span> : null}
+            </div>
+            {liveScoreMeaning ? <p className="stock-reason">{liveScoreMeaning}</p> : null}
+            {liveStatus === "CONFIRMED" && !livePlanValid ? <p className="stock-reason" style={{ color: "var(--orange)" }}>Live conditions passed, but there is no valid entry/stop/target yet — not an entry signal on its own.</p> : null}
+            {inferredReady ? <p className="stock-reason">Entry conditions and risk levels are available; verify the live quote before trading.</p> : null}
+            {cleanReasons(liveEvidence).slice(0, 2).map((reason: string, index: number) => <p className="stock-reason" key={index}>• {reason}</p>)}
+          </div>
+        ) : null}
+        {hasAi ? (
+          <div className="card-section">
+            <div className="stock-meta">
+              <span className="tag">Gemini</span>
+              {aiActionLabel ? <span className={`tag ${aiActionClass(aiActionLabel)}`}>{humanize(aiActionLabel)}</span> : null}
+              {aiScore ? <span className="tag">AI {fmt(aiScore, 0)}%</span> : null}
+            </div>
+            {aiReason ? <p className="stock-reason">{aiReason}</p> : null}
+            {aiTradePlan ? <p className="ai-plan">{aiTradePlan}</p> : null}
+            {aiRisks.slice(0, 2).map((risk: string, index: number) => <p className="stock-reason" key={index}>⚠️ {risk}</p>)}
+          </div>
+        ) : null}
+        {item.newsHeadlines?.length ? <p className="stock-reason">📰 {item.newsHeadlines[0]}</p> : null}
+        {(item.aiWarnings?.[0] || item.chase_warnings?.[0]) ? <p className="stock-reason" style={{ color: "var(--orange)" }}>⚠️ {item.aiWarnings?.[0] || item.chase_warnings?.[0]}</p> : null}
+        {item.newsSentiment && item.newsSentiment !== "unknown" ? (
+          <div className="stock-meta">
+            <span className={`tag ${item.newsSentiment === "bullish" ? "buy" : item.newsSentiment === "bearish" ? "sell" : "watch"}`}>News: {item.newsSentiment}</span>
+            {item.insiderSignal && !["unknown", "neutral"].includes(item.insiderSignal) ? <span className="tag">{item.insiderSignal === "insider_buying" ? "Insider buy" : "Insider sell"}</span> : null}
+            {item.analystConsensus && item.analystConsensus !== "unknown" ? <span className="tag">Analyst: {item.analystConsensus}</span> : null}
+          </div>
+        ) : null}
+        <p className="card-note">Rule-based setup classification — not a success probability or a trade recommendation.</p>
+      </details>
     </div>
   );
 }
@@ -1378,25 +1360,18 @@ export default function Page() {
             onChange={e => setSearch(e.target.value)}
           />
         </form>
-        <div className="sidebar-section">Scanner</div>
-        {TABS.map(t => (
-          <button key={t.id} className={`sidebar-item ${tab === t.id ? "active" : ""}`}
-            onClick={() => { setTab(t.id); setSelectedSymbol(null); setActiveFilter("all"); }}
-            style={t.id === "live-action" && liveEntryCount > 0 ? { position: "relative" } : {}}>
-            {t.label}
-            {t.id === "live-action" && liveEntryCount > 0 && (
-              <span style={{
-                marginLeft: 6,
-                background: "var(--red, #ef4444)",
-                color: "#fff",
-                borderRadius: 9,
-                fontSize: 11,
-                fontWeight: 700,
-                padding: "1px 6px",
-                animation: "pulse 2.5s infinite",
-              }}>{liveEntryCount}</span>
-            )}
-          </button>
+        {TABS.map((t, i) => (
+          <div key={t.id}>
+            {i === 0 || TABS[i - 1].group !== t.group ? <div className="sidebar-section">{t.group}</div> : null}
+            <button className={`sidebar-item ${tab === t.id ? "active" : ""}`}
+              onClick={() => { setTab(t.id); setSelectedSymbol(null); setActiveFilter("all"); }}
+              style={t.id === "live-action" && liveEntryCount > 0 ? { position: "relative" } : {}}>
+              {t.label}
+              {t.id === "live-action" && liveEntryCount > 0 && (
+                <span className="sidebar-count">{liveEntryCount}</span>
+              )}
+            </button>
+          </div>
         ))}
         <div className="sidebar-section">Portfolio</div>
         <a href="/performance" className="sidebar-item" style={{ textDecoration: "none", display: "block" }}>
@@ -1463,7 +1438,7 @@ export default function Page() {
                   { key: "1-2-days",  label: "⏳ 1-2 Days",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2")).length },
                   { key: "3-4-days",  label: "📆 3-4 Days",      count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-4") || s.includes("3 to 4") || s.includes("3 - 4"); }).length },
                   { key: "anytime",   label: "🔥 Anytime",       count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("any time") || s.includes("anytime"); }).length },
-                ] as { key: string; label: string; count: number }[]).map(f => (
+                ] as { key: string; label: string; count: number }[]).filter(f => f.key === "all" || f.count > 0 || activeFilter === f.key).map(f => (
                   <button
                     key={f.key}
                     className="refresh-btn"
