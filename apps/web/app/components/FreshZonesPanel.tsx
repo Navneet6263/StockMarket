@@ -31,11 +31,11 @@ function ZoneCard({ row, onSelect }: { row: any; onSelect: (s: string) => void }
         <div>
           <h3>{zone.symbol}</h3>
           <span className={`badge ${isDemand ? "bullish" : "bearish"}`}>
-            {isDemand ? "📈 Demand zone" : "📉 Resistance zone"}
+            {isDemand ? "Demand zone" : "Resistance zone"}
           </span>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 20, fontWeight: 800 }}>{rupees(row.price)}</div>
+          <div className="stock-price">{rupees(row.price)}</div>
           <div style={{ fontSize: 11, color: "var(--muted)" }}>{row.price_basis}</div>
         </div>
       </div>
@@ -145,12 +145,12 @@ export default function FreshZonesPanel({ onSelect }: { onSelect: (symbol: strin
   return (
     <>
       <div className="stats-row">
-        <div className="stat-card"><span>🧱 Fresh zones tracked</span><strong>{items.length}</strong></div>
-        <div className="stat-card"><span>🎯 Imminent</span><strong style={{ color: "var(--red)" }}>{count("IMMINENT")}</strong></div>
-        <div className="stat-card"><span>👀 Near</span><strong style={{ color: "var(--yellow)" }}>{count("NEAR")}</strong></div>
-        <div className="stat-card"><span>📈 Demand</span><strong style={{ color: "var(--green)" }}>{count("demand")}</strong></div>
-        <div className="stat-card"><span>📉 Resistance</span><strong style={{ color: "var(--red)" }}>{count("resistance")}</strong></div>
-        <div className="stat-card"><span>🔔 Alerts today</span><strong>{alerts.filter((a) => a.ist_date === new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })).length}</strong></div>
+        <div className="stat-card"><span>Fresh zones tracked</span><strong>{items.length}</strong></div>
+        <div className="stat-card"><span>Imminent</span><strong style={{ color: "var(--red)" }}>{count("IMMINENT")}</strong></div>
+        <div className="stat-card"><span>Near</span><strong style={{ color: "var(--yellow)" }}>{count("NEAR")}</strong></div>
+        <div className="stat-card"><span>Demand</span><strong style={{ color: "var(--green)" }}>{count("demand")}</strong></div>
+        <div className="stat-card"><span>Resistance</span><strong style={{ color: "var(--red)" }}>{count("resistance")}</strong></div>
+        <div className="stat-card"><span>Alerts today</span><strong>{alerts.filter((a) => a.ist_date === new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" })).length}</strong></div>
       </div>
 
       <div className="demand-panel" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -163,16 +163,13 @@ export default function FreshZonesPanel({ onSelect }: { onSelect: (symbol: strin
       </div>
       {scanMsg ? <p className="stock-reason" style={{ marginTop: -6, marginBottom: 16, color: "var(--orange)" }}>{scanMsg}</p> : null}
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+      <div className="chip-row">
         {([
-          ["all", "All"], ["IMMINENT", "🎯 Imminent"], ["NEAR", "👀 Near"],
-          ["demand", "📈 Demand"], ["resistance", "📉 Resistance"],
+          ["all", "All"], ["IMMINENT", "Imminent"], ["NEAR", "Near"],
+          ["demand", "Demand"], ["resistance", "Resistance"],
         ] as [Filter, string][]).map(([key, label]) => (
-          <button key={key} className="refresh-btn" onClick={() => setFilter(key)}
-            style={{ fontSize: 13, padding: "6px 12px",
-              background: filter === key ? "var(--green, #22c55e)" : undefined,
-              color: filter === key ? "#000" : undefined, fontWeight: filter === key ? 700 : undefined }}>
-            {label} ({count(key)})
+          <button key={key} className={`chip ${filter === key ? "active" : ""}`} onClick={() => setFilter(key)}>
+            {label}<span className="count">{count(key)}</span>
           </button>
         ))}
       </div>

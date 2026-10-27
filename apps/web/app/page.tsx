@@ -4,18 +4,19 @@ import { API_URL, humanize, fmt, fmtPct, asNumber } from "./lib/market";
 import { stockCardModel } from "./lib/stock-card-model";
 import TradingChart from "./components/TradingChart";
 import FreshZonesPanel from "./components/FreshZonesPanel";
+import Icon from "./components/Icon";
 
 const TABS = [
-  { id: "dashboard",   group: "Overview", label: "🏠 Dashboard",          api: "/api/market/hot-picks" },
-  { id: "live-action", group: "Overview", label: "🔴 Live Action",        api: "/api/market/live-entries" },
-  { id: "hot-picks",   group: "Scans",    label: "🌟 Pro Setup Scans",    api: "/api/market/hot-picks" },
-  { id: "volume-boomers", group: "Scans", label: "📦 3x+ Volume Boomers", api: "/api/market/hot-picks" },
-  { id: "base-radar",  group: "Scans",    label: "🧘 Base Formation",     api: "/api/market/hot-picks" },
-  { id: "momentum",    group: "Scans",    label: "🚀 Momentum",           api: "/api/market/hot-picks" },
-  { id: "fresh-zones", group: "Scans",    label: "🧱 Fresh Zones",        api: "/api/fresh-zones/opportunities" },
-  { id: "watchlist",   group: "Watch & Risk", label: "👀 Watchlist",      api: "/api/market/hot-picks" },
-  { id: "traps",       group: "Watch & Risk", label: "⚠️ Traps & Risks",  api: "/api/market/traps" },
-  { id: "options",     group: "Derivatives", label: "⚡ Options",         api: "/api/market/options-analysis?symbol=NIFTY" },
+  { id: "dashboard",      group: "Overview",     icon: "home",     label: "Dashboard",          hint: "Top setups across the market right now",            api: "/api/market/hot-picks" },
+  { id: "live-action",    group: "Overview",     icon: "live",     label: "Live Action",        hint: "Setups whose live price/volume conditions are being checked", api: "/api/market/live-entries" },
+  { id: "hot-picks",      group: "Scans",        icon: "star",     label: "Pro Setup Scans",    hint: "Setups with multiple supporting signals",            api: "/api/market/hot-picks" },
+  { id: "volume-boomers", group: "Scans",        icon: "volume",   label: "Volume Boomers",     hint: "Stocks trading at 3× or more of normal volume",       api: "/api/market/hot-picks" },
+  { id: "base-radar",     group: "Scans",        icon: "base",     label: "Base Formation",     hint: "Stocks building a base before a possible move",       api: "/api/market/hot-picks" },
+  { id: "momentum",       group: "Scans",        icon: "momentum", label: "Momentum",           hint: "Stocks already moving with volume behind them",       api: "/api/market/hot-picks" },
+  { id: "fresh-zones",    group: "Scans",        icon: "zones",    label: "Fresh Zones",        hint: "Untested weekly/monthly/yearly demand & resistance zones near price", api: "/api/fresh-zones/opportunities" },
+  { id: "watchlist",      group: "Watch & Risk", icon: "eye",      label: "Watchlist",          hint: "Setups to keep an eye on",                            api: "/api/market/hot-picks" },
+  { id: "traps",          group: "Watch & Risk", icon: "alert",    label: "Traps & Risks",      hint: "Fake breakouts and setups to avoid",                  api: "/api/market/traps" },
+  { id: "options",        group: "Derivatives",  icon: "options",  label: "Options",            hint: "Index options: OI, IV, max pain",                    api: "/api/market/options-analysis?symbol=NIFTY" },
 ];
 
 function priceText(value: any) {
@@ -226,7 +227,7 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
     <div className="stock-card" onClick={() => onSelect(item.symbol)} style={{ cursor: "pointer", borderColor: isHighTrap ? "var(--red)" : "var(--border)" }}>
       {isHighTrap ? (
         <div className="trap-alert">
-          <div className="trap-kicker">🚨 AVOID — VISIBLE TRAP EVIDENCE</div>
+          <div className="trap-kicker">Avoid — visible trap evidence</div>
           <div className="trap-desc">
             {item.bull_trap?.bull_trap_detected ? "Fake breakout: price broke resistance but failed to hold." :
              item.trap_warnings?.[0] || "Strong selling-pressure evidence; participant identity is unknown."}
@@ -253,12 +254,12 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
       {/* 2 · Verdict */}
       <div className="stock-meta" style={{ marginTop: 10 }}>
         <span className={`badge ${isHighTrap ? "bearish" : direction}`}>
-          {isHighTrap ? "🛑 Avoid" : direction === "bullish" ? "📈 Bullish" : direction === "bearish" ? "📉 Bearish" : humanize(direction)}
+          {isHighTrap ? "Avoid" : direction === "bullish" ? "▲ Bullish" : direction === "bearish" ? "▼ Bearish" : humanize(direction)}
         </span>
         <span className={`tag ${actionClass}`}>{actionText}</span>
-        {timeHorizon ? <span className="tag">⏳ {timeHorizon}</span> : null}
+        {timeHorizon ? <span className="tag">{timeHorizon}</span> : null}
       </div>
-      {mixed ? <div className="card-warning">⚠️ {mixed}</div> : null}
+      {mixed ? <div className="card-warning">{mixed}</div> : null}
       {tab === "dashboard" && item.dashboardReason ? <p className="card-verdict">{item.dashboardReason}</p> : null}
 
       {/* 3 · Key numbers */}
@@ -266,7 +267,7 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
         <div><span>Alignment</span><strong>{item.confidence != null || item.score != null ? `${fmt(item.confidence ?? item.score, 0)}/100` : "-"}</strong></div>
         <div><span>Volume</span><strong style={{ color: relVol >= 3 ? "var(--green)" : undefined }}>{relVol > 0 ? `${fmt(relVol, 1)}×` : "-"}</strong></div>
         <div>
-          <span>Demand vs supply</span>
+          <span>Demand/Supply</span>
           {dsTotal > 0 ? (
             <div className="ds-bar" title={`Demand ${fmt(ds, 0)} · Supply ${fmt(ss, 0)}`}>
               <i style={{ width: `${(ds / dsTotal) * 100}%` }} />
@@ -295,7 +296,7 @@ function StockCard({ item, onSelect, tab }: { item: any; onSelect: (s: string) =
       {planMissing ? <p className="card-note">No stop or target yet — watch only, don’t trade without a stop.</p> : null}
       {riskReward != null && riskReward > 0 ? (
         <div className="stock-meta" style={{ marginTop: 8 }}>
-          <span className="tag">⚖️ {hasLiveRisk ? "Live " : ""}RR 1:{fmt(riskReward, 1)}</span>
+          <span className="tag">{hasLiveRisk ? "Live " : ""}Risk:reward 1:{fmt(riskReward, 1)}</span>
           {riskPct != null && riskPct > 0 ? <span className="tag">Stop risk {fmt(riskPct, 2)}%</span> : null}
         </div>
       ) : null}
@@ -558,7 +559,7 @@ function SmartOptionsPanel() {
   return (
     <div style={{ marginBottom: 28 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <h2 className="section-title" style={{ margin: 0 }}>🧠 Smart Options Intelligence</h2>
+        <h2 className="section-title" style={{ margin: 0 }}>Index options intelligence</h2>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {lastUpdate && <span style={{ fontSize: 11, color: "var(--muted)" }}>1-min refresh · {lastUpdate.toLocaleTimeString()}</span>}
           <button onClick={() => { fetchSmart(activeSmartIndex); fetchFno(); }} className="refresh-btn" disabled={loadingSmart} style={{ fontSize: 12, padding: "4px 10px" }}>{loadingSmart ? "⟳" : "↻ Now"}</button>
@@ -1313,6 +1314,7 @@ export default function Page() {
     : allLiveItems;
 
   const mood = summary?.marketMood || data?.marketMood || "loading";
+  const activeTab = TABS.find(t => t.id === tab) || TABS[0];
   const stats = summary?.summary || data?.summary || {};
   const assessmentCounts = data?.assessmentCounts || {};
 
@@ -1351,11 +1353,11 @@ export default function Page() {
   return (
     <div className="app-layout">
       <aside className="sidebar">
-        <div className="sidebar-logo">BullAlways</div>
-        <form onSubmit={handleSearch} style={{ padding: "0 4px", marginBottom: 12 }}>
+        <div className="sidebar-logo"><span className="logo-mark">B</span>BullAlways</div>
+        <form onSubmit={handleSearch}>
           <input
             className="search-box"
-            placeholder="Search stock..."
+            placeholder="Search a stock (e.g. TCS)"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -1365,7 +1367,8 @@ export default function Page() {
             {i === 0 || TABS[i - 1].group !== t.group ? <div className="sidebar-section">{t.group}</div> : null}
             <button className={`sidebar-item ${tab === t.id ? "active" : ""}`}
               onClick={() => { setTab(t.id); setSelectedSymbol(null); setActiveFilter("all"); }}
-              style={t.id === "live-action" && liveEntryCount > 0 ? { position: "relative" } : {}}>
+              title={t.hint}>
+              <Icon name={t.icon} />
               {t.label}
               {t.id === "live-action" && liveEntryCount > 0 && (
                 <span className="sidebar-count">{liveEntryCount}</span>
@@ -1374,8 +1377,9 @@ export default function Page() {
           </div>
         ))}
         <div className="sidebar-section">Portfolio</div>
-        <a href="/performance" className="sidebar-item" style={{ textDecoration: "none", display: "block" }}>
-          Performance Tracker ↗
+        <a href="/performance" className="sidebar-item" style={{ textDecoration: "none" }}>
+          <Icon name="briefcase" />
+          Performance Tracker
         </a>
       </aside>
 
@@ -1384,19 +1388,24 @@ export default function Page() {
         <IndexTickerBar />
 
         <main className="main-content">
-          <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+          <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12 }}>
             <div>
-              <h1>{selectedSymbol || TABS.find(t => t.id === tab)?.label}</h1>
-              <p>Updated: {data?.generated_at || data?.lastUpdated ? new Date(data.generated_at || data.lastUpdated).toLocaleString() : "..."}</p>
+              <h1>{selectedSymbol || activeTab.label}</h1>
+              <p>
+                {selectedSymbol ? "Stock detail" : activeTab.hint}
+                {!selectedSymbol && (data?.generated_at || data?.lastUpdated)
+                  ? ` · Updated ${new Date(data.generated_at || data.lastUpdated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                  : ""}
+              </p>
             </div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              {refreshing && (
-                <span style={{ fontSize: 11, color: "#888", animation: "pulse 1s infinite" }}>↻ updating…</span>
-              )}
-              <span className={`mood-badge ${mood}`}>{humanize(mood)}</span>
-              <button className="refresh-btn" onClick={() => load(tab, true)} disabled={loading || refreshing}>
-                {loading ? "..." : refreshing ? "↻" : "Refresh"}
-              </button>
+            <div className="page-actions">
+              {refreshing ? <span className="updating">Updating…</span> : null}
+              {mood && mood !== "loading" ? <span className={`mood-badge ${mood}`} title="Overall market mood">Market: {humanize(mood)}</span> : null}
+              {tab !== "fresh-zones" ? (
+                <button className="refresh-btn btn-secondary" onClick={() => load(tab, true)} disabled={loading || refreshing}>
+                  {loading ? "Loading…" : "Refresh"}
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -1408,14 +1417,13 @@ export default function Page() {
             <FreshZonesPanel onSelect={setSelectedSymbol} />
           ) : (
             <>
-              {tab === "dashboard" && <SmartOptionsPanel />}
               <div className="stats-row">
-                <div className="stat-card"><span>📊 Scanned</span><strong>{stats.totalScanned ?? stats.total_scanned_universe ?? "..."}</strong></div>
-                <div className="stat-card"><span>🔥 Hot Picks</span><strong style={{ color: "var(--green)" }}>{stats.highConfidence ?? stats.high_priority ?? 0}</strong></div>
-                <div className="stat-card"><span>⚡ Breakouts</span><strong style={{ color: "var(--yellow)" }}>{stats.breakouts ?? stats.breakout_count ?? 0}</strong></div>
-                <div className="stat-card"><span>📈 Bullish</span><strong style={{ color: "var(--green)" }}>{stats.bullish ?? stats.bullish_setups ?? 0}</strong></div>
-                <div className="stat-card"><span>📉 Bearish</span><strong style={{ color: "var(--red)" }}>{stats.bearish ?? stats.bearish_risk_count ?? 0}</strong></div>
-                <div className="stat-card"><span>✅ This Tab</span><strong>{liveItems.length}</strong></div>
+                <div className="stat-card"><span>Stocks scanned</span><strong>{stats.totalScanned ?? stats.total_scanned_universe ?? "..."}</strong></div>
+                <div className="stat-card"><span>Top setups</span><strong style={{ color: "var(--green)" }}>{stats.highConfidence ?? stats.high_priority ?? 0}</strong></div>
+                <div className="stat-card"><span>Breakouts</span><strong style={{ color: "var(--yellow)" }}>{stats.breakouts ?? stats.breakout_count ?? 0}</strong></div>
+                <div className="stat-card"><span>Bullish</span><strong style={{ color: "var(--green)" }}>{stats.bullish ?? stats.bullish_setups ?? 0}</strong></div>
+                <div className="stat-card"><span>Bearish</span><strong style={{ color: "var(--red)" }}>{stats.bearish ?? stats.bearish_risk_count ?? 0}</strong></div>
+                <div className="stat-card"><span>In this list</span><strong>{liveItems.length}</strong></div>
               </div>
 
               {tab === "live-action" ? (
@@ -1427,39 +1435,28 @@ export default function Page() {
                 </div>
               ) : null}
 
-              <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+              <div className="chip-row">
                 {([
                   { key: "all",       label: "All",             count: allLiveItems.length },
-                  { key: "bullish",   label: "📈 Bullish",       count: allLiveItems.filter((x: any) => x.direction === "bullish").length },
-                  { key: "bearish",   label: "📉 Bearish",       count: allLiveItems.filter((x: any) => x.direction === "bearish").length },
-                  { key: "breakout",  label: "⚡ Breakout",      count: allLiveItems.filter((x: any) => x.entry_label?.includes("BREAKOUT") || x.has_breakout).length },
-                  { key: "high-conf", label: "🎯 Strong Alignment", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
-                  { key: "tomorrow",  label: "🌅 Tomorrow",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("tomorrow")).length },
-                  { key: "1-2-days",  label: "⏳ 1-2 Days",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2")).length },
-                  { key: "3-4-days",  label: "📆 3-4 Days",      count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-4") || s.includes("3 to 4") || s.includes("3 - 4"); }).length },
-                  { key: "anytime",   label: "🔥 Anytime",       count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("any time") || s.includes("anytime"); }).length },
+                  { key: "bullish",   label: "Bullish",       count: allLiveItems.filter((x: any) => x.direction === "bullish").length },
+                  { key: "bearish",   label: "Bearish",       count: allLiveItems.filter((x: any) => x.direction === "bearish").length },
+                  { key: "breakout",  label: "Breakout",      count: allLiveItems.filter((x: any) => x.entry_label?.includes("BREAKOUT") || x.has_breakout).length },
+                  { key: "high-conf", label: "Strong alignment", count: allLiveItems.filter((x: any) => (x.confidence ?? x.score ?? 0) > 80).length },
+                  { key: "tomorrow",  label: "Tomorrow",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("tomorrow")).length },
+                  { key: "1-2-days",  label: "1–2 days",      count: allLiveItems.filter((x: any) => (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase().includes("1-2")).length },
+                  { key: "3-4-days",  label: "3–4 days",      count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("3-4") || s.includes("3 to 4") || s.includes("3 - 4"); }).length },
+                  { key: "anytime",   label: "Anytime",       count: allLiveItems.filter((x: any) => { const s = (x.timeHorizon || x.time_horizon || x.aiTimeframe || "").toLowerCase(); return s.includes("any time") || s.includes("anytime"); }).length },
                 ] as { key: string; label: string; count: number }[]).filter(f => f.key === "all" || f.count > 0 || activeFilter === f.key).map(f => (
-                  <button
-                    key={f.key}
-                    className="refresh-btn"
-                    onClick={() => setActiveFilter(f.key)}
-                    style={{
-                      fontSize: 13,
-                      padding: "6px 12px",
-                      background: activeFilter === f.key ? "var(--green, #22c55e)" : undefined,
-                      color: activeFilter === f.key ? "#000" : undefined,
-                      fontWeight: activeFilter === f.key ? 700 : undefined,
-                    }}
-                  >
-                    {f.label} ({f.count})
+                  <button key={f.key} className={`chip ${activeFilter === f.key ? "active" : ""}`} onClick={() => setActiveFilter(f.key)}>
+                    {f.label}<span className="count">{f.count}</span>
                   </button>
                 ))}
               </div>
 
-              <h2 className="section-title">{TABS.find(t => t.id === tab)?.label} ({liveItems.length} stocks)</h2>
+              <h2 className="section-title">{liveItems.length} {liveItems.length === 1 ? "stock" : "stocks"}</h2>
               {loading ? (
                 <div className="stock-grid">
-                  {[1,2,3,4,5,6].map(i => <div key={i} className="stock-card" style={{ animation: "pulse 2.5s infinite", background: "var(--bg, #1a1a1a)" }}>
+                  {[1,2,3,4,5,6].map(i => <div key={i} className="stock-card" style={{ opacity: 0.5 }}>
                     <div style={{ height: 120, background: "var(--border, #333)" }}></div>
                   </div>)}
                 </div>
@@ -1470,6 +1467,7 @@ export default function Page() {
               ) : (
                 <p className="empty-msg">No stocks found in this category right now.</p>
               )}
+              {tab === "dashboard" ? <div style={{ marginTop: 36 }}><SmartOptionsPanel /></div> : null}
             </>
           )}
         </main>
